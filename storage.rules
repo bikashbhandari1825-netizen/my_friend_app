@@ -1,0 +1,28 @@
+rules_version = '2';
+
+// KaamMitra Firebase Storage rules
+// documents/{uid}/license.jpg , documents/{uid}/selfie.jpg
+// - आफ्नो uid फोल्डरमा मात्र लेख्न पाउने (image/pdf, < 10MB)
+// - signed-in जो कोहीले पढ्न पाउने (एडमिनले verify गर्न, र app मा देखाउन)
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    match /documents/{uid}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*|application/pdf');
+    }
+
+    // बाँकी सबै बन्द
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

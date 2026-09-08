@@ -1,0 +1,119 @@
+rules_version = '2';
+
+// KaamMitra Firestore security rules
+// एडमिन = bikashbhandari1825@gmail.com (Google वा email/password बाट login)।
+// फोन/Anonymous बाट login भएका साधारण युजरको token मा email हुँदैन → admin बन्न सक्दैनन्।
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == 'bikashbhandari1825@gmail.com';
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ── users ────────────────────────────────────────────────
+    // signed-in युजरले profile पढ्न सक्छन् (chat/booking नाम देखाउन);
+    // आफ्नै doc मात्र लेख्न पाउँछन्; एडमिनले जुनसुकै।
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow create, update: if isOwner(uid) || isAdmin();
+      allow delete: if isOwner(uid) || isAdmin();
+    }
+
+    // ── providers ────────────────────────────────────────────
+    match /providers/{uid} {
+      allow read: if isSignedIn();
+      allow create, update: if isOwner(uid) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── pendingWorkers (verification queue) ──────────────────
+    match /pendingWorkers/{doc} {
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── registeredWorkers (public list) ─────────────────────
+    match /registeredWorkers/{doc} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── serviceRequests (bookings / bids) ───────────────────
+    match /serviceRequests/{doc} {
+      allow read: if isSignedIn() && (
+        resource.data.employerUid == request.auth.uid
+        || resource.data.workerUid == request.auth.uid
+        || isAdmin());
+      allow create: if isSignedIn()
+        && request.resource.data.employerUid == request.auth.uid;
+      allow update: if isSignedIn() && (
+        resource.data.employerUid == request.auth.uid
+        || resource.data.workerUid == request.auth.uid
+        || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ── chats ───────────────────────────────────────────────
+    // TODO: booking को पक्ष हो कि भनेर get() ले कस्न सकिन्छ।
+    match /chats/{requestId}/messages/{msg} {
+      allow read, create, update, delete: if isSignedIn();
+    }
+
+    // ── notifications (per user) ────────────────────────────
+    match /notifications/{doc} {
+      allow read, update: if isSignedIn()
+        && resource.data.uid == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid;
+      allow delete: if (isSignedIn() && resource.data.uid == request.auth.uid)
+        || isAdmin();
+    }
+
+    // ── adminNotifications ─────────────────────────────────
+    match /adminNotifications/{doc} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ── reports / supportMessages (user → admin) ───────────
+    match /reports/{doc} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if isAdmin();
+    }
+    match /supportMessages/{doc} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ── reviews ────────────────────────────────────────────
+    match /reviews/{doc} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── config (support number etc.) ──────────────────────
+    match /config/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // बाँकी सबै बन्द
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
