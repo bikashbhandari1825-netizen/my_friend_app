@@ -11,8 +11,11 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/pulsing_location_marker.dart';
 import 'nearby_common.dart';
 import 'nearby_screen.dart';
+
+const double _kPulseSize = 120;
 
 class NearbyMapScreen extends StatefulWidget {
   const NearbyMapScreen({super.key});
@@ -33,6 +36,9 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
   bool _ready = false;
   bool _approx = false;
   bool _centeredOnce = false;
+
+  Offset? _userScreenPos;
+  bool _posLookupBusy = false;
 
   String? _selId;
   Map<String, dynamic>? _selData;
@@ -77,6 +83,7 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
       });
       _recentre();
       _startTracking();
+      _syncUserMarkerPos();
     } catch (_) {
       _useFallback();
     }
@@ -93,6 +100,7 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
       _ready = true;
     });
     _recentre();
+    _syncUserMarkerPos();
   }
 
   void _startTracking() {
@@ -109,6 +117,7 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
         _lng = p.longitude;
         _approx = false;
       });
+      _syncUserMarkerPos();
     }, onError: (_) {});
   }
 
@@ -118,6 +127,27 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
       CameraUpdate.newLatLngZoom(LatLng(_lat, _lng), 13.5),
     );
     _centeredOnce = true;
+    _syncUserMarkerPos();
+  }
+
+  // Google Map माथि हाम्रो pulsing overlay ठ्याक्कै user को location मार्कर
+  // को पछाडि राख्नको लागि, त्यसको screen (pixel) position निकाल्छ।
+  Future<void> _syncUserMarkerPos() async {
+    final map = _map;
+    if (map == null || !mounted || _posLookupBusy) return;
+    _posLookupBusy = true;
+    try {
+      final sc = await map.getScreenCoordinate(LatLng(_lat, _lng));
+      if (!mounted) return;
+      final ratio = MediaQuery.of(context).devicePixelRatio;
+      setState(() {
+        _userScreenPos = Offset(sc.x / ratio, sc.y / ratio);
+      });
+    } catch (_) {
+      // map disposed mid-flight वा platform error — silently ignore गर्ने।
+    } finally {
+      _posLookupBusy = false;
+    }
   }
 
   Set<Marker> _buildMarkers(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
@@ -201,8 +231,11 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                       onMapCreated: (c) {
                         _map = c;
                         if (!_centeredOnce) _recentre();
+                        _syncUserMarkerPos();
                       },
-                      myLocationEnabled: true,
+                      onCameraMove: (_) => _syncUserMarkerPos(),
+                      onCameraIdle: _syncUserMarkerPos,
+                      myLocationEnabled: false,
                       myLocationButtonEnabled: false,
                       zoomControlsEnabled: false,
                       mapToolbarEnabled: false,
@@ -212,6 +245,14 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                         _selData = null;
                       }),
                     ),
+
+                    // ── User/pickup location: pulsating radar ripple ──
+                    if (_userScreenPos != null)
+                      Positioned(
+                        left: _userScreenPos!.dx - _kPulseSize / 2,
+                        top: _userScreenPos!.dy - _kPulseSize / 2,
+                        child: const PulsingLocationMarker(size: _kPulseSize),
+                      ),
 
                     if (_approx)
                       Positioned(

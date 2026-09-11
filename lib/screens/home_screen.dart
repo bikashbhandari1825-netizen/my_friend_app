@@ -14,6 +14,7 @@ import '../saved_places_screen.dart';
 import '../settings_page.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/pulsing_location_marker.dart';
 import '../worker_registration_page.dart';
 import 'bookings_screen.dart';
 import 'help_support_screen.dart';
@@ -25,6 +26,8 @@ import 'notification_screen.dart';
 import 'payment_methods_screen.dart';
 import 'saved_workers_screen.dart';
 import 'worker_list_screen.dart';
+
+const double _kHomePulseSize = 120;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -42,11 +45,19 @@ class _HomeScreenState extends State<HomeScreen> {
   double _lng = fallbackLng;
   double _originLat = fallbackLat;
   double _originLng = fallbackLng;
+  // साँचो device GPS स्थिति — onCameraMove ले _lat लाई pan गर्दा mutate
+  // गर्छ, तर pulsing marker सधैं यूजरको वास्तविक location मै टाँसिएको
+  // हुनुपर्ने भएकाले यी छुट्टै राखिएका।
+  double _gpsLat = fallbackLat;
+  double _gpsLng = fallbackLng;
   bool _locReady = false;
   bool _inRegion = true;
   bool _bannerVisible = false;
   String _pickedCategory = '';
   Timer? _bannerTimer;
+
+  Offset? _userScreenPos;
+  bool _posLookupBusy = false;
 
   @override
   void initState() {
@@ -86,12 +97,15 @@ class _HomeScreenState extends State<HomeScreen> {
         _lng = p.longitude;
         _originLat = p.latitude;
         _originLng = p.longitude;
+        _gpsLat = p.latitude;
+        _gpsLng = p.longitude;
         _locReady = true;
       });
       _setRegion(p.latitude, p.longitude);
       _map?.animateCamera(
           CameraUpdate.newLatLngZoom(LatLng(_lat, _lng), 13.5));
       _startTracking();
+      _syncUserMarkerPos();
     } catch (_) {
       if (mounted) setState(() => _locReady = true);
     }
@@ -124,8 +138,31 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _lat = p.latitude;
         _lng = p.longitude;
+        _gpsLat = p.latitude;
+        _gpsLng = p.longitude;
       });
+      _syncUserMarkerPos();
     }, onError: (_) {});
+  }
+
+  // Google Map माथि पुलसिंग रिप्पल overlay लाई user को live location मार्कर
+  // को ठ्याक्कै पछाडि राख्नको लागि screen (pixel) position निकाल्छ।
+  Future<void> _syncUserMarkerPos() async {
+    final map = _map;
+    if (map == null || !mounted || _posLookupBusy) return;
+    _posLookupBusy = true;
+    try {
+      final sc = await map.getScreenCoordinate(LatLng(_gpsLat, _gpsLng));
+      if (!mounted) return;
+      final ratio = MediaQuery.of(context).devicePixelRatio;
+      setState(() {
+        _userScreenPos = Offset(sc.x / ratio, sc.y / ratio);
+      });
+    } catch (_) {
+      // map disposed भइसकेको वा platform error — silently ignore।
+    } finally {
+      _posLookupBusy = false;
+    }
   }
 
   void _showLocationModal() {
@@ -264,9 +301,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     c.animateCamera(CameraUpdate.newLatLngZoom(
                         LatLng(_lat, _lng), 13.5));
                   }
+                  _syncUserMarkerPos();
                 },
-                onCameraMove: (p) => _lat = p.target.latitude,
-                myLocationEnabled: true,
+                onCameraMove: (p) {
+                  _lat = p.target.latitude;
+                  _syncUserMarkerPos();
+                },
+                onCameraIdle: _syncUserMarkerPos,
+                myLocationEnabled: false,
                 myLocationButtonEnabled: false,
                 zoomControlsEnabled: false,
                 mapToolbarEnabled: false,
@@ -275,6 +317,14 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
+
+          // ── User/pickup location: pulsating radar ripple ──
+          if (_userScreenPos != null)
+            Positioned(
+              left: _userScreenPos!.dx - _kHomePulseSize / 2,
+              top: _userScreenPos!.dy - _kHomePulseSize / 2,
+              child: const PulsingLocationMarker(size: _kHomePulseSize),
+            ),
 
           // ── Top bar (hamburger + bell) ──
           SafeArea(
