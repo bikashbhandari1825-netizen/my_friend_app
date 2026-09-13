@@ -7,6 +7,7 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import 'auth/auth_config.dart';
 import 'l10n/strings.dart';
 
 // Web OAuth client ID — यो lib/firebase_options.dart कै project (504837034251 /
@@ -370,49 +371,53 @@ class _AuthPageState extends State<AuthPage> {
                   ),
                   const SizedBox(height: 8),
 
-                  // divider
-                  Row(
-                    children: [
-                      Expanded(
-                          child: Divider(
-                              color: Colors.white.withValues(alpha: 0.4))),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Text(S.orWord,
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.85))),
-                      ),
-                      Expanded(
-                          child: Divider(
-                              color: Colors.white.withValues(alpha: 0.4))),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
+                  if (kEnableGoogleSignIn) ...[
+                    // divider
+                    Row(
+                      children: [
+                        Expanded(
+                            child: Divider(
+                                color: Colors.white.withValues(alpha: 0.4))),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Text(S.orWord,
+                              style: TextStyle(
+                                  color:
+                                      Colors.white.withValues(alpha: 0.85))),
+                        ),
+                        Expanded(
+                            child: Divider(
+                                color: Colors.white.withValues(alpha: 0.4))),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
 
-                  // Google Sign-In — onPressed: _signInWithGoogle उस्तै
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _signInWithGoogle,
-                      icon: const Icon(Icons.g_mobiledata,
-                          size: 28, color: Colors.red),
-                      label: Text(
-                        S.signInWithGoogle,
-                        style: const TextStyle(
-                            color: Colors.black87, fontWeight: FontWeight.w700),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 15),
-                        elevation: 6,
-                        shadowColor: Colors.black38,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                    // Google Sign-In — onPressed: _signInWithGoogle उस्तै
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _signInWithGoogle,
+                        icon: const Icon(Icons.g_mobiledata,
+                            size: 28, color: Colors.red),
+                        label: Text(
+                          S.signInWithGoogle,
+                          style: const TextStyle(
+                              color: Colors.black87,
+                              fontWeight: FontWeight.w700),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          elevation: 6,
+                          shadowColor: Colors.black38,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
+                  ],
                 ],
               ),
             ),

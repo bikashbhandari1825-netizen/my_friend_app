@@ -7,6 +7,7 @@ import '../auth_page.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import 'auth_config.dart';
 import 'email_auth_page.dart';
 import 'phone_input_page.dart';
 
@@ -82,29 +83,34 @@ class PhoneLandingPage extends StatelessWidget {
                         fontSize: 13,
                         fontWeight: FontWeight.w500)),
                 const Spacer(flex: 3),
+                // टेस्टिङ चरणमा Email/Password नै primary — कुनै popup/redirect
+                // निर्भरता नभएको सबैभन्दा भरपर्दो बाटो (auth_config.dart हेर्नुहोस्)।
                 PrimaryButton(
-                  label: S.continueWithPhone,
-                  icon: Icons.phone_iphone_rounded,
-                  onPressed: () => _go(context, const PhoneInputPage()),
+                  label: S.continueWithEmail,
+                  icon: Icons.mail_outline_rounded,
+                  onPressed: () => _go(context, const EmailAuthPage()),
                 ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _go(context, const EmailAuthPage()),
-                    icon: const Icon(Icons.mail_outline_rounded,
-                        color: Colors.white),
-                    label: Text(S.continueWithEmail,
-                        style: const TextStyle(color: Colors.white)),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white70),
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppRadius.pill)),
+                if (kEnablePhoneAuth) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _go(context, const PhoneInputPage()),
+                      icon: const Icon(Icons.phone_iphone_rounded,
+                          color: Colors.white),
+                      label: Text(S.continueWithPhone,
+                          style: const TextStyle(color: Colors.white)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white70),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius:
+                                BorderRadius.circular(AppRadius.pill)),
+                      ),
                     ),
                   ),
-                ),
+                ],
                 const SizedBox(height: 6),
                 TextButton(
                   onPressed: () => Navigator.push(

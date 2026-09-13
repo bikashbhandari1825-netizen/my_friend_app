@@ -17,6 +17,7 @@ import '../auth_page.dart' show kGoogleWebClientId;
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import 'auth_config.dart';
 import 'phone_input_page.dart';
 
 class EmailAuthPage extends StatefulWidget {
@@ -418,40 +419,43 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
                           loading: _busy,
                           onPressed: _submit,
                         ),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            const Expanded(child: Divider()),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 8),
-                              child: Text(S.orWord,
+                        if (kEnableGoogleSignIn) ...[
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              const Expanded(child: Divider()),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 8),
+                                child: Text(S.orWord,
+                                    style: const TextStyle(
+                                        color: Colors.black45, fontSize: 12)),
+                              ),
+                              const Expanded(child: Divider()),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _busy ? null : _google,
+                              icon: const Icon(Icons.g_mobiledata_rounded,
+                                  size: 26, color: Color(0xFFDB4437)),
+                              label: Text(S.signInWithGoogle,
                                   style: const TextStyle(
-                                      color: Colors.black45, fontSize: 12)),
-                            ),
-                            const Expanded(child: Divider()),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: _busy ? null : _google,
-                            icon: const Icon(Icons.g_mobiledata_rounded,
-                                size: 26, color: Color(0xFFDB4437)),
-                            label: Text(S.signInWithGoogle,
-                                style: const TextStyle(
-                                    color: Colors.black87,
-                                    fontWeight: FontWeight.w700)),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 13),
-                              side: const BorderSide(color: Colors.black26),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius:
-                                      BorderRadius.circular(AppRadius.pill)),
+                                      color: Colors.black87,
+                                      fontWeight: FontWeight.w700)),
+                              style: OutlinedButton.styleFrom(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 13),
+                                side: const BorderSide(color: Colors.black26),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius:
+                                        BorderRadius.circular(AppRadius.pill)),
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                         const SizedBox(height: 4),
                         TextButton(
                           onPressed: _busy ? null : () => _setMode(!_isLogin),
@@ -463,17 +467,20 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  onPressed: () => Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(builder: (_) => const PhoneInputPage()),
+                if (kEnablePhoneAuth) ...[
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: () => Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const PhoneInputPage()),
+                    ),
+                    icon: const Icon(Icons.phone_iphone_rounded,
+                        color: Colors.white70, size: 18),
+                    label: Text(S.usePhoneInstead,
+                        style: const TextStyle(color: Colors.white70)),
                   ),
-                  icon: const Icon(Icons.phone_iphone_rounded,
-                      color: Colors.white70, size: 18),
-                  label: Text(S.usePhoneInstead,
-                      style: const TextStyle(color: Colors.white70)),
-                ),
+                ],
               ],
             ),
           ),
