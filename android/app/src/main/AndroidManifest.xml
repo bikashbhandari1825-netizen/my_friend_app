@@ -2,6 +2,10 @@
     <!-- Nearby workers / distance tracking (geolocator) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Android 13+ (API 33) मा runtime मा माग्नुपर्ने notification अनुमति —
+         push/local notification देखाउन यो घोषणा चाहिन्छ (firebase_messaging
+         + flutter_local_notifications ले runtime request गर्छ)। -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="my_friend_app"
         android:name="${applicationName}"
@@ -10,6 +14,15 @@
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyDkbnRYfqKo8khNvgrFj26z2WX2Ao9xsiU"/>
+        <!-- FCM default notification icon/channel — flutter_local_notifications
+             ले पनि यही channel id प्रयोग गर्छ ताकि foreground/background दुवैको
+             notification एउटै group मा देखियोस्। -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="kaammitra_job_updates"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

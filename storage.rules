@@ -1,9 +1,11 @@
 rules_version = '2';
 
 // KaamMitra Firebase Storage rules
-// documents/{uid}/license.jpg , documents/{uid}/selfie.jpg
-// - आफ्नो uid फोल्डरमा मात्र लेख्न पाउने (image/pdf, < 10MB)
-// - signed-in जो कोहीले पढ्न पाउने (एडमिनले verify गर्न, र app मा देखाउन)
+// documents/{uid}/license.jpg , documents/{uid}/selfie.jpg , ...
+// - आफ्नो uid फोल्डरमा मात्र लेख्न/मेट्न पाउने
+// - filename allowlist भएको मात्र (path-traversal र मनपरी नाम रोक्न)
+// - image (jpeg/png/webp) वा PDF मात्र, खाली नभएको, < 5MB
+// - signed-in जो कोहीले पढ्न पाउने (एडमिनले verify गर्न, app मा देखाउन)
 
 service firebase.storage {
   match /b/{bucket}/o {
@@ -12,12 +14,32 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    function isValidDoc() {
+      return request.resource.size > 0
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches(
+             'image/jpeg|image/png|image/webp|application/pdf');
+    }
+
     match /documents/{uid}/{fileName} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn()
+      allow create, update: if isSignedIn()
         && request.auth.uid == uid
-        && request.resource.size < 10 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*|application/pdf');
+        && fileName.matches(
+             '(license|selfie|certificate|citizenship_front|citizenship_back|document|id)(_[0-9]+)?[.](jpg|jpeg|png|webp|pdf)')
+        && isValidDoc();
+      allow delete: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // कामको पोर्टफोलियो तस्बिरहरू — आफ्नै uid फोल्डरमा image मात्र
+    match /portfolio/{uid}/{fileName} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.size > 0
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/jpeg|image/png|image/webp');
+      allow delete: if isSignedIn() && request.auth.uid == uid;
     }
 
     // बाँकी सबै बन्द

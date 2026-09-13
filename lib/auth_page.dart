@@ -3,8 +3,8 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:my_friend_app/main.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import 'l10n/strings.dart';
@@ -29,25 +29,55 @@ class _AuthPageState extends State<AuthPage> {
   bool _obscurePassword = true;
 
   Future<void> _submit() async {
+    // इमेल मात्र trim/lowercase — पासवर्ड जस्ताको तस्तै (trim गर्दा mismatch हुन्छ)।
+    final email =
+        _emailController.text.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    final pass = _passwordController.text;
+    if (!email.contains('@') || !email.contains('.') || pass.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(S.enterValidEmail)),
+      );
+      return;
+    }
     try {
       if (_isLoginMode) {
-        await FirebaseAuth.instance.signInWithEmailAndPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text.trim(),
-        );
+        // LOGIN: verify मात्र — कहिल्यै नयाँ खाता बनाउँदैन।
+        await FirebaseAuth.instance
+            .signInWithEmailAndPassword(email: email, password: pass);
       } else {
-        await FirebaseAuth.instance.createUserWithEmailAndPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text.trim(),
-        );
+        await FirebaseAuth.instance
+            .createUserWithEmailAndPassword(email: email, password: pass);
       }
 
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const KaamMitraApp()),
-      );
+      // नयाँ KaamMitraApp() कहिल्यै नबनाउने — root कै authStateChanges()
+      // StreamBuilder ले नै sign-in भएपछि सही screen देखाइसक्छ। यहाँबाट
+      // दोस्रोपटक फेरि नयाँ MaterialApp push गर्दा (दुइटाले उही
+      // rootNavigatorKey दाबी गर्दा) element-lifecycle assertion (red/black
+      // screen crash) आउँथ्यो — यो पेज pop गरेर हटाउनु मात्र पर्छ।
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      final msg = switch (e.code) {
+        'invalid-credential' ||
+        'INVALID_LOGIN_CREDENTIALS' ||
+        'wrong-password' ||
+        'user-not-found' =>
+          S.loginNoMatchHint,
+        'email-already-in-use' => S.emailTakenSwitchLogin,
+        'invalid-email' => S.enterValidEmail,
+        'user-disabled' => S.isNepali
+            ? 'यो खाता निष्क्रिय गरिएको छ।'
+            : 'This account has been disabled.',
+        'operation-not-allowed' => S.emailPasswordDisabled,
+        'too-many-requests' => S.tooManyAttemptsHint,
+        'network-request-failed' =>
+          S.isNepali ? 'इन्टरनेट जाँच्नुहोस्।' : 'Check your connection.',
+        _ => '${e.message ?? e.code}  (${e.code})',
+      };
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("${S.errorWord}: $e")),
       );
@@ -65,8 +95,10 @@ class _AuthPageState extends State<AuthPage> {
         final provider = GoogleAuthProvider();
         await FirebaseAuth.instance.signInWithPopup(provider);
       } else {
+        // Android मा `clientId` param बेवास्ता हुन्छ — `serverClientId`
+        // (Firebase Web client ID) ले मात्र सही audience भएको idToken दिन्छ।
         final GoogleSignIn googleSignIn =
-            GoogleSignIn(clientId: kGoogleWebClientId);
+            GoogleSignIn(serverClientId: kGoogleWebClientId);
         final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
 
         if (googleUser == null) {
@@ -85,18 +117,38 @@ class _AuthPageState extends State<AuthPage> {
       }
 
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const KaamMitraApp()),
-      );
+      Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       if (e.code == 'popup-closed-by-user' ||
           e.code == 'cancelled-popup-request') {
         return; // प्रयोगकर्ताले popup बन्द गर्‍यो — त्रुटि देखाउनु पर्दैन
       }
+      if (e.code == 'account-exists-with-different-credential') {
+        setState(() => _isLoginMode = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(S.passwordAccountExistsHint)),
+        );
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Google Sign-In त्रुटि: ${e.message ?? e.code}")),
+        SnackBar(
+            content: Text("Google Sign-In त्रुटि: ${e.message ?? e.code}")),
+      );
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      // Android native sign-in sheet बाट आउने असफलता — raw
+      // "PlatformException(sign_in_failed, ... ApiException: 10 ...)" को
+      // सट्टा प्रस्ट सन्देश। code 10 (DEVELOPER_ERROR) प्रायः SHA-1
+      // प्रमाणपत्र Firebase Console मा दर्ता नभएको जनाउँछ।
+      final msg = e.message ?? '';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              (e.code == 'sign_in_failed' || msg.contains('ApiException'))
+                  ? S.googleSignInConfigError
+                  : S.googleSignInGenericError),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -153,8 +205,7 @@ class _AuthPageState extends State<AuthPage> {
 
           SafeArea(
             child: SingleChildScrollView(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -173,8 +224,8 @@ class _AuthPageState extends State<AuthPage> {
                           offset: const Offset(0, 12),
                         ),
                         BoxShadow(
-                          color: const Color(0xFFFF4FD8)
-                              .withValues(alpha: 0.35),
+                          color:
+                              const Color(0xFFFF4FD8).withValues(alpha: 0.35),
                           blurRadius: 40,
                           spreadRadius: -6,
                         ),
@@ -285,17 +336,15 @@ class _AuthPageState extends State<AuthPage> {
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.white,
                                   foregroundColor: const Color(0xFF7B1FA2),
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 16),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 16),
                                   elevation: 0,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(14),
                                   ),
                                 ),
                                 child: Text(
-                                  _isLoginMode
-                                      ? S.loginAction
-                                      : S.signupAction,
+                                  _isLoginMode ? S.loginAction : S.signupAction,
                                   style: const TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w800),
@@ -328,12 +377,10 @@ class _AuthPageState extends State<AuthPage> {
                           child: Divider(
                               color: Colors.white.withValues(alpha: 0.4))),
                       Padding(
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
                         child: Text(S.orWord,
                             style: TextStyle(
-                                color:
-                                    Colors.white.withValues(alpha: 0.85))),
+                                color: Colors.white.withValues(alpha: 0.85))),
                       ),
                       Expanded(
                           child: Divider(
@@ -352,13 +399,11 @@ class _AuthPageState extends State<AuthPage> {
                       label: Text(
                         S.signInWithGoogle,
                         style: const TextStyle(
-                            color: Colors.black87,
-                            fontWeight: FontWeight.w700),
+                            color: Colors.black87, fontWeight: FontWeight.w700),
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 15),
+                        padding: const EdgeInsets.symmetric(vertical: 15),
                         elevation: 6,
                         shadowColor: Colors.black38,
                         shape: RoundedRectangleBorder(
@@ -386,7 +431,10 @@ class _AuthPageState extends State<AuthPage> {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: RadialGradient(
-                colors: [color.withValues(alpha: 0.55), color.withValues(alpha: 0.0)],
+                colors: [
+                  color.withValues(alpha: 0.55),
+                  color.withValues(alpha: 0.0)
+                ],
               ),
             ),
           ),

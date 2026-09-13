@@ -16,6 +16,8 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # vendored third-party source (see third_party/*/PATCH.md) — not ours to lint
+    - third_party/**
 include: package:flutter_lints/flutter.yaml
 
 linter:

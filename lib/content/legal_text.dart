@@ -78,8 +78,7 @@ KaamMitra may suspend or block accounts that break these standards.''',
           )
         ),
         (
-          _pick('What if the worker does not show up?',
-              'कामदार नआए के गर्ने?'),
+          _pick('What if the worker does not show up?', 'कामदार नआए के गर्ने?'),
           _pick(
             'Use "Worker didn\'t respond" in this Help section, or the Report option, and the admin will follow up. Repeated no-shows lead to the worker being suspended.',
             'यो Help मा भएको "कामदारले जवाफ दिएन" वा Report विकल्प प्रयोग गर्नुहोस्; admin ले हेर्नेछ। पटक-पटक नआउने कामदार निलम्बन हुन्छ।',

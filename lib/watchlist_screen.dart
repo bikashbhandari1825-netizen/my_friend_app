@@ -1,68 +1,193 @@
 // watchlist_screen.dart
-// inDrive-style: dark surface cards, lime icon badges.
+// सबै दर्ता भएका सेवाप्रदायकहरूको सूची — Instagram gradient background।
+// यी worker profile हरू अब home page मा होइन, यहाँ मात्र देखिन्छन्।
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'l10n/strings.dart';
+import 'theme/app_theme.dart';
 import 'widgets/app_ui.dart';
-import 'screens/worker_list_screen.dart';
+import 'screens/worker_profile_screen.dart';
 
 class WatchlistScreen extends StatelessWidget {
   const WatchlistScreen({super.key});
 
-  static const List<Map<String, dynamic>> _services = [
-    {'name': 'Mechanic', 'icon': Icons.car_repair},
-    {'name': 'Plumber', 'icon': Icons.plumbing},
-    {'name': 'Carpenter', 'icon': Icons.carpenter},
-    {'name': 'Painter', 'icon': Icons.format_paint},
-    {'name': 'Cleaner', 'icon': Icons.cleaning_services},
-    {'name': 'Driver', 'icon': Icons.drive_eta},
-  ];
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: gradientAppBar(S.watchlistTitle),
+      body: Container(
+        decoration: const BoxDecoration(gradient: AppColors.igGradient),
+        child: SafeArea(
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance
+                .collection('registeredWorkers')
+                .snapshots(),
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const Center(
+                    child: CircularProgressIndicator(color: Colors.white));
+              }
+              final docs = snap.data?.docs ?? [];
+              if (docs.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.person_search_rounded,
+                          size: 56, color: Colors.white70),
+                      const SizedBox(height: 12),
+                      Text(S.noWorkersNearby,
+                          style: const TextStyle(color: Colors.white)),
+                    ],
+                  ),
+                );
+              }
+
+              return ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                itemCount: docs.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (context, i) {
+                  final d = docs[i].data();
+                  final name = (d['name'] ?? '—').toString();
+                  final service = (d['service'] ?? '').toString();
+                  final experience = (d['experience'] ?? '').toString();
+                  final location =
+                      (d['location'] ?? d['district'] ?? '—').toString();
+                  final price = (d['price'] ?? 'Rs. 500').toString();
+                  final rating = (d['rating'] ?? '5.0').toString();
+
+                  return _WorkerCard(
+                    name: name,
+                    service: service,
+                    experience: experience,
+                    location: location,
+                    price: price,
+                    rating: rating,
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => WorkerProfileScreen(worker: {
+                          'uid': (d['uid'] ?? '').toString(),
+                          'name': name,
+                          'service': service,
+                          'experience': experience,
+                          'location': location,
+                          'price': price,
+                          'document': (d['document'] ?? '').toString(),
+                        }),
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkerCard extends StatelessWidget {
+  final String name;
+  final String service;
+  final String experience;
+  final String location;
+  final String price;
+  final String rating;
+  final VoidCallback onTap;
+
+  const _WorkerCard({
+    required this.name,
+    required this.service,
+    required this.experience,
+    required this.location,
+    required this.price,
+    required this.rating,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Scaffold(
-      appBar: AppBar(title: Text(S.watchlistTitle)),
-      body: ListView.separated(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        itemCount: _services.length + 1,
-        separatorBuilder: (_, __) => const SizedBox(height: 12),
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(S.watchlistHint,
-                  style: theme.textTheme.bodySmall),
-            );
-          }
-          final service = _services[index - 1];
-          final name = service['name'] as String;
-          return AppCard(
-            padding: const EdgeInsets.all(14),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => WorkerListScreen(serviceName: name),
-              ),
-            ),
-            child: Row(
-              children: [
-                LimeIconBadge(service['icon'] as IconData),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    S.serviceName(name),
-                    style: const TextStyle(
-                        fontSize: 15.5, fontWeight: FontWeight.w700),
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(AppRadius.lg),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const CircleAvatar(
+                    radius: 22,
+                    backgroundColor: Color(0x22833AB4),
+                    child: Icon(Icons.person_rounded,
+                        color: AppColors.igViolet, size: 24),
                   ),
-                ),
-                Icon(Icons.arrow_forward_ios_rounded,
-                    size: 14, color: theme.colorScheme.onSurfaceVariant),
-              ],
-            ),
-          );
-        },
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15.5,
+                                color: Colors.black87)),
+                        const SizedBox(height: 2),
+                        Text(
+                          experience.isEmpty
+                              ? S.serviceName(service)
+                              : '${S.serviceName(service)} · $experience',
+                          style: const TextStyle(
+                              fontSize: 12.5, color: Colors.black54),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      const Icon(Icons.star_rounded,
+                          size: 16, color: AppColors.igYellow),
+                      const SizedBox(width: 2),
+                      Text(rating,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black87)),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const Icon(Icons.place_outlined,
+                      size: 14, color: Colors.black45),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(location,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.black54)),
+                  ),
+                  Text(S.fromPrice(price),
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.igRed)),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

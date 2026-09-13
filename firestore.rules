@@ -37,32 +37,66 @@ service cloud.firestore {
     }
 
     // ── pendingWorkers (verification queue) ──────────────────
+    // नोट: पहिले `update` एडमिन-मात्र थियो — तर registration submit हुँदा
+    // (worker_registration_page.dart) र पछि दस्तावेज़ resync हुँदा
+    // (document_service.dart) worker आफैंले यही doc मा citizenship/selfie
+    // URL लेख्नुपर्छ, admin ले होइन। त्यो लेखाइ अनुमति नभएकोले चुपचाप
+    // (silent catch) असफल भइरहेको थियो — नतिजा: Storage मा फाइल पुगे पनि
+    // admin dashboard मा तस्बिर कहिल्यै नदेखिने (URL field नै खाली रहने)।
+    // यहाँ worker लाई आफ्नै doc मा दस्तावेज़-सम्बन्धी field मात्र (status,
+    // नाम, मूल्य, आदि होइन) लेख्न दिइएको छ — त्यो बाहेक अरू सबै अझै admin-मात्र।
     match /pendingWorkers/{doc} {
       allow read: if isAdmin()
         || (isSignedIn() && resource.data.uid == request.auth.uid);
       allow create: if isSignedIn()
         && request.resource.data.uid == request.auth.uid;
-      allow update, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (isSignedIn()
+            && resource.data.uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['citizenshipFrontUrl', 'citizenshipBackUrl',
+                           'selfieUrl', 'certificateUrls', 'licenseUrl',
+                           'documentUrl', 'documentName', 'documentsPending',
+                           'documentsError']));
+      allow delete: if isAdmin();
     }
 
     // ── registeredWorkers (public list) ─────────────────────
+    // admin ले approve गर्दा doc बन्छ; worker ले आफ्नै listing row (uid == self)
+    // मा live location वा identity re-point update गर्न पाउँछ।
     match /registeredWorkers/{doc} {
       allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (isSignedIn() && doc == request.auth.uid)
+        || (isSignedIn() && request.resource.data.uid == request.auth.uid);
+    }
+
+    // ── phoneAccounts (phone → uid index, test login persistence) ──
+    match /phoneAccounts/{key} {
+      allow read: if true;
+      allow write: if isSignedIn();
     }
 
     // ── serviceRequests (bookings / bids) ───────────────────
+    // broadcast अनुरोध (status == 'broadcasting') कुनै पनि signed-in worker ले
+    // पढ्न सक्छ; accept गर्दा आफूलाई workerUid राख्न वा rejectedBy मा थप्न पाउँछ।
     match /serviceRequests/{doc} {
       allow read: if isSignedIn() && (
         resource.data.employerUid == request.auth.uid
         || resource.data.workerUid == request.auth.uid
+        || resource.data.status == 'broadcasting'
         || isAdmin());
       allow create: if isSignedIn()
         && request.resource.data.employerUid == request.auth.uid;
       allow update: if isSignedIn() && (
         resource.data.employerUid == request.auth.uid
         || resource.data.workerUid == request.auth.uid
-        || isAdmin());
+        || isAdmin()
+        // कुनै worker ले broadcast job claim गर्दा वा decline गर्दा
+        || (resource.data.status == 'broadcasting' && (
+              request.resource.data.workerUid == request.auth.uid
+              || request.resource.data.status == 'broadcasting')));
       allow delete: if isAdmin();
     }
 
@@ -72,12 +106,22 @@ service cloud.firestore {
       allow read, create, update, delete: if isSignedIn();
     }
 
+    // ── calls (WebRTC signaling: offer/answer/ICE) ──────────
+    match /calls/{requestId} {
+      allow read, create, update, delete: if isSignedIn();
+      match /{sub}/{cand} {
+        allow read, create, update, delete: if isSignedIn();
+      }
+    }
+
     // ── notifications (per user) ────────────────────────────
+    // कुनै पनि signed-in user ले अर्को user लाई notification पठाउन सक्छ
+    // (जस्तै: employer ले काम post गर्दा नजिकका worker लाई radar alert)।
     match /notifications/{doc} {
       allow read, update: if isSignedIn()
         && resource.data.uid == request.auth.uid;
       allow create: if isSignedIn()
-        && request.resource.data.uid == request.auth.uid;
+        && request.resource.data.uid is string;
       allow delete: if (isSignedIn() && resource.data.uid == request.auth.uid)
         || isAdmin();
     }

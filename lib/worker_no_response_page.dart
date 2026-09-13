@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'theme/app_theme.dart';
+
 class WorkerNoResponsePage extends StatefulWidget {
   const WorkerNoResponsePage({super.key});
 
@@ -60,7 +62,7 @@ class _WorkerNoResponsePageState extends State<WorkerNoResponsePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.igViolet,
         foregroundColor: Colors.white,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
@@ -81,13 +83,15 @@ class _WorkerNoResponsePageState extends State<WorkerNoResponsePage> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.green.shade50,
+                color: AppColors.igViolet.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.green.shade200),
+                border: Border.all(
+                    color: AppColors.igViolet.withValues(alpha: 0.3)),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.message, color: Colors.green, size: 28),
+                  const Icon(Icons.message,
+                      color: AppColors.igViolet, size: 28),
                   const SizedBox(width: 10),
                   const Text(
                     'Write a support',
@@ -121,7 +125,7 @@ class _WorkerNoResponsePageState extends State<WorkerNoResponsePage> {
                 label:
                     const Text('Send', style: TextStyle(color: Colors.white)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade700,
+                  backgroundColor: AppColors.igViolet,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
                   shape: RoundedRectangleBorder(

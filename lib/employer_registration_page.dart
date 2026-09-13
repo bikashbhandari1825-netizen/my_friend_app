@@ -4,8 +4,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'app.dart';
+import 'auth/dev_login.dart';
 import 'l10n/strings.dart';
+import 'theme/app_theme.dart';
 import 'widgets/app_ui.dart';
 
 class EmployerRegistrationPage extends StatefulWidget {
@@ -62,11 +63,10 @@ class _EmployerRegistrationPageState extends State<EmployerRegistrationPage> {
       }, SetOptions(merge: true));
 
       if (!mounted) return;
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const KaamMitraApp()),
-        (_) => false,
-      );
+      // नयाँ KaamMitraApp() नबनाउने — same rootNavigatorKey collision bug
+      // (देख्नुहोस् email_auth_page.dart मा विस्तृत note)। profileComplete
+      // लेखेपछि root कै users-doc StreamBuilder ले आफैं सही screen देखाउँछ।
+      Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -75,58 +75,93 @@ class _EmployerRegistrationPageState extends State<EmployerRegistrationPage> {
     }
   }
 
+  Future<void> _exit() async {
+    await signOutClean();
+    if (!mounted) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final canGoBack = Navigator.of(context).canPop();
     return Scaffold(
-      appBar: AppBar(title: Text(S.employerRegTitle)),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const LimeIconBadge(Icons.badge_rounded, size: 56, solid: true),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _firstName,
-                  decoration: InputDecoration(labelText: S.firstName),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? S.enterName : null,
+      appBar: gradientAppBar(
+        S.employerRegTitle,
+        leading: IconButton(
+          icon:
+              Icon(canGoBack ? Icons.arrow_back_rounded : Icons.logout_rounded),
+          tooltip: canGoBack ? null : S.logOut,
+          onPressed: _saving
+              ? null
+              : () => canGoBack ? Navigator.pop(context) : _exit(),
+        ),
+      ),
+      body: AppGradientBackground(
+        glows: false,
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                boxShadow: const [
+                  BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 20,
+                      offset: Offset(0, 8)),
+                ],
+              ),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const LimeIconBadge(Icons.badge_rounded,
+                        size: 56, solid: true),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _firstName,
+                      decoration: InputDecoration(labelText: S.firstName),
+                      validator: (v) =>
+                          (v == null || v.trim().isEmpty) ? S.enterName : null,
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _lastName,
+                      decoration: InputDecoration(labelText: S.lastName),
+                      validator: (v) =>
+                          (v == null || v.trim().isEmpty) ? S.enterName : null,
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _phone,
+                      keyboardType: TextInputType.phone,
+                      decoration: InputDecoration(labelText: S.phone),
+                      validator: (v) => (v == null || v.trim().length < 7)
+                          ? S.enterPhone
+                          : null,
+                    ),
+                    const SizedBox(height: 20),
+                    Text(S.locationSection,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 8),
+                    LocationField(
+                      onChanged: (lat, lng) => setState(() {
+                        _lat = lat;
+                        _lng = lng;
+                      }),
+                    ),
+                    const SizedBox(height: 26),
+                    PrimaryButton(
+                      label: S.next,
+                      loading: _saving,
+                      onPressed: _submit,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: _lastName,
-                  decoration: InputDecoration(labelText: S.lastName),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? S.enterName : null,
-                ),
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: _phone,
-                  keyboardType: TextInputType.phone,
-                  decoration: InputDecoration(labelText: S.phone),
-                  validator: (v) =>
-                      (v == null || v.trim().length < 7) ? S.enterPhone : null,
-                ),
-                const SizedBox(height: 20),
-                Text(S.locationSection,
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 8),
-                LocationField(
-                  onChanged: (lat, lng) => setState(() {
-                    _lat = lat;
-                    _lng = lng;
-                  }),
-                ),
-                const SizedBox(height: 26),
-                PrimaryButton(
-                  label: S.next,
-                  loading: _saving,
-                  onPressed: _submit,
-                ),
-              ],
+              ),
             ),
           ),
         ),

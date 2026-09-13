@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'main.dart';
 import 'document_verification_page.dart';
+import 'theme/app_theme.dart';
 
 class ProfileRegistrationPage extends StatefulWidget {
   const ProfileRegistrationPage({super.key});
@@ -46,14 +47,12 @@ class _ProfileRegistrationPageState extends State<ProfileRegistrationPage> {
 
   Future<void> _pickPhoto() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        withData: true, // web मा काम गर्नको लागि bytes चाहिन्छ
-      );
+      final file = await FilePicker.pickFile(type: FileType.image);
 
-      if (result != null && result.files.single.bytes != null) {
+      if (file != null) {
+        final bytes = await file.readAsBytes();
         setState(() {
-          _photoBytes = result.files.single.bytes;
+          _photoBytes = bytes;
         });
       }
     } catch (e) {
@@ -133,7 +132,7 @@ class _ProfileRegistrationPageState extends State<ProfileRegistrationPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.green.shade700,
+      backgroundColor: AppColors.igViolet,
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
@@ -160,7 +159,7 @@ class _ProfileRegistrationPageState extends State<ProfileRegistrationPage> {
                         _photoBytes != null ? MemoryImage(_photoBytes!) : null,
                     child: _photoBytes == null
                         ? const Icon(Icons.camera_alt,
-                            size: 40, color: Colors.green)
+                            size: 40, color: AppColors.igViolet)
                         : null,
                   ),
                 ),
@@ -239,7 +238,7 @@ class _ProfileRegistrationPageState extends State<ProfileRegistrationPage> {
                         child: ElevatedButton(
                           onPressed: _isSaving ? null : _submit,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green.shade700,
+                            backgroundColor: AppColors.igViolet,
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12)),

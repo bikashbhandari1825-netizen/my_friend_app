@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'theme/app_theme.dart';
+
 // मुख्य Report Options पेज (Bullying, Scam, 18+ Content छान्ने ठाउँ)
 class ReportOptionsPage extends StatelessWidget {
   const ReportOptionsPage({super.key});
@@ -110,7 +112,7 @@ class BullyingReportPage extends StatelessWidget {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
         ),
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.igViolet,
         foregroundColor: Colors.white,
         title: const Text('Back'),
       ),
@@ -135,7 +137,7 @@ class BullyingReportPage extends StatelessWidget {
                 icon: const Icon(Icons.arrow_forward, color: Colors.white),
                 label: const Text('Me', style: TextStyle(color: Colors.white)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade700,
+                  backgroundColor: AppColors.igViolet,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
@@ -155,7 +157,7 @@ class BullyingReportPage extends StatelessWidget {
                 label: const Text('A friend',
                     style: TextStyle(color: Colors.white)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade700,
+                  backgroundColor: AppColors.igViolet,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
@@ -190,7 +192,7 @@ class _ScamReportPageState extends State<ScamReportPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.igViolet,
         foregroundColor: Colors.white,
         title: const Text('Scam Fraud'),
       ),
@@ -208,7 +210,7 @@ class _ScamReportPageState extends State<ScamReportPage> {
                   title: Text(issue),
                   value: issue,
                   groupValue: _selectedIssue,
-                  activeColor: Colors.green,
+                  activeColor: AppColors.igViolet,
                   onChanged: (val) => setState(() => _selectedIssue = val),
                 )),
             const SizedBox(height: 24),
@@ -225,7 +227,7 @@ class _ScamReportPageState extends State<ScamReportPage> {
                 icon: const Icon(Icons.arrow_forward, color: Colors.white),
                 label: const Text('Me', style: TextStyle(color: Colors.white)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade700,
+                  backgroundColor: AppColors.igViolet,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
@@ -247,7 +249,7 @@ class _ScamReportPageState extends State<ScamReportPage> {
                 label: const Text('A friend',
                     style: TextStyle(color: Colors.white)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade700,
+                  backgroundColor: AppColors.igViolet,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
@@ -269,7 +271,7 @@ class ContentReportPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.igViolet,
         foregroundColor: Colors.white,
         title: const Text('Report Content'),
       ),
@@ -297,7 +299,7 @@ class ContentReportPage extends StatelessWidget {
                   details: 'Reported via app',
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade700,
+                  backgroundColor: AppColors.igViolet,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),

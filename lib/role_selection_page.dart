@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'employer_registration_page.dart';
+import 'theme/app_theme.dart';
+import 'widgets/app_ui.dart';
 import 'worker_registration_page.dart';
 
 class RoleSelectionPage extends StatefulWidget {
@@ -69,79 +71,134 @@ class _RoleSelectionPageState extends State<RoleSelectionPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.green.shade700,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const CircleAvatar(
-                radius: 45,
-                backgroundColor: Colors.white,
-                child: Icon(Icons.handyman, size: 50, color: Colors.green),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'KaamMitra',
-                style: TextStyle(
+      body: AppGradientBackground(
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
                     color: Colors.white,
-                    fontSize: 26,
-                    fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 40),
-              const Text(
-                'Are you looking to work?\nLooking to hire?',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 40),
-              if (_isSaving)
-                const CircularProgressIndicator(color: Colors.white)
-              else ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => _selectRole('worker'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: const Text(
-                      'Worker (काम गर्ने)',
-                      style: TextStyle(
-                          color: Colors.green,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold),
-                    ),
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: [
+                      BoxShadow(
+                          color: AppColors.igPink.withValues(alpha: 0.4),
+                          blurRadius: 30,
+                          spreadRadius: -4),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Image.asset('assets/images/app_logo.png',
+                        width: 88,
+                        height: 88,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) => const Icon(
+                            Icons.handyman_rounded,
+                            size: 50,
+                            color: AppColors.igViolet)),
                   ),
                 ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => _selectRole('employer'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: const Text(
-                      'Employer (काम गराउने)',
-                      style: TextStyle(
-                          color: Colors.green,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold),
-                    ),
-                  ),
+                const SizedBox(height: 18),
+                const Text('KaamMitra',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        shadows: [
+                          Shadow(color: Colors.black38, blurRadius: 12)
+                        ])),
+                const SizedBox(height: 36),
+                const Text(
+                  'Are you looking to work?\nLooking to hire?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600),
                 ),
+                const SizedBox(height: 36),
+                if (_isSaving)
+                  const CircularProgressIndicator(color: Colors.white)
+                else ...[
+                  _RoleCard(
+                    icon: Icons.handyman_rounded,
+                    title: 'Worker',
+                    subtitle: 'काम गर्ने',
+                    onTap: () => _selectRole('worker'),
+                  ),
+                  const SizedBox(height: 14),
+                  _RoleCard(
+                    icon: Icons.work_rounded,
+                    title: 'Employer',
+                    subtitle: 'काम गराउने',
+                    onTap: () => _selectRole('employer'),
+                  ),
+                ],
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoleCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  const _RoleCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: const BoxDecoration(
+                  gradient: AppColors.buttonGradient,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            color: AppColors.igViolet,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800)),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            color: Colors.black54,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.arrow_forward_rounded, color: AppColors.igPink),
             ],
           ),
         ),

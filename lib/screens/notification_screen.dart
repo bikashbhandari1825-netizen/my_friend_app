@@ -3,6 +3,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
+import 'job_actions.dart';
+
 // 8. Notifications Screen (Firestore सँग जोडिएको)
 class NotificationScreen extends StatelessWidget {
   const NotificationScreen({super.key});
@@ -53,15 +56,22 @@ class NotificationScreen extends StatelessWidget {
                         : '';
 
                     return Card(
-                      color: isRead ? Colors.white : Colors.green.shade50,
+                      // notification तुरुन्तै (real-time) आउने/read-state
+                      // बदलिने भएकोले list पुनः-क्रमबद्ध/पुनः-निर्माण हुँदा
+                      // Flutter ले सही element सँग सही data जोड्न doc id कै
+                      // key चाहिन्छ।
+                      key: ValueKey(docs[index].id),
+                      color: isRead
+                          ? Colors.white
+                          : AppColors.igViolet.withValues(alpha: 0.06),
                       margin: const EdgeInsets.only(bottom: 10),
                       child: ListTile(
                         leading: CircleAvatar(
                           backgroundColor: isRead
                               ? Colors.grey.shade300
-                              : Colors.green.shade100,
+                              : AppColors.igViolet.withValues(alpha: 0.15),
                           child: Icon(Icons.notifications,
-                              color: isRead ? Colors.grey : Colors.green),
+                              color: isRead ? Colors.grey : AppColors.igViolet),
                         ),
                         title: Text(data['title'] ?? '',
                             style: TextStyle(
@@ -72,8 +82,20 @@ class NotificationScreen extends StatelessWidget {
                         trailing: Text(timeStr,
                             style: const TextStyle(
                                 fontSize: 11, color: Colors.grey)),
-                        onTap: () {
+                        onTap: () async {
                           docs[index].reference.update({'read': true});
+                          // requestId भएको notification (जस्तै "offer
+                          // accepted") थिच्दा सिधै त्यही काम खोल्ने —
+                          // push tap गर्दा जस्तै deep-link।
+                          final requestId = data['requestId'] as String?;
+                          if (requestId == null || requestId.isEmpty) return;
+                          final doc = await FirebaseFirestore.instance
+                              .collection('serviceRequests')
+                              .doc(requestId)
+                              .get();
+                          final jobData = doc.data();
+                          if (jobData == null || !context.mounted) return;
+                          openJobRoute(context, requestId, jobData);
                         },
                       ),
                     );

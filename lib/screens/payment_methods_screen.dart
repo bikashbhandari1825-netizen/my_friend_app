@@ -77,8 +77,7 @@ class PaymentMethodsScreen extends StatelessWidget {
                     _MethodCard(
                       icon: Icons.account_balance_wallet_rounded,
                       title: S.payEsewa,
-                      subtitle:
-                          esewa.isEmpty ? S.walletIdLabel : esewa,
+                      subtitle: esewa.isEmpty ? S.walletIdLabel : esewa,
                       accent: const Color(0xFF60BB46),
                       trailing: esewa.isEmpty ? Pill(S.notSetYet) : null,
                       onTap: () => _editWalletId(
@@ -94,8 +93,7 @@ class PaymentMethodsScreen extends StatelessWidget {
                     _MethodCard(
                       icon: Icons.account_balance_wallet_rounded,
                       title: S.payKhalti,
-                      subtitle:
-                          khalti.isEmpty ? S.walletIdLabel : khalti,
+                      subtitle: khalti.isEmpty ? S.walletIdLabel : khalti,
                       accent: const Color(0xFF5C2D91),
                       trailing: khalti.isEmpty ? Pill(S.notSetYet) : null,
                       onTap: () => _editWalletId(
@@ -126,8 +124,8 @@ class PaymentMethodsScreen extends StatelessWidget {
       builder: (ctx) {
         final theme = Theme.of(ctx);
         return Padding(
-          padding: EdgeInsets.only(
-              bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          padding:
+              EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
           child: Container(
             decoration: BoxDecoration(
               color: theme.colorScheme.surface,
@@ -247,8 +245,7 @@ class _QrSheet extends StatelessWidget {
           if (payload.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Text(S.notSetYet,
-                  style: theme.textTheme.bodyMedium),
+              child: Text(S.notSetYet, style: theme.textTheme.bodyMedium),
             )
           else ...[
             Container(

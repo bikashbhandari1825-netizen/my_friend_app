@@ -120,7 +120,8 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
     _centeredOnce = true;
   }
 
-  Set<Marker> _buildMarkers(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+  Set<Marker> _buildMarkers(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
     final markers = <Marker>{};
     for (final d in docs) {
       final data = d.data();
@@ -132,12 +133,11 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
         Marker(
           markerId: MarkerId(d.id),
           position: LatLng(wp.lat, wp.lng),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-              BitmapDescriptor.hueGreen),
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
           infoWindow: InfoWindow(
             title: name,
-            snippet:
-                '${S.serviceName(service)} · ${S.distanceLabel(km)}',
+            snippet: '${S.serviceName(service)} · ${S.distanceLabel(km)}',
           ),
           onTap: () => setState(() {
             _selId = d.id;
@@ -212,7 +212,6 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                         _selData = null;
                       }),
                     ),
-
                     if (_approx)
                       Positioned(
                         top: 12,
@@ -223,8 +222,7 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                               horizontal: 14, vertical: 10),
                           decoration: BoxDecoration(
                             color: AppColors.lime.withValues(alpha: 0.16),
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.md),
+                            borderRadius: BorderRadius.circular(AppRadius.md),
                           ),
                           child: Row(
                             children: [
@@ -242,7 +240,6 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                           ),
                         ),
                       ),
-
                     if (docs.isEmpty)
                       Positioned(
                         left: 16,
@@ -252,8 +249,7 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
                             color: theme.colorScheme.surface,
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.md),
+                            borderRadius: BorderRadius.circular(AppRadius.md),
                             border: Border.all(color: theme.dividerColor),
                           ),
                           child: Text(S.noWorkersNearby,
@@ -261,7 +257,6 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                               style: theme.textTheme.bodyMedium),
                         ),
                       ),
-
                     if (_selData != null)
                       Positioned(
                         left: 12,
@@ -271,6 +266,8 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                           data: _selData!,
                           workerId: _selId!,
                           distanceKm: _selKm,
+                          employerLat: _lat,
+                          employerLng: _lng,
                           onClose: () => setState(() {
                             _selId = null;
                             _selData = null;
@@ -289,12 +286,16 @@ class _WorkerSheet extends StatelessWidget {
   final Map<String, dynamic> data;
   final String workerId;
   final double distanceKm;
+  final double employerLat;
+  final double employerLng;
   final VoidCallback onClose;
 
   const _WorkerSheet({
     required this.data,
     required this.workerId,
     required this.distanceKm,
+    required this.employerLat,
+    required this.employerLng,
     required this.onClose,
   });
 
@@ -334,8 +335,7 @@ class _WorkerSheet extends StatelessWidget {
                     Text(name,
                         style: const TextStyle(
                             fontWeight: FontWeight.w700, fontSize: 15.5)),
-                    Text(
-                        '${S.serviceName(service)}  ·  ⭐ $rating',
+                    Text('${S.serviceName(service)}  ·  ⭐ $rating',
                         style: theme.textTheme.bodySmall),
                     Text(
                         '${S.distanceLabel(distanceKm)}  ·  ${S.fromPrice(price)}',
@@ -358,6 +358,8 @@ class _WorkerSheet extends StatelessWidget {
               data: data,
               workerId: workerId,
               distanceKm: distanceKm,
+              employerLat: employerLat,
+              employerLng: employerLng,
             ),
           ),
         ],

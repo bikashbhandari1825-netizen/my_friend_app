@@ -12,7 +12,20 @@
           "package_name": "com.example.kaamMitra.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "504837034251-cjbatu8drc06u4ir03oj5513o7ntj72b.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.kaamMitra.app",
+            "certificate_hash": "c55890f0f32a310259766f525109013f4ff9d1ab"
+          }
+        },
+        {
+          "client_id": "504837034251-h3ol9ehaksf1biicqgig2o5hn6fv14u2.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAS6M4OTVUpSG0fGVoolUDTXa_Q1GgcWB0"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "504837034251-h3ol9ehaksf1biicqgig2o5hn6fv14u2.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "504837034251-ufvr6vtf580o52uvbdcms8tqcg203v3k.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.myFriendApp"
+              }
+            }
+          ]
         }
       }
     },
@@ -31,7 +56,12 @@
           "package_name": "com.example.kaamMitra_app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "504837034251-h3ol9ehaksf1biicqgig2o5hn6fv14u2.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAS6M4OTVUpSG0fGVoolUDTXa_Q1GgcWB0"
@@ -39,7 +69,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "504837034251-h3ol9ehaksf1biicqgig2o5hn6fv14u2.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "504837034251-ufvr6vtf580o52uvbdcms8tqcg203v3k.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.myFriendApp"
+              }
+            }
+          ]
         }
       }
     }

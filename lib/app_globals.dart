@@ -4,7 +4,13 @@ import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/material.dart' show Locale, ThemeMode, ValueNotifier;
+import 'package:flutter/material.dart'
+    show GlobalKey, Locale, NavigatorState, ThemeMode, ValueNotifier;
+
+// MaterialApp(navigatorKey: rootNavigatorKey) — notification tap ले app लाई
+// background/terminated बाट ब्युँझाउँदा कुनै widget को आफ्नै BuildContext
+// उपलब्ध हुँदैन; यही global key बाट मात्र route push गर्न मिल्छ।
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
 // एपको Theme (Light/Dark/System) नियन्त्रण गर्ने ग्लोबल भेरिएबल।
 // inDrive जस्तै default dark; Settings बाट प्रयोगकर्ताले बदल्न सक्छ।
@@ -16,8 +22,24 @@ ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.dark);
 // MaterialApp यसैको ValueListenableBuilder भित्र छ)।
 ValueNotifier<Locale> localeNotifier = ValueNotifier(const Locale('ne'));
 
+// एप भित्रको notification देखाउने/नदेखाउने (Settings को toggle — session भरि)।
+ValueNotifier<bool> notificationsEnabled = ValueNotifier(true);
+
 // Profile Photo अस्थायी रूपमा राख्ने (Session भरि मात्र, Firebase Storage आउँदासम्म)
 Uint8List? sessionProfilePhoto;
+
+// Test login को phone (Anonymous auth सँग phone number जोड्न) — logout मा null।
+String? activeTestPhone;
+
+// अहिले स्क्रिनमा नै देखिरहेको route-map (JobRouteScreen/RequestTrackingScreen)
+// को requestId — त्यो screen आफैंले initState/dispose मा सेट/खाली गर्छ।
+// MainContainer कै active-job watcher ले auto-navigate गर्नुअघि यो जाँच्छ,
+// ताकि उपयोगकर्ता पहिल्यै त्यही काम को route screen मा हुँदा (जस्तै आफैं
+// त्यहीँबाटै counter-offer accept गर्दा) उही screen दोहोरिएर नखुलियोस्।
+String? visibleRouteScreenRequestId;
+
+// जुन uid लाई approval-celebration देखाइसकियो (फेरि नदेखाउन) — logout मा clear।
+final Set<String> celebrationShownFor = {};
 
 // जुनसुकै ठाउँबाट Notification बनाउन प्रयोग हुने साझा फंक्सन
 Future<void> createNotification(String title, String body) async {
@@ -29,6 +51,26 @@ Future<void> createNotification(String title, String body) async {
     'body': body,
     'read': false,
     'createdAt': FieldValue.serverTimestamp(),
+  });
+}
+
+/// अर्को (अहिले login नभएको) प्रयोगकर्तालाई in-app notification पठाउने —
+/// जस्तै employer ले accept गरेपछि worker लाई। `createNotification` (आफैलाई)
+/// भन्दा फरक — यहाँ uid caller बाहेकको हुन सक्छ, त्यसैले `data` मा
+/// deep-link/context राख्न सकिन्छ (जस्तै `requestId`)।
+Future<void> createNotificationForUser(
+  String uid,
+  String title,
+  String body, {
+  Map<String, dynamic>? data,
+}) async {
+  await FirebaseFirestore.instance.collection('notifications').add({
+    'uid': uid,
+    'title': title,
+    'body': body,
+    'read': false,
+    'createdAt': FieldValue.serverTimestamp(),
+    ...?data,
   });
 }
 

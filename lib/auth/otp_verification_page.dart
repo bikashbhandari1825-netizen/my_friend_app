@@ -4,8 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../app.dart';
 import '../l10n/strings.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
 import 'dev_login.dart';
 
@@ -21,12 +21,16 @@ class OtpVerificationPage extends StatefulWidget {
   /// नि:शुल्क test bypass — code मिले Anonymous sign-in।
   final bool testMode;
 
+  /// यो नम्बरसँग पहिले account छ (login) कि नयाँ (signup)?
+  final bool existingAccount;
+
   const OtpVerificationPage({
     super.key,
     required this.phone,
     this.confirmationResult,
     this.verificationId,
     this.testMode = false,
+    this.existingAccount = false,
   });
 
   @override
@@ -62,13 +66,11 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
           _snack(S.otpFailed);
           return;
         }
-        await devTestSignIn();
+        await devTestSignIn(widget.phone);
         if (!mounted) return;
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => const KaamMitraApp()),
-          (_) => false,
-        );
+        // नयाँ KaamMitraApp() नबनाउने — same rootNavigatorKey collision bug
+        // (देख्नुहोस् email_auth_page.dart मा विस्तृत note)।
+        Navigator.of(context).popUntil((route) => route.isFirst);
         return;
       }
 
@@ -87,11 +89,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
       }
 
       if (!mounted) return;
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const KaamMitraApp()),
-        (_) => false,
-      );
+      Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       setState(() => _verifying = false);
@@ -110,56 +108,93 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
-      appBar: AppBar(),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(S.otpTitle, style: theme.textTheme.headlineSmall),
-              const SizedBox(height: 8),
-              Text(S.otpSentTo(widget.phone),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant)),
-              const SizedBox(height: 28),
-              TextField(
-                controller: _controller,
-                autofocus: true,
-                keyboardType: TextInputType.number,
-                textAlign: TextAlign.center,
-                maxLength: 6,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(6),
-                ],
-                style: const TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 12),
-                decoration: InputDecoration(
-                  counterText: '',
-                  hintText: '••••••',
-                  labelText: S.otpCodeLabel,
+      body: AppGradientBackground(
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: IconButton(
+                    onPressed: () => Navigator.maybePop(context),
+                    icon: const Icon(Icons.arrow_back_rounded,
+                        color: Colors.white),
+                  ),
                 ),
-                onSubmitted: (_) => _verify(),
-              ),
-              const SizedBox(height: 24),
-              PrimaryButton(
-                label: S.verify,
-                icon: Icons.check_rounded,
-                loading: _verifying,
-                onPressed: _verify,
-              ),
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(S.wrongNumber),
-              ),
-            ],
+                const SizedBox(height: 8),
+                Text(widget.existingAccount ? S.welcomeBack : S.otpTitle,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        shadows: [
+                          Shadow(color: Colors.black38, blurRadius: 10)
+                        ])),
+                const SizedBox(height: 8),
+                Text(
+                    widget.existingAccount
+                        ? S.loginToExisting
+                        : S.otpSentTo(widget.phone),
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.85),
+                        fontSize: 13)),
+                const SizedBox(height: 24),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(18, 22, 18, 18),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(AppRadius.lg),
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 20,
+                          offset: Offset(0, 8)),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      TextField(
+                        controller: _controller,
+                        autofocus: true,
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        maxLength: 6,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(6),
+                        ],
+                        style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 12),
+                        decoration: InputDecoration(
+                          counterText: '',
+                          hintText: '••••••',
+                          labelText: S.otpCodeLabel,
+                        ),
+                        onSubmitted: (_) => _verify(),
+                      ),
+                      const SizedBox(height: 18),
+                      PrimaryButton(
+                        label: S.verify,
+                        icon: Icons.check_rounded,
+                        loading: _verifying,
+                        onPressed: _verify,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(S.wrongNumber,
+                      style: const TextStyle(color: Colors.white70)),
+                ),
+              ],
+            ),
           ),
         ),
       ),

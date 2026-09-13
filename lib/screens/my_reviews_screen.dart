@@ -43,8 +43,7 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
               if (v == 'report') {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                      builder: (_) => const ReportOptionsPage()),
+                  MaterialPageRoute(builder: (_) => const ReportOptionsPage()),
                 );
               }
             },
@@ -105,13 +104,11 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
                 return ListView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
                   children: [
-                    _SummaryCard(
-                        avg: avg, total: total, counts: counts),
+                    _SummaryCard(avg: avg, total: total, counts: counts),
                     const SizedBox(height: 16),
                     Row(
                       children: [
-                        Text(S.sortBy,
-                            style: theme.textTheme.bodySmall),
+                        Text(S.sortBy, style: theme.textTheme.bodySmall),
                         const SizedBox(width: 8),
                         DropdownButton<_Sort>(
                           value: _sort,
@@ -184,21 +181,18 @@ class _SummaryCard extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(vertical: 2),
                     child: Row(
                       children: [
-                        Text('$s',
-                            style: theme.textTheme.bodySmall),
+                        Text('$s', style: theme.textTheme.bodySmall),
                         const SizedBox(width: 6),
                         Expanded(
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
-                              value: total == 0
-                                  ? 0
-                                  : (counts[s] ?? 0) / total,
+                              value: total == 0 ? 0 : (counts[s] ?? 0) / total,
                               minHeight: 7,
                               backgroundColor:
                                   theme.colorScheme.surfaceContainerHighest,
-                              valueColor: const AlwaysStoppedAnimation(
-                                  AppColors.lime),
+                              valueColor:
+                                  const AlwaysStoppedAnimation(AppColors.lime),
                             ),
                           ),
                         ),
@@ -253,8 +247,7 @@ class _ReviewCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(name,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w700)),
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
                     if (service.isNotEmpty)
                       Text(service, style: theme.textTheme.bodySmall),
                   ],

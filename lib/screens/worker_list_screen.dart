@@ -2,6 +2,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
 import 'worker_profile_screen.dart';
 
 // 13. Worker List Screen (Firestore बाट वास्तविक Approved Workers)
@@ -62,7 +63,7 @@ class WorkerListScreen extends StatelessWidget {
                       Text('${data['service']} • ${data['experience']} exp'),
                       Text('Location: ${data['location'] ?? 'N/A'}',
                           style: const TextStyle(
-                              color: Colors.green,
+                              color: AppColors.igViolet,
                               fontWeight: FontWeight.w500)),
                       Text('Price: ${data['price'] ?? 'N/A'}'),
                     ],
@@ -86,8 +87,8 @@ class WorkerListScreen extends StatelessWidget {
                         ),
                       );
                     },
-                    style:
-                        ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.igViolet),
                     child: const Text('View Profile',
                         style: TextStyle(color: Colors.white)),
                   ),

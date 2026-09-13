@@ -2,6 +2,14 @@
 // App owner ले बदल्न सक्ने setting हरू (Firestore `config` collection मा)।
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// KaamMitra ले हरेक पूरा भएको कामबाट लिने कमिसन (०.१० = १०%)।
+/// एउटै ठाउँमा — earnings/wallet हिसाब यहीँबाट आउँछ।
+const double kCommissionRate = 0.10;
+
+/// "Top Worker" badge पाउन चाहिने न्यूनतम — औसत रेटिङ र समीक्षा संख्या।
+const double kTopWorkerMinRating = 4.5;
+const int kTopWorkerMinReviews = 5;
+
 /// Contact Support नम्बर — Firestore: config/support { phone: "..." }
 class SupportConfig {
   SupportConfig._();

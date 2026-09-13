@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../app_globals.dart';
+import '../theme/app_theme.dart';
 
 // 2. Worker Registration Screen (Updated with real FilePicker functionality)
 class WorkerRegisterScreen extends StatefulWidget {
@@ -83,14 +84,14 @@ class _WorkerRegisterScreenState extends State<WorkerRegisterScreen> {
   // वास्तविक फाइल पिकर फंक्सन (File Picker implementation for phone & laptop)
   Future<void> _pickDocument() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
+      final file = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: ['pdf', 'doc', 'docx', 'jpg', 'png'],
       );
 
-      if (result != null) {
+      if (file != null) {
         setState(() {
-          _uploadedFileName = result.files.single.name;
+          _uploadedFileName = file.name;
         });
         // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
@@ -173,7 +174,7 @@ class _WorkerRegisterScreenState extends State<WorkerRegisterScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Worker Registration'),
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.igViolet,
         foregroundColor: Colors.white,
       ),
       body: SingleChildScrollView(
@@ -333,7 +334,7 @@ class _WorkerRegisterScreenState extends State<WorkerRegisterScreen> {
                         style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.bold,
-                            color: Colors.green)),
+                            color: AppColors.igViolet)),
                     SizedBox(
                       width: 90,
                       child: TextField(
@@ -397,7 +398,7 @@ class _WorkerRegisterScreenState extends State<WorkerRegisterScreen> {
                 child: ElevatedButton(
                   onPressed: _registerWorker,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green.shade700,
+                    backgroundColor: AppColors.igViolet,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                   child: const Text('Submit for Approval',

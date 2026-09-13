@@ -44,3 +44,9 @@ app.*.map.json
 
 # Firebase deploy cache
 .firebase/
+
+# Cloud Functions dependencies (reproducible via `npm install`)
+functions/node_modules/
+
+# Accidental nested clone of this same repo — not meant to be tracked
+/my_friend_app/

@@ -46,22 +46,24 @@ class HelpSupportScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
         children: [
-          row(Icons.gavel_rounded, S.serviceStandard, S.serviceStandardSub,
-              () => _openText(context, S.serviceStandard,
-                  LegalText.serviceStandard)),
+          row(
+              Icons.gavel_rounded,
+              S.serviceStandard,
+              S.serviceStandardSub,
+              () => _openText(
+                  context, S.serviceStandard, LegalText.serviceStandard)),
           const SizedBox(height: 10),
           row(Icons.person_off_rounded, S.workerNoResponse,
               S.workerNoResponseSub, () {
             Navigator.push(
               context,
-              MaterialPageRoute(
-                  builder: (_) => const WorkerNoResponsePage()),
+              MaterialPageRoute(builder: (_) => const WorkerNoResponsePage()),
             );
           }),
           const SizedBox(height: 22),
           Text(S.faq,
-              style: const TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.w800)),
+              style:
+                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           for (final qa in LegalText.faq)
             Card(
@@ -79,8 +81,8 @@ class HelpSupportScreen extends StatelessWidget {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(qa.$2,
-                        style: theme.textTheme.bodyMedium
-                            ?.copyWith(height: 1.45)),
+                        style:
+                            theme.textTheme.bodyMedium?.copyWith(height: 1.45)),
                   ),
                 ],
               ),
@@ -89,16 +91,18 @@ class HelpSupportScreen extends StatelessWidget {
           const _ContactSupportCard(),
           const SizedBox(height: 22),
           Text(S.privacyPolicy,
-              style: const TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.w800)),
+              style:
+                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
-          row(Icons.privacy_tip_rounded, S.privacyPolicy, S.dataSecureLine,
-              () => _openText(
-                  context, S.privacyPolicy, LegalText.privacyPolicy)),
+          row(
+              Icons.privacy_tip_rounded,
+              S.privacyPolicy,
+              S.dataSecureLine,
+              () =>
+                  _openText(context, S.privacyPolicy, LegalText.privacyPolicy)),
           const SizedBox(height: 10),
           row(Icons.verified_user_rounded, S.dataSecurity, S.dataSecureLine,
-              () => _openText(
-                  context, S.dataSecurity, LegalText.dataSecurity)),
+              () => _openText(context, S.dataSecurity, LegalText.dataSecurity)),
         ],
       ),
     );
@@ -178,10 +182,7 @@ class _LegalPage extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
         child: Text(
           body,
-          style: Theme.of(context)
-              .textTheme
-              .bodyMedium
-              ?.copyWith(height: 1.5),
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5),
         ),
       ),
     );

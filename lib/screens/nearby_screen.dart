@@ -143,8 +143,7 @@ class _NearbyScreenState extends State<NearbyScreen> {
                         final workers = docs.map((d) {
                           final data = d.data();
                           final wp = workerPos(data, d.id, _lat, _lng);
-                          final km =
-                              haversineKm(_lat, _lng, wp.lat, wp.lng);
+                          final km = haversineKm(_lat, _lng, wp.lat, wp.lng);
                           return (data: data, id: d.id, km: km);
                         }).toList()
                           ..sort((a, b) => a.km.compareTo(b.km));
@@ -161,6 +160,8 @@ class _NearbyScreenState extends State<NearbyScreen> {
                               data: w.data,
                               workerId: w.id,
                               distanceKm: w.km,
+                              employerLat: _lat,
+                              employerLng: _lng,
                             );
                           },
                         );
@@ -195,8 +196,8 @@ class _ApproxBanner extends StatelessWidget {
           const Icon(Icons.location_off, size: 18, color: AppColors.lime),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(S.approxLocation,
-                style: const TextStyle(fontSize: 12.5)),
+            child:
+                Text(S.approxLocation, style: const TextStyle(fontSize: 12.5)),
           ),
           TextButton(onPressed: onEnable, child: Text(S.enableLocation)),
         ],
@@ -293,11 +294,15 @@ class _WorkerCard extends StatelessWidget {
   final Map<String, dynamic> data;
   final String workerId;
   final double distanceKm;
+  final double employerLat;
+  final double employerLng;
 
   const _WorkerCard({
     required this.data,
     required this.workerId,
     required this.distanceKm,
+    required this.employerLat,
+    required this.employerLng,
   });
 
   @override
@@ -349,8 +354,7 @@ class _WorkerCard extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: Text(
               S.fromPrice(price),
-              style:
-                  const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
             ),
           ),
           const SizedBox(height: 12),
@@ -362,6 +366,8 @@ class _WorkerCard extends StatelessWidget {
               data: data,
               workerId: workerId,
               distanceKm: distanceKm,
+              employerLat: employerLat,
+              employerLng: employerLng,
             ),
           ),
         ],

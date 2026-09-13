@@ -1,7 +1,15 @@
 // screens/worker_profile_screen.dart
+// ग्राहकले कामदारको विवरण हेर्ने स्क्रिन — Instagram-style gradient background,
+// भित्रको सेतो card पढ्न सजिलो।
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+
+import '../l10n/strings.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
+import '../widgets/worker_stats.dart';
+import 'portfolio_screen.dart';
 
 // 14. Worker Profile Detail Screen
 class WorkerProfileScreen extends StatelessWidget {
@@ -37,7 +45,9 @@ class WorkerProfileScreen extends StatelessWidget {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.igViolet,
+                foregroundColor: Colors.white),
             onPressed: () async {
               if (detailsController.text.trim().isEmpty) return;
 
@@ -93,76 +103,93 @@ class WorkerProfileScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(worker['name'] ?? 'Worker Profile'),
-        backgroundColor: Colors.green.shade700,
-        foregroundColor: Colors.white,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            const CircleAvatar(radius: 50, child: Icon(Icons.person, size: 60)),
-            const SizedBox(height: 15),
-            Text(worker['name'] ?? '',
-                style:
-                    const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            Text(worker['service'] ?? '',
-                style: const TextStyle(fontSize: 16, color: Colors.grey)),
-            const SizedBox(height: 20),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading:
-                          const Icon(Icons.location_on, color: Colors.green),
-                      title: const Text('Location'),
-                      subtitle: Text(worker['location'] ?? 'N/A'),
-                    ),
-                    const Divider(),
-                    ListTile(
-                      leading: const Icon(Icons.work, color: Colors.green),
-                      title: const Text('Experience'),
-                      subtitle: Text(worker['experience'] ?? 'N/A'),
-                    ),
-                    const Divider(),
-                    ListTile(
-                      leading: const Icon(Icons.insert_drive_file,
-                          color: Colors.blue),
-                      title: const Text('Verified Document'),
-                      subtitle: Text(worker['document'] ?? 'Available'),
-                    ),
-                    const Divider(),
-                    ListTile(
-                      leading:
-                          const Icon(Icons.attach_money, color: Colors.green),
-                      title: const Text('Starting Price'),
-                      subtitle: Text(worker['price'] ?? 'N/A'),
-                    ),
-                  ],
+      backgroundColor: Colors.transparent,
+      appBar: gradientAppBar(worker['name'] ?? 'Worker Profile'),
+      body: Container(
+        decoration: const BoxDecoration(gradient: AppColors.igGradient),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 100,
+                  height: 100,
+                  decoration: const BoxDecoration(
+                      color: Colors.white, shape: BoxShape.circle),
+                  child: const Icon(Icons.person_rounded,
+                      size: 58, color: AppColors.igViolet),
                 ),
-              ),
-            ),
-            const Spacer(),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.send_rounded, color: Colors.white),
-                label: const Text('Request Service',
-                    style: TextStyle(color: Colors.white, fontSize: 16)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade700,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                const SizedBox(height: 14),
+                Text(worker['name'] ?? '',
+                    style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white)),
+                Text(worker['service'] ?? '',
+                    style:
+                        const TextStyle(fontSize: 15, color: Colors.white70)),
+                const SizedBox(height: 8),
+                WorkerRatingBadge(uid: worker['uid'] ?? '', onDark: true),
+                const SizedBox(height: 20),
+                Card(
+                  color: Colors.white,
+                  elevation: 4,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.lg)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Column(
+                      children: [
+                        _row(Icons.location_on_rounded, 'Location',
+                            worker['location'] ?? 'N/A'),
+                        const Divider(height: 1),
+                        _row(Icons.work_rounded, 'Experience',
+                            worker['experience'] ?? 'N/A'),
+                        const Divider(height: 1),
+                        _row(Icons.verified_user_rounded, 'Verified document',
+                            'Available'),
+                        const Divider(height: 1),
+                        _row(Icons.payments_rounded, 'Starting price',
+                            worker['price'] ?? 'N/A'),
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(Icons.photo_library_rounded,
+                              color: AppColors.igViolet),
+                          title: Text(S.workPortfolio),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => PortfolioScreen(
+                                  workerUid: worker['uid'] ?? ''),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                onPressed: () => _sendServiceRequest(context),
-              ),
+                const Spacer(),
+                PrimaryButton(
+                  label: 'Request Service',
+                  icon: Icons.send_rounded,
+                  onPressed: () => _sendServiceRequest(context),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
+
+  Widget _row(IconData icon, String title, String subtitle) => ListTile(
+        leading: Icon(icon, color: AppColors.igViolet),
+        title: Text(title,
+            style:
+                const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+        subtitle: Text(subtitle),
+      );
 }

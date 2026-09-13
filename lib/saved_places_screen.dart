@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import 'l10n/strings.dart';
 import 'location_picker_page.dart';
+import 'screens/home_work_route_screen.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_ui.dart';
 
@@ -24,8 +25,7 @@ class SavedPlacesScreen extends StatelessWidget {
       );
     }
 
-    final userRef =
-        FirebaseFirestore.instance.collection('users').doc(uid);
+    final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
 
     Future<PickedPlace?> pick(String label, Map<String, dynamic>? existing) {
       return Navigator.push<PickedPlace>(
@@ -40,8 +40,26 @@ class SavedPlacesScreen extends StatelessWidget {
       );
     }
 
-    void toast(String m) => ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(m)));
+    void toast(String m, {bool ok = true}) =>
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(children: [
+            Icon(ok ? Icons.check_circle_rounded : Icons.error_rounded,
+                color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text(m)),
+          ]),
+          backgroundColor: ok ? AppColors.success : AppColors.danger,
+        ));
+
+    /// एउटा merge write — असफल भए कारण देखाउने।
+    Future<void> save(Map<String, dynamic> patch) async {
+      try {
+        await userRef.set(patch, SetOptions(merge: true));
+        toast(S.placeSaved);
+      } catch (e) {
+        toast('${S.errorWord}: $e', ok: false);
+      }
+    }
 
     return Scaffold(
       appBar: AppBar(title: Text(S.savedPlacesTitle)),
@@ -65,15 +83,7 @@ class SavedPlacesScreen extends StatelessWidget {
                 onTap: () async {
                   final p = await pick(S.saveAsHome, home);
                   if (p == null) return;
-                  await userRef.set({
-                    'homePlace': {
-                      'label': p.label,
-                      'address': p.address,
-                      'lat': p.lat,
-                      'lng': p.lng,
-                    }
-                  }, SetOptions(merge: true));
-                  toast(S.placeSaved);
+                  await save({'homePlace': p.toMap()});
                 },
               ),
               const SizedBox(height: 12),
@@ -84,33 +94,32 @@ class SavedPlacesScreen extends StatelessWidget {
                 onTap: () async {
                   final p = await pick(S.saveAsWork, work);
                   if (p == null) return;
-                  await userRef.set({
-                    'workPlace': {
-                      'label': p.label,
-                      'address': p.address,
-                      'lat': p.lat,
-                      'lng': p.lng,
-                    }
-                  }, SetOptions(merge: true));
-                  toast(S.placeSaved);
+                  await save({'workPlace': p.toMap()});
                 },
               ),
+              if ((home?['lat'] as num?) != null &&
+                  (work?['lat'] as num?) != null) ...[
+                const SizedBox(height: 12),
+                _RouteCard(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => HomeWorkRouteScreen(
+                        home: home!,
+                        work: work!,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               _AddTile(
                 onTap: () async {
                   final p = await pick(S.addAnotherPlace, null);
                   if (p == null) return;
-                  await userRef.set({
-                    'otherPlaces': FieldValue.arrayUnion([
-                      {
-                        'label': p.label,
-                        'address': p.address,
-                        'lat': p.lat,
-                        'lng': p.lng,
-                      }
-                    ])
-                  }, SetOptions(merge: true));
-                  toast(S.placeSaved);
+                  await save({
+                    'otherPlaces': FieldValue.arrayUnion([p.toMap()])
+                  });
                 },
               ),
               if (others.isNotEmpty) ...[
@@ -123,28 +132,29 @@ class SavedPlacesScreen extends StatelessWidget {
                         : o['label'].toString(),
                     place: o,
                     onDelete: () async {
-                      await userRef.set({
-                        'otherPlaces': FieldValue.arrayRemove([o])
-                      }, SetOptions(merge: true));
+                      try {
+                        await userRef.set({
+                          'otherPlaces': FieldValue.arrayRemove([o])
+                        }, SetOptions(merge: true));
+                      } catch (e) {
+                        toast('${S.errorWord}: $e', ok: false);
+                      }
                     },
                     onTap: () async {
                       final p = await pick(
                           (o['label'] ?? S.addAnotherPlace).toString(), o);
                       if (p == null) return;
-                      await userRef.set({
-                        'otherPlaces': FieldValue.arrayRemove([o])
-                      }, SetOptions(merge: true));
-                      await userRef.set({
-                        'otherPlaces': FieldValue.arrayUnion([
-                          {
-                            'label': p.label,
-                            'address': p.address,
-                            'lat': p.lat,
-                            'lng': p.lng,
-                          }
-                        ])
-                      }, SetOptions(merge: true));
-                      toast(S.placeSaved);
+                      try {
+                        await userRef.set({
+                          'otherPlaces': FieldValue.arrayRemove([o])
+                        }, SetOptions(merge: true));
+                        await userRef.set({
+                          'otherPlaces': FieldValue.arrayUnion([p.toMap()])
+                        }, SetOptions(merge: true));
+                        toast(S.placeSaved);
+                      } catch (e) {
+                        toast('${S.errorWord}: $e', ok: false);
+                      }
                     },
                   ),
                   const SizedBox(height: 10),
@@ -216,6 +226,55 @@ class _PlaceTile extends StatelessWidget {
   }
 }
 
+class _RouteCard extends StatelessWidget {
+  final VoidCallback onTap;
+  const _RouteCard({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: AppColors.igGradient,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                const Icon(Icons.alt_route_rounded,
+                    color: Colors.white, size: 26),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(S.homeToWorkRoute,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 14.5)),
+                      const SizedBox(height: 2),
+                      Text(S.viewRoute,
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: Colors.white),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AddTile extends StatelessWidget {
   final VoidCallback onTap;
   const _AddTile({required this.onTap});
@@ -231,8 +290,8 @@ class _AddTile extends StatelessWidget {
           const SizedBox(width: 14),
           Expanded(
             child: Text(S.addAnotherPlace,
-                style: const TextStyle(
-                    fontWeight: FontWeight.w700, fontSize: 15)),
+                style:
+                    const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
           ),
           Icon(Icons.chevron_right_rounded,
               color: Theme.of(context).colorScheme.onSurfaceVariant),

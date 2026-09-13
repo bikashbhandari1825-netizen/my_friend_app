@@ -5,7 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'main.dart';
+import 'theme/app_theme.dart';
 
 class DocumentVerificationPage extends StatefulWidget {
   const DocumentVerificationPage({super.key});
@@ -89,7 +89,8 @@ class _DocumentVerificationPageState extends State<DocumentVerificationPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                leading: const Icon(Icons.camera_alt, color: Colors.green),
+                leading:
+                    const Icon(Icons.camera_alt, color: AppColors.igViolet),
                 title: const Text('क्यामेराबाट फोटो खिच्ने'),
                 onTap: () {
                   Navigator.pop(context);
@@ -133,16 +134,16 @@ class _DocumentVerificationPageState extends State<DocumentVerificationPage> {
 
   Future<void> _pickDocument() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
+      final file = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: ['pdf', 'doc', 'docx', 'jpg', 'png'],
-        withData: true,
       );
 
-      if (result != null) {
+      if (file != null) {
+        final bytes = await file.readAsBytes();
         setState(() {
-          _uploadedFileName = result.files.single.name;
-          _uploadedFileBytes = result.files.single.bytes;
+          _uploadedFileName = file.name;
+          _uploadedFileBytes = bytes;
           _errorText = null;
         });
       }
@@ -200,10 +201,10 @@ class _DocumentVerificationPageState extends State<DocumentVerificationPage> {
       );
 
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const KaamMitraApp()),
-      );
+      // नयाँ KaamMitraApp() नबनाउने — same rootNavigatorKey collision bug
+      // (देख्नुहोस् email_auth_page.dart मा विस्तृत note)। यो पेज pop गर्नु
+      // मात्र पर्छ, root ले आफैं सही screen देखाउँछ।
+      Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (e) {
       if (!mounted) return;
       setState(() => _errorText = 'त्रुटि: $e');
@@ -215,7 +216,7 @@ class _DocumentVerificationPageState extends State<DocumentVerificationPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.green.shade700,
+      backgroundColor: AppColors.igViolet,
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
@@ -350,7 +351,7 @@ class _DocumentVerificationPageState extends State<DocumentVerificationPage> {
                       child: ElevatedButton(
                         onPressed: _isSaving ? null : _done,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green.shade700,
+                          backgroundColor: AppColors.igViolet,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12)),
