@@ -212,6 +212,18 @@ class S {
   static String get watchlistTitle => _t('watchlist_title');
   static String get watchlistHint => _t('watchlist_hint');
 
+  // ── Worker profile detail (watchlist → tap a worker) ─────
+  static String get locationRowLabel => _t('location_row_label');
+  static String get documentAvailable => _t('document_available');
+  static String get callToBook => _t('call_to_book');
+  static String requestServiceFrom(String name) => isNepali
+      ? '$name लाई सेवा अनुरोध'
+      : 'Request service from $name';
+  static String get describeYourTask => _t('describe_your_task');
+  static String get serviceRequestSentTitle =>
+      _t('service_request_sent_title');
+  static String get serviceRequestSentBody => _t('service_request_sent_body');
+
   // ── Nearby / bidding ─────────────────────────────────────
   static String get nearbyTitle => _t('nearby_title');
   static String get findNearby => _t('find_nearby');
@@ -898,6 +910,22 @@ class S {
     'watchlist_hint': {
       'en': 'Tap a category to browse workers',
       'ne': 'कामदार हेर्न श्रेणीमा tap गर्नुहोस्'
+    },
+    'location_row_label': {'en': 'Location', 'ne': 'स्थान'},
+    'document_available': {'en': 'Available', 'ne': 'उपलब्ध'},
+    'call_to_book': {'en': 'Call to book directly', 'ne': 'सिधै बुक गर्न कल गर्नुहोस्'},
+    'describe_your_task': {
+      'en': 'Describe your problem / task',
+      'ne': 'आफ्नो समस्या/काम बताउनुहोस्'
+    },
+    'service_request_sent_title': {
+      'en': 'Request sent!',
+      'ne': 'अनुरोध पठाइयो!'
+    },
+    'service_request_sent_body': {
+      'en':
+          'Your service request has been sent successfully. The worker will accept it soon!',
+      'ne': 'तपाईंको सेवा अनुरोध सफलतापूर्वक पठाइयो। कामदारले चाँडै स्वीकार गर्नेछन्!'
     },
     'nearby_title': {'en': 'Nearby workers', 'ne': 'नजिकका कामदार'},
     'find_nearby': {

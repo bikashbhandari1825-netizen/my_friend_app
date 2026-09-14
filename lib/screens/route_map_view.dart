@@ -143,7 +143,7 @@ class _RouteMapViewState extends State<RouteMapView>
     destinationFlagPin().then((b) {
       if (mounted) setState(() => _flagIcon = b);
     });
-    navigationArrowMarker(AppColors.igViolet).then((b) {
+    navigationArrowMarker().then((b) {
       if (mounted) setState(() => _navIcon = b);
     });
     final origin = widget.origin;

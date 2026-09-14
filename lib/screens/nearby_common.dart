@@ -211,28 +211,45 @@ double bearingBetween(LatLng from, LatLng to) {
   return (deg + 360) % 360;
 }
 
-final Map<int, BitmapDescriptor> _navArrowCache = {};
+BitmapDescriptor? _navArrowCache;
 
-/// Navigation-app-शैलीको दिशा-सूचक तीर (Uber/Google Maps को नीलो
-/// "you are heading this way" arrow जस्तै) — accept भएको काममा worker
-/// गन्तव्यतिर चलिरहँदा नक्सामा देखिने marker। उत्तरतिर (माथि, rotation = 0)
-/// देखाउने गरी drawn हुन्छ; caller ले `Marker(rotation: bearingDeg, flat:
-/// true, ...)` राखेर हालको दिशामा घुमाउँछ — त्यसैले यहाँ rotation logic
-/// छैन, स्थिर आकार मात्र, रङ अनुसार cache हुन्छ।
-Future<BitmapDescriptor> navigationArrowMarker(Color color) async {
-  final key = color.toARGB32();
-  final hit = _navArrowCache[key];
+/// Navigation-app-शैलीको दिशा-सूचक तीर — accept भएको काममा worker/employer
+/// गन्तव्यतिर चलिरहँदा नक्सामा देखिने live-location marker। एपभरि नै अरू
+/// जुनसुकै accent जस्तै यो पनि ठ्याक्कै Instagram gradient (violet → red →
+/// yellow, `AppColors.igGradient` सँगै मिल्ने) मा कोरिन्छ — कुनै एउटै solid
+/// रङमा होइन। उत्तरतिर (माथि, rotation = 0) देखाउने गरी drawn हुन्छ; caller
+/// ले `Marker(rotation: bearingDeg, flat: true, ...)` राखेर हालको दिशामा
+/// घुमाउँछ — त्यसैले यहाँ rotation logic छैन, स्थिर आकार मात्र, एकपटक
+/// बनाएर cache हुन्छ।
+Future<BitmapDescriptor> navigationArrowMarker() async {
+  final hit = _navArrowCache;
   if (hit != null) return hit;
 
   const double s = 108;
   const double c = s / 2;
+  const rect = Rect.fromLTWH(0, 0, s, s);
+  const gradientColors = [
+    AppColors.igViolet,
+    AppColors.igRed,
+    AppColors.igYellow,
+  ];
+  final fillShader = const LinearGradient(
+    begin: Alignment.bottomLeft,
+    end: Alignment.topRight, // ≈ 45deg, igGradient जस्तै
+    colors: gradientColors,
+  ).createShader(rect);
+  final haloShader = LinearGradient(
+    begin: Alignment.bottomLeft,
+    end: Alignment.topRight,
+    colors: gradientColors.map((c) => c.withValues(alpha: 0.22)).toList(),
+  ).createShader(rect);
+
   final rec = ui.PictureRecorder();
   final canvas = Canvas(rec);
 
-  // हल्का बाहिरी halo + सेतो डिस्क — जुनसुकै नक्सा/tile रङमा पनि arrow
-  // छुट्टै र प्रस्ट देखियोस्।
-  canvas.drawCircle(const Offset(c, c), c - 4,
-      Paint()..color = color.withValues(alpha: 0.18));
+  // हल्का बाहिरी gradient halo + सेतो डिस्क — जुनसुकै नक्सा/tile रङमा पनि
+  // arrow छुट्टै र प्रस्ट देखियोस्।
+  canvas.drawCircle(const Offset(c, c), c - 4, Paint()..shader = haloShader);
   canvas.drawCircle(const Offset(c, c), c - 14, Paint()..color = Colors.white);
 
   // उत्तरतिर (माथि) देखाउने chevron — Marker.rotation ले घुमाउँछ, त्यसैले
@@ -243,7 +260,7 @@ Future<BitmapDescriptor> navigationArrowMarker(Color color) async {
     ..lineTo(c, c + 6)
     ..lineTo(c - 15, c + 16)
     ..close();
-  canvas.drawPath(path, Paint()..color = color);
+  canvas.drawPath(path, Paint()..shader = fillShader);
   canvas.drawPath(
     path,
     Paint()
@@ -255,7 +272,7 @@ Future<BitmapDescriptor> navigationArrowMarker(Color color) async {
   final img = await rec.endRecording().toImage(s.toInt(), s.toInt());
   final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
   final bd = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
-  _navArrowCache[key] = bd;
+  _navArrowCache = bd;
   return bd;
 }
 

@@ -310,7 +310,13 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
                 destinationLabel: S.jobLocationTitle,
                 destinationAddress: (data['address'] ?? '').toString(),
                 route: _liveRoute,
-                navigateTarget: workerPos,
+                // employer यहाँ आफैं कतै जाँदैन — worker कहाँ पुग्दैछ भनेर हेर्ने
+                // (Live Track on Map) मात्र हो, त्यसैले `navigateTarget`
+                // जानाजानी दिइएको छैन: worker-तर्फको JobRouteScreen जस्तो
+                // पूर्ण "Open in Google Maps" turn-by-turn navigation बटन
+                // employer को स्क्रिनमा नआओस् भनेर। त्यो नियन्त्रण worker कै
+                // (आफ्नो गन्तव्यसम्म पुग्ने) एपमा मात्र सीमित हुनुपर्छ।
+                //
                 // आफ्नै (employer) GPS यहाँ अप्रासंगिक — यो worker को स्थान
                 // नआएको हो, "आफ्नो location on गर्नुहोस्" भन्दा भ्रमपूर्ण हुन्थ्यो।
                 originMissingMessage: S.waitingForWorkerLocation,
