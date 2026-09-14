@@ -16,7 +16,6 @@ import 'package:image_picker/image_picker.dart';
 
 import '../app_globals.dart';
 import '../l10n/strings.dart';
-import '../services/call_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/spring_tap.dart';
 import '../widgets/voice_recorder_bar.dart';
@@ -44,11 +43,11 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scroll = ScrollController();
   bool _recordingVoice = false;
   bool _canSend = false;
-  // दुई कल बटन (audio/video) ले आ-आफ्नै छुट्टै busy-state राख्छन् — एउटा
-  // साझा flag भएमा एउटामा थिच्दा अर्को बटन पनि "लोड हुँदै" देखिन्थ्यो
-  // (independent touch handling तोडिएको बग)।
-  bool _audioCallBusy = false;
-  bool _videoCallBusy = false;
+  // कल बटन थिचेपछि CallScreen तुरुन्तै (उही frame मा) push हुन्छ — कुनै
+  // network round-trip पर्खिनु पर्दैन, त्यसैले छुट्टै "busy" spinner
+  // चाहिँदैन। `_inCall` ले मात्र double-tap (दुइटा CallScreen एकैचोटि
+  // push हुनबाट) रोक्छ — SpringTap कै press animation ले tactile
+  // feedback दिन्छ।
   bool _inCall = false;
   String _myName = '';
   String? _lastMarkedReadDocId;
@@ -120,25 +119,30 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Touch हुनेबित्तिकै तुरुन्तै CallScreen खुल्छ — कुनै Firestore
+  /// round-trip (stale-signal reset, अर्को पक्षको uid लुकअप) लाई अब यहाँ
+  /// await गरिँदैन। पहिले यी दुवै await हुँदा बटन थिचेदेखि screen देखिनेसम्म
+  /// नेटवर्क जति ढिलो भयो त्यति नै ढिलो हुन्थ्यो — अब ती background मा सर्छन्:
+  /// stale-signal reset अब `CallSession.start()` भित्रै (CallScreen
+  /// पहिल्यै push भइसकेपछि) हुन्छ, र notification पठाउने काम fire-and-forget।
   Future<void> _startCall({required bool video}) async {
-    if (_audioCallBusy || _videoCallBusy || _inCall) return;
-    setState(() {
-      if (video) {
-        _videoCallBusy = true;
-      } else {
-        _audioCallBusy = true;
-      }
+    if (_inCall) return;
+    unawaited(_notifyOtherPartyOfCall(video));
+    await _openCall(video: video, isCaller: true);
+    _stampLast(video ? '📹 ${S.videoCall}' : '📞 ${S.voiceCall}');
+    _messages.add({
+      'senderUid': FirebaseAuth.instance.currentUser?.uid ?? '',
+      'type': 'call',
+      'mode': video ? 'video' : 'audio',
+      'createdAt': FieldValue.serverTimestamp(),
     });
-    await CallService.resetSignal(widget.requestId);
-    if (mounted) {
-      setState(() {
-        _audioCallBusy = false;
-        _videoCallBusy = false;
-      });
-    }
-    // अर्को पक्ष अहिले app मै नभए/backgrounded भए पनि थाहा पाओस् भनेर —
-    // real-time signaling त `calls/{requestId}` doc ले नै गर्छ, यो त
-    // additional push/in-app alert मात्र हो।
+  }
+
+  /// अर्को पक्ष अहिले app मै नभए/backgrounded भए पनि थाहा पाओस् भनेर —
+  /// real-time signaling त `calls/{requestId}` doc ले नै गर्छ, यो त
+  /// additional push/in-app alert मात्र हो, कल screen खोल्नुलाई कहिल्यै
+  /// block गर्नु हुँदैन।
+  Future<void> _notifyOtherPartyOfCall(bool video) async {
     final otherUid = await _otherPartyUid();
     if (otherUid != null) {
       createNotificationForUser(
@@ -152,14 +156,6 @@ class _ChatScreenState extends State<ChatScreen> {
         },
       );
     }
-    await _openCall(video: video, isCaller: true);
-    _stampLast(video ? '📹 ${S.videoCall}' : '📞 ${S.voiceCall}');
-    _messages.add({
-      'senderUid': FirebaseAuth.instance.currentUser?.uid ?? '',
-      'type': 'call',
-      'mode': video ? 'video' : 'audio',
-      'createdAt': FieldValue.serverTimestamp(),
-    });
   }
 
   Future<void> _openCall({required bool video, required bool isCaller}) async {
@@ -351,13 +347,11 @@ class _ChatScreenState extends State<ChatScreen> {
           _CallBtn(
             key: const ValueKey('audioCallBtn'),
             icon: Icons.call_rounded,
-            busy: _audioCallBusy,
             onTap: () => _startCall(video: false),
           ),
           _CallBtn(
             key: const ValueKey('videoCallBtn'),
             icon: Icons.videocam_rounded,
-            busy: _videoCallBusy,
             onTap: () => _startCall(video: true),
           ),
           const SizedBox(width: 6),
@@ -640,20 +634,21 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
-/// AppBar को गोलो कल बटन — सेतो circle + violet icon (high contrast on gradient)।
+/// AppBar को गोलो कल बटन — सेतो circle + violet icon (high contrast on
+/// gradient)। थिच्नेबित्तिकै CallScreen instant push हुने भएकोले (कुनै
+/// network-bound "busy" पर्खाइ छैन) spinner चाहिँदैन — SpringTap कै
+/// press-down/bounce ले नै तुरुन्तै tactile feedback दिन्छ।
 class _CallBtn extends StatelessWidget {
   final IconData icon;
-  final bool busy;
   final VoidCallback onTap;
-  const _CallBtn(
-      {super.key, required this.icon, required this.busy, required this.onTap});
+  const _CallBtn({super.key, required this.icon, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(left: 6),
       child: SpringTap(
-        onTap: busy ? null : onTap,
+        onTap: onTap,
         pressedScale: 0.82,
         child: Container(
           width: 38,
@@ -661,13 +656,7 @@ class _CallBtn extends StatelessWidget {
           alignment: Alignment.center,
           decoration:
               const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-          child: busy
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: AppColors.igViolet))
-              : Icon(icon, size: 20, color: AppColors.igViolet),
+          child: Icon(icon, size: 20, color: AppColors.igViolet),
         ),
       ),
     );

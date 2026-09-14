@@ -68,6 +68,13 @@ class CallSession {
   final micOn = ValueNotifier<bool>(true);
   final camOn = ValueNotifier<bool>(true);
   final remoteJoined = ValueNotifier<bool>(false);
+  // Video कलमा default speaker-on (Messenger जस्तै — screen हेर्दै हुँदा
+  // कान नजिक लैजानु अस्वाभाविक हुन्छ); voice कलमा default earpiece।
+  // `start()` भित्र वास्तविक routing सेट हुन्छ।
+  final speakerOn = ValueNotifier<bool>(false);
+  // Local PiP mirror गर्ने कि नगर्ने — front camera मा mirror सही देखिन्छ,
+  // back camera मा मिरर गरे उल्टो/गलत देखिन्छ (यो अघिल्लो एउटा वास्तविक बग थियो)।
+  final isFrontCamera = ValueNotifier<bool>(true);
 
   RTCPeerConnection? _pc;
   MediaStream? _local;
@@ -129,6 +136,17 @@ class CallSession {
     await remoteRenderer.initialize();
     status.value = isCaller ? CallStatus.ringing : CallStatus.connecting;
 
+    // Caller मात्र — अघिल्लो कल (उही requestId) बाट बाँकी रहन सक्ने stale
+    // signaling doc/candidates नयाँ offer लेख्नुअघि हटाउने (नत्र पुराना
+    // candidate हरू नयाँ listener मा "added" भनेर फेरि आउन सक्छन्)। यो
+    // पहिले chat_screen.dart बाट CallScreen नै push गर्नुअघि await हुन्थ्यो
+    // — नेटवर्क round-trip सकिउन्जेल call बटन थिचेको केही सेकेन्ड
+    // प्रतिक्रियाविहीन देखिन्थ्यो। अहिले CallScreen पहिल्यै (instant)
+    // push भइसकेपछि, यहाँ background मै चलेको यो await ले UI लाई छुँदैन।
+    if (isCaller) {
+      await CallService.resetSignal(requestId);
+    }
+
     _pc = await createPeerConnection(_iceServers);
 
     _local = await navigator.mediaDevices.getUserMedia({
@@ -136,14 +154,26 @@ class CallSession {
       'video':
           video ? {'facingMode': 'user', 'width': 640, 'height': 480} : false,
     });
-    localRenderer.srcObject = _local;
+    // `renderer.srcObject = stream` (synchronous setter) ले native side
+    // confirm गर्नुअघि नै फर्किन्छ — त्यही race ले कहिलेकाहीं local/remote
+    // preview कालो/खाली नै रहिरहने बग दिन्थ्यो। `setSrcObject()` (awaited)
+    // ले टेक्स्चर साँच्चै bind नभएसम्म पर्खन्छ, र trackId पनि स्पष्ट पठाउँछ।
+    await localRenderer.setSrcObject(stream: _local);
     for (final track in _local!.getTracks()) {
       await _pc!.addTrack(track, _local!);
     }
 
-    _pc!.onTrack = (RTCTrackEvent e) {
+    // कल-प्रकार अनुसार सुरुवाती audio routing — video कलमा speaker (screen
+    // हेर्दै कान नजिक लैजानु अस्वाभाविक), voice कलमा earpiece। कहिलेकाहीं
+    // device/OEM defaults नमिल्न सक्ने भएकोले स्पष्ट रूपमा सेट गर्ने।
+    speakerOn.value = video;
+    try {
+      await Helper.setSpeakerphoneOn(video);
+    } catch (_) {}
+
+    _pc!.onTrack = (RTCTrackEvent e) async {
       if (e.streams.isNotEmpty) {
-        remoteRenderer.srcObject = e.streams.first;
+        await remoteRenderer.setSrcObject(stream: e.streams.first);
         remoteJoined.value = true;
         status.value = CallStatus.connected;
       }
@@ -280,7 +310,17 @@ class CallSession {
       final t = _local?.getVideoTracks();
       if (t != null && t.isNotEmpty) {
         await Helper.switchCamera(t.first);
+        isFrontCamera.value = !isFrontCamera.value;
       }
+    } catch (_) {}
+  }
+
+  /// Speaker (loudspeaker/hands-free) ⇄ earpiece — flutter_webrtc कै native
+  /// audio-routing (कुनै अतिरिक्त package नचाहिने), त्यसैले तुरुन्तै र भरपर्दो।
+  Future<void> toggleSpeaker() async {
+    speakerOn.value = !speakerOn.value;
+    try {
+      await Helper.setSpeakerphoneOn(speakerOn.value);
     } catch (_) {}
   }
 
@@ -302,17 +342,29 @@ class CallSession {
     } catch (_) {}
 
     if (!remote) {
+      // यो पूरै UI pop भइसकेपछि (background मा, CallScreen.dispose() बाट
+      // fire-and-forget) चल्छ — त्यसैले ढिलो भए पनि केही touch नगर्ने। तैपनि
+      // छिटो र हल्का राख्न सबै candidate delete एउटै batched write मा
+      // (parallel read + एक commit), पहिले जस्तो हरेक doc लाई छुट्टाछुट्टै
+      // await गर्दै (candidate जति धेरै, त्यति धेरै sequential round-trip —
+      // ठ्याक्कै यही थियो "hang-up पछि केही सेकेन्ड
+      // अड्किने"/ढिलो हुनुको साँचो जड)।
       try {
-        await _doc.set(
+        final results = await Future.wait([
+          _doc.collection('offerCandidates').get(),
+          _doc.collection('answerCandidates').get(),
+        ]);
+        final batch = FirebaseFirestore.instance.batch();
+        batch.set(
+            _doc,
             {'status': 'ended', 'endedAt': FieldValue.serverTimestamp()},
             SetOptions(merge: true));
-        // cleanup candidates (best-effort)
-        for (final c in ['offerCandidates', 'answerCandidates']) {
-          final q = await _doc.collection(c).get();
+        for (final q in results) {
           for (final d in q.docs) {
-            await d.reference.delete();
+            batch.delete(d.reference);
           }
         }
+        await batch.commit();
       } catch (_) {}
     }
 
@@ -330,13 +382,21 @@ class CallService {
   static Future<void> resetSignal(String requestId) async {
     final doc = FirebaseFirestore.instance.collection('calls').doc(requestId);
     try {
-      for (final c in ['offerCandidates', 'answerCandidates']) {
-        final q = await doc.collection(c).get();
+      // दुई subcollection parallel मा पढ्ने, अनि सबै delete एउटै batch मा
+      // commit गर्ने — candidate जति भए पनि नेटवर्क round-trip एउटै (धेरै
+      // sequential awaited delete भन्दा धेरै छिटो)।
+      final results = await Future.wait([
+        doc.collection('offerCandidates').get(),
+        doc.collection('answerCandidates').get(),
+      ]);
+      final batch = FirebaseFirestore.instance.batch();
+      for (final q in results) {
         for (final d in q.docs) {
-          await d.reference.delete();
+          batch.delete(d.reference);
         }
       }
-      await doc.delete();
+      batch.delete(doc);
+      await batch.commit();
     } catch (_) {}
   }
 

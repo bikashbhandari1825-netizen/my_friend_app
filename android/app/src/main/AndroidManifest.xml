@@ -33,6 +33,17 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="kaammitra_job_updates"/>
+        <!-- Flutter को नयाँ Impeller renderer (OpenGLES) ले यो डिभाइस जस्ता
+             केही MediaTek/OEM camera HAL+GPU combo मा WebRTC/camera-preview
+             कै platform texture लाई बाँध्न (bind) असफल हुन्छ — camera hardware
+             वास्तवमा चलिरहेको (logcat मा लगातार frame capture देखिन्छ) तर
+             preview सधैँ कालै (black box) देखिने बग यही थियो, कुनै Dart/WebRTC
+             कोडको समस्या होइन। यहाँ Impeller निष्क्रिय गरेर पुरानो, यस्तो
+             external texture sharing मा बढी परिपक्व Skia/OpenGL backend मा
+             फर्काउँदा camera/video preview भरपर्दो देखिन्छ। -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"
