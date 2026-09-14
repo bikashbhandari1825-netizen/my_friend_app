@@ -91,6 +91,22 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
   String _year = '1';
   String _month = '0';
 
+  // InDrive-Style Ride-Sharing — 'Driver' आफैं कहिल्यै साँचो registrable
+  // service होइन; यहाँ छानेको Bike/Car नै Firestore मा बचत हुने वास्तविक
+  // `service` मान हो (home screen कै "Driver tap → Bike/Car popup" जस्तै
+  // convention)।
+  String? _vehicleType; // 'Bike' | 'Car' — _service=='Driver' हुँदा मात्र चाहिने
+  String get _effectiveService =>
+      _service == 'Driver' ? (_vehicleType ?? 'Bike') : _service;
+
+  // Driver-मात्र अनिवार्य कागजात — सवारी चालक अनुमतिपत्र + सवारी दर्ता (ब्लु
+  // बुक)। यी बिना Bike/Car चालक अनलाइन नहोस् भनेर submit नै रोकिन्छ (तल
+  // `_submit()` हेर्नुहोस्)।
+  Uint8List? _licenseBytes;
+  String? _licenseName;
+  Uint8List? _vehicleRegBytes;
+  String? _vehicleRegName;
+
   // Identity: नागरिकता अगाडि + पछाडि
   Uint8List? _citFrontBytes;
   String? _citFrontName;
@@ -237,6 +253,26 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
     });
   }
 
+  Future<void> _pickLicense() async {
+    final r = await _pickFile(allowPdf: true);
+    if (r == null) return;
+    setState(() {
+      _licenseBytes = r.bytes;
+      _licenseName = r.name;
+      _error = null;
+    });
+  }
+
+  Future<void> _pickVehicleReg() async {
+    final r = await _pickFile(allowPdf: true);
+    if (r == null) return;
+    setState(() {
+      _vehicleRegBytes = r.bytes;
+      _vehicleRegName = r.name;
+      _error = null;
+    });
+  }
+
   Future<void> _takeSelfie() async {
     try {
       final XFile? photo = await ImagePicker().pickImage(
@@ -264,6 +300,10 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
   void _next() {
     if (_step == 0) {
       if (!_formKey.currentState!.validate()) return;
+      if (_service == 'Driver' && _vehicleType == null) {
+        setState(() => _error = S.selectVehicleTypeError);
+        return;
+      }
     } else if (_step == 1) {
       if (_citFrontBytes == null || _citBackBytes == null) {
         setState(() => _error = S.uploadBothCitizenship);
@@ -291,6 +331,15 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
   Future<void> _submit() async {
     if (_selfieBytes == null) {
       setState(() => _error = S.selfieRequired);
+      return;
+    }
+    if (_service == 'Driver' && _vehicleType == null) {
+      setState(() => _error = S.selectVehicleTypeError);
+      return;
+    }
+    if (_service == 'Driver' &&
+        (_licenseBytes == null || _vehicleRegBytes == null)) {
+      setState(() => _error = S.uploadDriverDocsError);
       return;
     }
     setState(() {
@@ -329,7 +378,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
           'email': user.email ?? '',
           'role': 'worker',
           'accountStatus': 'active',
-          'service': _service,
+          'service': _effectiveService,
           'experience': experience,
           'priceValue': _price.text.trim(),
           'district': _district,
@@ -358,7 +407,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
           'uid': uid,
           'name': name,
           'phone': phone,
-          'serviceType': _service,
+          'serviceType': _effectiveService,
           'address': address,
           'experience': experience,
           'price': priceStr,
@@ -375,7 +424,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
           'lastName': _lastName.text.trim(),
           'email': user.email ?? '',
           'phone': phone,
-          'service': _service,
+          'service': _effectiveService,
           'experience': experience,
           'price': priceStr,
           'district': _district,
@@ -394,7 +443,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
         db.collection('adminNotifications').add({
           'title': 'New provider verification',
           'body':
-              '$name ($_service) ले दर्ता पेश गर्नुभयो — कागजात अपलोड हुँदै।',
+              '$name ($_effectiveService) ले दर्ता पेश गर्नुभयो — कागजात अपलोड हुँदै।',
           'read': false,
           'createdAt': FieldValue.serverTimestamp(),
         }),
@@ -447,15 +496,44 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
         }
       }
 
-      // पुरानो field हरूसँग compat — admin dashboard ले documentUrl/licenseUrl पढ्छ
+      // Driver Verification & Registration — Bike/Car चालकका लागि मात्र,
+      // सवारी चालक अनुमतिपत्र + सवारी दर्ता (ब्लु बुक) पनि Storage मा।
+      String drivingLicenseUrl = '';
+      String vehicleRegUrl = '';
+      if (_service == 'Driver') {
+        try {
+          drivingLicenseUrl = await up(_licenseBytes!,
+              _licenseName ?? 'driving_license.jpg', 'driving_license');
+        } catch (e) {
+          uploadFailed = true;
+          uploadErr ??= DocumentService.describeUploadError(e);
+        }
+        try {
+          vehicleRegUrl = await up(_vehicleRegBytes!,
+              _vehicleRegName ?? 'vehicle_registration.jpg',
+              'vehicle_registration');
+        } catch (e) {
+          uploadFailed = true;
+          uploadErr ??= DocumentService.describeUploadError(e);
+        }
+      }
+
+      // पुरानो field हरूसँग compat — admin dashboard ले documentUrl/licenseUrl
+      // पढ्छ। Driver का लागि `licenseUrl` लाई साँच्चै सवारी चालक अनुमतिपत्रले
+      // नै override गर्छ (नत्र त्यो सधैँ नागरिकता-अगाडिको alias मात्र हुन्थ्यो)।
       final kyc = {
         'citizenshipFrontUrl': citFrontUrl,
         'citizenshipBackUrl': citBackUrl,
         'selfieUrl': selfieUrl,
         'certificateUrls': certUrls,
-        'licenseUrl': citFrontUrl,
+        'licenseUrl': _service == 'Driver' ? drivingLicenseUrl : citFrontUrl,
         'documentUrl': citFrontUrl,
         'documentName': 'Citizenship',
+        if (_service == 'Driver') ...{
+          'drivingLicenseUrl': drivingLicenseUrl,
+          'vehicleRegistrationUrl': vehicleRegUrl,
+          'vehicleType': _effectiveService,
+        },
       };
 
       // ── चरण C: upload सकिएपछि तीनवटै doc मा URL + documentsPending भर्ने ──
@@ -678,8 +756,33 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
                 .map((s) =>
                     DropdownMenuItem(value: s, child: Text(S.serviceName(s))))
                 .toList(),
-            onChanged: (v) => setState(() => _service = v!),
+            onChanged: (v) => setState(() {
+              _service = v!;
+              if (_service != 'Driver') _vehicleType = null;
+            }),
           ),
+          // InDrive-Style Ride-Sharing — Driver छानेपछि Bike/Car मध्ये एउटा
+          // अनिवार्य; यही नै Firestore मा बचत हुने वास्तविक `service` मान
+          // बन्छ (माथि `_effectiveService` हेर्नुहोस्)।
+          if (_service == 'Driver') ...[
+            const SizedBox(height: 14),
+            Text(S.selectVehicleType,
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _vehicleChip(theme, 'Bike', Icons.two_wheeler_rounded,
+                      S.bikeWord),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _vehicleChip(
+                      theme, 'Car', Icons.local_taxi_rounded, S.carWord),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 18),
           Text(S.experienceLabel,
               style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -732,6 +835,36 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
                 (v == null || v.trim().isEmpty) ? S.enterArea : null,
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _vehicleChip(
+      ThemeData theme, String value, IconData icon, String label) {
+    final selected = _vehicleType == value;
+    return GestureDetector(
+      onTap: () => setState(() => _vehicleType = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.igViolet.withValues(alpha: 0.12)
+              : theme.colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          border: Border.all(
+              color: selected ? AppColors.igViolet : theme.dividerColor,
+              width: selected ? 2 : 1),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: selected ? AppColors.igViolet : null),
+            const SizedBox(height: 6),
+            Text(label,
+                style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: selected ? AppColors.igViolet : null)),
+          ],
+        ),
       ),
     );
   }
@@ -833,6 +966,33 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // Driver Verification & Registration — Bike/Car चालकका लागि मात्र,
+        // सवारी चालक अनुमतिपत्र + सवारी दर्ता (ब्लु बुक) अनिवार्य। यी बिना
+        // submit नै हुँदैन (तल `_submit()` हेर्नुहोस्) — verification pending
+        // हुँदा नै admin ले हेर्न पाओस् भनेर।
+        if (_service == 'Driver') ...[
+          Text(S.drivingLicenseLabel,
+              style:
+                  const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          const SizedBox(height: 6),
+          Text(S.vehicleDocsRequiredHint, style: theme.textTheme.bodySmall),
+          const SizedBox(height: 14),
+          _uploadTile(theme,
+              label: _licenseName ?? S.drivingLicenseLabel,
+              bytes: _licenseBytes,
+              onTap: _pickLicense),
+          const SizedBox(height: 16),
+          Text(S.vehicleRegistrationLabel,
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          _uploadTile(theme,
+              label: _vehicleRegName ?? S.vehicleRegistrationLabel,
+              bytes: _vehicleRegBytes,
+              onTap: _pickVehicleReg),
+          const SizedBox(height: 24),
+          Divider(color: theme.dividerColor),
+          const SizedBox(height: 16),
+        ],
         Text(S.certsTitle,
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
         const SizedBox(height: 6),

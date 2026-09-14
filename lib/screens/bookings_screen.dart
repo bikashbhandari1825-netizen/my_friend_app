@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/complete_job_sheet.dart';
 import '../widgets/counter_offer_card.dart';
 import '../widgets/status_badge.dart';
 import 'chat_screen.dart';
@@ -370,6 +371,37 @@ class BookingsScreen extends StatelessWidget {
                                               ),
                                             ),
                                           ),
+                                          // Job Completion & Rating Control —
+                                          // worker होइन, EMPLOYER ले मात्र
+                                          // काम completed मार्क गर्न सक्छ
+                                          // (नगद कारोबार दुवैबीचै हुने भएकोले)।
+                                          // "Complete Job" थिच्नेबित्तिकै
+                                          // भुक्तानी विधि + 5-star rating
+                                          // एउटै sheet मा — rating submit
+                                          // नगरेसम्म status completed हुँदैन।
+                                          if (status == 'in_progress')
+                                            GradientActionButton(
+                                              icon: Icons.check_circle_rounded,
+                                              label: S.completeJobTitle,
+                                              onPressed: () =>
+                                                  showCompleteJobSheet(
+                                                context,
+                                                docId: docId,
+                                                amount: (data['finalPrice'] ??
+                                                    data['proposedPrice'] ??
+                                                    0) as num,
+                                                workerUid:
+                                                    (data['workerUid'] ?? '')
+                                                        .toString(),
+                                                workerName:
+                                                    (data['workerName'] ??
+                                                            'Worker')
+                                                        .toString(),
+                                                service: (data['service'] ??
+                                                        '')
+                                                    .toString(),
+                                              ),
+                                            ),
                                         ],
                                       ),
                                     ),

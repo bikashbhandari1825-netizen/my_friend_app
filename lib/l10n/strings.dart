@@ -121,6 +121,18 @@ class S {
   static String get locationDeniedShort => _t('location_denied_short');
   static String get gettingLocation => _t('getting_location');
   static String get serviceCategory => _t('service_category');
+  static String get selectVehicleType => _t('select_vehicle_type');
+  static String get bikeWord => _t('bike_word');
+  static String get carWord => _t('car_word');
+  static String get bikeRideHint => _t('bike_ride_hint');
+  static String get carRideHint => _t('car_ride_hint');
+  static String get selectVehicleTypeError => _t('select_vehicle_type_error');
+  static String get drivingLicenseLabel => _t('driving_license_label');
+  static String get vehicleRegistrationLabel =>
+      _t('vehicle_registration_label');
+  static String get vehicleDocsRequiredHint =>
+      _t('vehicle_docs_required_hint');
+  static String get uploadDriverDocsError => _t('upload_driver_docs_error');
   static String get experienceLabel => _t('experience_label');
   static String get yearsWord => _t('years_word');
   static String get monthsWord => _t('months_word');
@@ -351,6 +363,13 @@ class S {
   static String get cashWord => _t('cash_word');
   static String get digitalWord => _t('digital_word');
   static String get confirmPaymentReceived => _t('confirm_payment_received');
+  static String get completeJobTitle => _t('complete_job_title');
+  static String get confirmCompleteJob => _t('confirm_complete_job');
+  static String rateWorkerTitle(String name) =>
+      isNepali ? '$name लाई रेटिङ दिनुहोस्' : 'Rate $name\'s service';
+  static String get addCommentOptional => _t('add_comment_optional');
+  static String get waitingEmployerComplete =>
+      _t('waiting_employer_complete');
   static String get last7Days => _t('last_7_days');
   static String get noEarningsYet => _t('no_earnings_yet');
   static String get perJobBreakdown => _t('per_job_breakdown');
@@ -747,6 +766,35 @@ class S {
     },
     'getting_location': {'en': 'Getting location…', 'ne': 'स्थान लिँदै…'},
     'service_category': {'en': 'Service category', 'ne': 'सेवा श्रेणी'},
+    'select_vehicle_type': {
+      'en': 'Select vehicle type',
+      'ne': 'सवारी प्रकार छान्नुहोस्',
+    },
+    'bike_word': {'en': 'Bike', 'ne': 'बाइक'},
+    'car_word': {'en': 'Car', 'ne': 'कार'},
+    'bike_ride_hint': {'en': 'Two-wheeler ride', 'ne': 'दुई पांग्रे सवारी'},
+    'car_ride_hint': {'en': 'Car / taxi ride', 'ne': 'कार / ट्याक्सी सवारी'},
+    'select_vehicle_type_error': {
+      'en': 'Please select Bike or Car',
+      'ne': 'कृपया बाइक वा कार छान्नुहोस्',
+    },
+    'driving_license_label': {
+      'en': 'Driving License',
+      'ne': 'सवारी चालक अनुमतिपत्र',
+    },
+    'vehicle_registration_label': {
+      'en': 'Vehicle Registration (Blue Book)',
+      'ne': 'सवारी दर्ता (ब्लु बुक)',
+    },
+    'vehicle_docs_required_hint': {
+      'en': 'Required for Bike/Car drivers before you can go online',
+      'ne': 'Bike/Car चालकका लागि अनलाइन हुनुअघि अनिवार्य',
+    },
+    'upload_driver_docs_error': {
+      'en': 'Please upload your driving license and vehicle registration',
+      'ne':
+          'कृपया आफ्नो सवारी चालक अनुमतिपत्र र सवारी दर्ता अपलोड गर्नुहोस्',
+    },
     'experience_label': {'en': 'Experience', 'ne': 'अनुभव'},
     'years_word': {'en': 'yrs', 'ne': 'वर्ष'},
     'months_word': {'en': 'mos', 'ne': 'महिना'},
@@ -1129,6 +1177,22 @@ class S {
     'job_marked_complete': {
       'en': 'Job marked complete',
       'ne': 'काम पूरा भएको चिन्ह लगाइयो'
+    },
+    'complete_job_title': {
+      'en': 'Complete Job & Pay',
+      'ne': 'काम सम्पन्न र भुक्तानी',
+    },
+    'confirm_complete_job': {
+      'en': 'Confirm & Complete',
+      'ne': 'पुष्टि गर्नुहोस् र सम्पन्न गर्नुहोस्',
+    },
+    'add_comment_optional': {
+      'en': 'Add a comment (optional)',
+      'ne': 'टिप्पणी थप्नुहोस् (वैकल्पिक)',
+    },
+    'waiting_employer_complete': {
+      'en': 'Waiting for the employer to confirm job completion',
+      'ne': 'रोजगारदाताले काम सम्पन्न भएको पुष्टि गर्ने पर्खाइमा',
     },
     'last_7_days': {'en': 'Last 7 days', 'ne': 'पछिल्ला ७ दिन'},
     'no_earnings_yet': {
@@ -1717,5 +1781,7 @@ class S {
     'Driver': 'चालक',
     'Electrician': 'बिजुली',
     'Tutor': 'ट्युटर',
+    'Bike': 'बाइक',
+    'Car': 'कार',
   };
 }

@@ -405,9 +405,9 @@ class _SearchingState extends State<_Searching>
                 ? 0
                 : (_c.value * frames.length).floor() % frames.length;
             return GoogleMap(
-              // Close-up — घर/क्षेत्रको ~50-100m वरपर प्रष्ट देखिने।
+              // Close-up — street/house-level, घर/क्षेत्रको वरपर प्रष्ट देखिने।
               initialCameraPosition:
-                  CameraPosition(target: widget.center, zoom: 17.5),
+                  CameraPosition(target: widget.center, zoom: 18.5),
               onMapCreated: (c) => _map = c,
               myLocationEnabled: _meIcon == null,
               myLocationButtonEnabled: false,

@@ -76,8 +76,15 @@ const List<Map<String, dynamic>> serviceFilters = [
   },
 ];
 
-/// सेवा प्रकारको वास्तविक तस्बिर asset path।
+/// सेवा प्रकारको वास्तविक तस्बिर asset path। Bike/Car का लागि छुट्टै artwork
+/// अझै तयार नभएकोले (`serviceFilters` मा तिनको प्रविष्टि छैन — home screen मा
+/// एउटै 'Driver' tile कायमै राख्नु हो), दुवैले साझा driver.png नै प्रयोग
+/// गर्छन् — नत्र नभएको bike.png/car.png खोज्दा टुटेको image देखिन्थ्यो।
 String serviceImageFor(String service) {
+  final lower = service.toLowerCase();
+  if (lower == 'bike' || lower == 'car') {
+    return 'assets/images/services/driver.png';
+  }
   for (final s in serviceFilters) {
     if ((s['name'] as String).toLowerCase() == service.toLowerCase()) {
       return (s['image'] as String?) ??
@@ -104,6 +111,10 @@ double serviceMarkerHue(String service) {
       return BitmapDescriptor.hueCyan;
     case 'driver':
       return BitmapDescriptor.hueBlue;
+    case 'bike':
+      return BitmapDescriptor.hueOrange;
+    case 'car':
+      return BitmapDescriptor.hueBlue;
     case 'tutor':
       return BitmapDescriptor.hueMagenta;
     default:
@@ -128,6 +139,10 @@ Color serviceMarkerColor(String service) {
       return const Color(0xFF16B8C4); // cyan
     case 'driver':
       return const Color(0xFF3B82F6); // blue
+    case 'bike':
+      return const Color(0xFF00BCD4); // teal/cyan — दुई-पांग्रे
+    case 'car':
+      return const Color(0xFF3B82F6); // blue — car/taxi
     case 'tutor':
       return const Color(0xFFC13584); // magenta
     default:
@@ -377,6 +392,15 @@ Future<BitmapDescriptor> categoryPinMarker(String service,
 
 /// सेवा प्रकारको icon (serviceFilters बाट)।
 IconData serviceIconFor(String service) {
+  // 'Driver' आफैं अब कहिल्यै साँचो bookable service होइन — home screen मा
+  // एउटै tile मात्र देखिन्छ, तर tap गरेपछि Bike/Car मध्ये छानिएको वास्तविक
+  // service value यहीँ (serviceFilters मा नभएकोले) छुट्टै handle हुन्छ।
+  switch (service.toLowerCase()) {
+    case 'bike':
+      return Icons.two_wheeler_rounded;
+    case 'car':
+      return Icons.local_taxi_rounded;
+  }
   for (final s in serviceFilters) {
     if ((s['name'] as String).toLowerCase() == service.toLowerCase()) {
       return s['icon'] as IconData;
@@ -395,6 +419,8 @@ int estimateFare(String service, double distanceKm) {
     'painter': 800,
     'cleaner': 700,
     'driver': 250,
+    'bike': 150,
+    'car': 350,
     'tutor': 500,
   };
   final b = base[service.toLowerCase()] ?? 500;

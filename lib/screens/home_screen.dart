@@ -15,6 +15,7 @@ import '../settings_page.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
 import '../widgets/spring_tap.dart';
+import '../widgets/vehicle_type_picker.dart';
 import '../worker_registration_page.dart';
 import 'bookings_screen.dart';
 import 'help_support_screen.dart';
@@ -337,7 +338,18 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  void _openService(String name) {
+  /// 'Driver' आफैं कहिल्यै साँचो bookable service होइन — InDrive-Style
+  /// Ride-Sharing: tap गर्नेबित्तिकै Bike/Car popup देखिन्छ, त्यसपछि मात्र
+  /// छानिएको (Bike वा Car) वास्तविक service भएर अगाडि बढ्छ। अरू कुनै
+  /// category (Plumber/Electrician/...) मा यो popup छुँदैन।
+  Future<String?> _resolveServiceName(String name) async {
+    if (name != 'Driver') return name;
+    return showVehicleTypePicker(context);
+  }
+
+  void _openService(String name) async {
+    final resolved = await _resolveServiceName(name);
+    if (resolved == null || !mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -346,7 +358,7 @@ class _HomeScreenState extends State<HomeScreen>
         // हालको स्थान सिधै सिड गरेर तुरुन्तै नक्सा देखाउने, अनि पछाडि
         // आफ्नै ताजा GPS ले चाहिँदा सच्याउने।
         builder: (_) => ServiceMapScreen(
-          serviceType: name,
+          serviceType: resolved,
           initialLat: _locReady ? _meLat : null,
           initialLng: _locReady ? _meLng : null,
         ),
@@ -355,10 +367,23 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /// क्याटेगोरी चिपमा थिच्दा नक्साका marker त्यही सेवामा फिल्टर हुन्छन्;
-  /// फेरि उही थिच्दा फिल्टर हट्छ।
-  void _openCategory(String name) {
+  /// फेरि उही थिच्दा फिल्टर हट्छ। 'Driver' चिप भने पहिले नै सक्रिय (Bike/Car
+  /// मध्ये कुनै एउटामा फिल्टर भइसकेको) भए फेरि popup नखोली सिधै हटाउँछ —
+  /// त्यो नै "फेरि थिच्दा हट्ने" toggle व्यवहार हो।
+  void _openCategory(String name) async {
+    if (name == 'Driver' &&
+        (_pickedCategory == 'Bike' || _pickedCategory == 'Car')) {
+      setState(() {
+        _pickedCategory = '';
+        _selectedWorkerId = null;
+        _selectedWorker = null;
+      });
+      return;
+    }
+    final resolved = await _resolveServiceName(name);
+    if (resolved == null || !mounted) return;
     setState(() {
-      _pickedCategory = _pickedCategory == name ? '' : name;
+      _pickedCategory = _pickedCategory == resolved ? '' : resolved;
       _selectedWorkerId = null;
       _selectedWorker = null;
     });
@@ -883,7 +908,13 @@ class _SheetBody extends StatelessWidget {
                       itemBuilder: (context, i) {
                         final s = serviceFilters[i];
                         final name = s['name'] as String;
-                        final active = pickedCategory == name;
+                        // 'Driver' tile आफैं कहिल्यै सिधै filter हुँदैन —
+                        // Bike/Car मध्ये छानिएको बेला पनि यही tile "active"
+                        // देखियोस् भनेर।
+                        final active = pickedCategory == name ||
+                            (name == 'Driver' &&
+                                (pickedCategory == 'Bike' ||
+                                    pickedCategory == 'Car'));
                         return GestureDetector(
                           onTap: () => onCategory(name),
                           child: AnimatedContainer(

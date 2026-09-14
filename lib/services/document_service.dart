@@ -52,7 +52,7 @@ class DocumentService {
   /// [type] लाई सुरक्षित segment मा — allowlist (+ ऐच्छिक `_N` suffix), नत्र 'document'।
   ///  citizenship_front, citizenship_back, selfie, certificate_1, certificate_2 ...
   static final RegExp _typeOk = RegExp(
-      r'^(license|selfie|certificate|citizenship_front|citizenship_back|document|id)(_[0-9]+)?$');
+      r'^(license|selfie|certificate|citizenship_front|citizenship_back|document|id|driving_license|vehicle_registration)(_[0-9]+)?$');
 
   static String _safeType(String type) {
     final t = type.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '');

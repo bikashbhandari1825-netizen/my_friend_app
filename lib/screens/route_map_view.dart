@@ -224,19 +224,38 @@ class _RouteMapViewState extends State<RouteMapView>
     final c = _map;
     if (c == null) return;
     final origin = widget.origin;
-    final update = origin == null
-        // Close-up — घर/क्षेत्रको ~50-100m वरपर प्रष्ट देखिने गरी (पहिले 15,
-        // शहर/मोहल्ला स्तरको धेरै टाढा view थियो)।
-        ? CameraUpdate.newLatLngZoom(widget.destination, 17.5)
-        : CameraUpdate.newLatLngBounds(
-            LatLngBounds(
-              southwest: LatLng(min(origin.latitude, widget.destination.latitude),
-                  min(origin.longitude, widget.destination.longitude)),
-              northeast: LatLng(max(origin.latitude, widget.destination.latitude),
-                  max(origin.longitude, widget.destination.longitude)),
-            ),
-            90,
-          );
+    CameraUpdate update;
+    if (origin == null) {
+      // कुनै एउटा मात्र बिन्दु थाहा छ — सिधै street/house-level close-up
+      // (पहिले 15, धेरै टाढाको शहर-स्तर view थियो)।
+      update = CameraUpdate.newLatLngZoom(widget.destination, 18.5);
+    } else {
+      final distKm = haversineKm(origin.latitude, origin.longitude,
+          widget.destination.latitude, widget.destination.longitude);
+      if (distKm < 0.5) {
+        // दुवै बिन्दु नजिकै (सामान्यतया worker job-site नजिक पुगिसकेको) —
+        // `newLatLngBounds` को fixed padding (तल हेर्नुहोस्) ले यस्तो
+        // अवस्थामा पनि अनावश्यक रूपमा टाढाको zoom दिन्थ्यो; बीचको बिन्दुमा
+        // सिधै close-up zoom गरेर दुवै पिन अझै टाढा नदेखियोस्।
+        final mid = LatLng(
+          (origin.latitude + widget.destination.latitude) / 2,
+          (origin.longitude + widget.destination.longitude) / 2,
+        );
+        update = CameraUpdate.newLatLngZoom(mid, 18);
+      } else {
+        // दुवै बिन्दु टाढा-टाढा — दुवै पिन देखिनैपर्ने भएकोले जबरजस्ती
+        // close-up गर्न मिल्दैन, तर padding घटाएर (90→60) सकेसम्म तानिएको।
+        update = CameraUpdate.newLatLngBounds(
+          LatLngBounds(
+            southwest: LatLng(min(origin.latitude, widget.destination.latitude),
+                min(origin.longitude, widget.destination.longitude)),
+            northeast: LatLng(max(origin.latitude, widget.destination.latitude),
+                max(origin.longitude, widget.destination.longitude)),
+          ),
+          60,
+        );
+      }
+    }
     if (_didInitialFit) {
       c.animateCamera(update);
     } else {
@@ -311,7 +330,7 @@ class _RouteMapViewState extends State<RouteMapView>
               final heading = _currentHeading;
               return GoogleMap(
                 initialCameraPosition:
-                    CameraPosition(target: widget.destination, zoom: 16),
+                    CameraPosition(target: widget.destination, zoom: 18),
                 style: kCleanMapStyle,
                 onMapCreated: (c) {
                   _map = c;

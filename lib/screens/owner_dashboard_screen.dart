@@ -774,6 +774,37 @@ Widget _workerApplicationBody(BuildContext context, Map<String, dynamic> data) {
           ),
         ],
       ),
+      // Driver Verification & Registration — Bike/Car चालकका लागि मात्र,
+      // सवारी चालक अनुमतिपत्र + सवारी दर्ता (ब्लु बुक) — Admin ले approve
+      // गर्नुअघि यी पनि हेर्न पाओस्।
+      if ((data['drivingLicenseUrl'] ?? '').toString().isNotEmpty ||
+          (data['vehicleRegistrationUrl'] ?? '').toString().isNotEmpty) ...[
+        const SizedBox(height: 10),
+        Text('Driver documents (${data['vehicleType'] ?? data['service'] ?? ''})',
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: _LabeledPreview(
+                label: S.drivingLicenseLabel,
+                url: (data['drivingLicenseUrl'] ?? '').toString(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _LabeledPreview(
+                label: S.vehicleRegistrationLabel,
+                url: (data['vehicleRegistrationUrl'] ?? '').toString(),
+              ),
+            ),
+          ],
+        ),
+      ],
       if (((data['certificateUrls'] as List?) ?? const []).isNotEmpty) ...[
         const SizedBox(height: 10),
         Text(S.certificatesLabel,
@@ -817,6 +848,8 @@ void _precacheWorkerDocs(BuildContext context,
           .toString(),
       (data['citizenshipBackUrl'] ?? '').toString(),
       (data['selfieUrl'] ?? '').toString(),
+      (data['drivingLicenseUrl'] ?? '').toString(),
+      (data['vehicleRegistrationUrl'] ?? '').toString(),
     ];
     for (final url in urls) {
       if (url.isEmpty) continue;

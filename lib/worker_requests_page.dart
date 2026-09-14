@@ -5,8 +5,6 @@
 //  • accepted / confirmed → सक्रिय काम (Message + स्थान हेर्ने)
 // नयाँ खुला कामहरू "कामको सूची" (JobFeedScreen) मा देखिन्छन्।
 // कुनै live location tracking छैन (ride-style हटाइयो)।
-import 'dart:async' show unawaited;
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -192,19 +190,6 @@ class _RequestCard extends StatelessWidget {
         .showSnackBar(SnackBar(content: Text(S.jobAccepted)));
     // MainContainer कै active-job watcher ले यो status बदलिएको देखेर आफैं
     // route screen खोल्छ — यहाँबाट छुट्टै नखोल्ने (double-open नहोस् भनेर)।
-  }
-
-  /// "काम सकियो" अब सिधै थिच्न मिल्दैन — पहिले भुक्तानी settlement sheet
-  /// (नगद/डिजिटल) देखाइन्छ; भुक्तानी confirm भएपछि मात्र status='completed'
-  /// लेखिन्छ (Step 3: Job Completion & Payment)।
-  Future<void> _collectPaymentAndComplete(BuildContext context) async {
-    final amount = (data['finalPrice'] ?? data['proposedPrice'] ?? 0) as num;
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _PaymentSettlementSheet(docId: docId, amount: amount),
-    );
   }
 
   Future<void> _startWork(BuildContext context) async {
@@ -541,14 +526,30 @@ class _RequestCard extends StatelessWidget {
                   icon: const Icon(Icons.play_arrow_rounded, size: 16),
                   label: Text(S.startWork),
                 ),
+              // Job Completion & Rating Control — worker होइन, EMPLOYER ले
+              // मात्र काम completed मार्क गर्न सक्छ (नगद कारोबार दुवैबीचै
+              // प्रत्यक्ष हुने भएकोले)। worker ले यहाँ केवल पर्खनुपर्छ।
               if (status == 'in_progress')
-                ElevatedButton.icon(
-                  onPressed: () => _collectPaymentAndComplete(context),
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                      foregroundColor: Colors.white),
-                  icon: const Icon(Icons.payments_rounded, size: 16),
-                  label: Text(S.collectPayment),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.igViolet.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(AppRadius.pill),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.hourglass_top_rounded,
+                          size: 14, color: AppColors.igViolet),
+                      const SizedBox(width: 6),
+                      Text(S.waitingEmployerComplete,
+                          style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.igViolet)),
+                    ],
+                  ),
                 ),
               if (status == 'pending_worker') ...[
                 OutlinedButton(
@@ -575,149 +576,3 @@ class _RequestCard extends StatelessWidget {
   }
 }
 
-/// भुक्तानी settlement sheet — नगद/डिजिटल छानेर confirm गरेपछि मात्र काम
-/// "completed" मा जान्छ (Step 3: Job Completion & Payment)।
-class _PaymentSettlementSheet extends StatefulWidget {
-  final String docId;
-  final num amount;
-  const _PaymentSettlementSheet({required this.docId, required this.amount});
-
-  @override
-  State<_PaymentSettlementSheet> createState() =>
-      _PaymentSettlementSheetState();
-}
-
-class _PaymentSettlementSheetState extends State<_PaymentSettlementSheet> {
-  String _method = 'cash';
-  bool _saving = false;
-
-  Future<void> _confirm() async {
-    setState(() => _saving = true);
-    try {
-      await FirebaseFirestore.instance
-          .collection('serviceRequests')
-          .doc(widget.docId)
-          .update({
-        'status': 'completed',
-        'completedAt': FieldValue.serverTimestamp(),
-        'paymentConfirmed': true,
-        'paymentMethod': _method,
-        'paidAmount': widget.amount,
-      });
-      // काम completed भएपछि तुरुन्तै संवेदनशील chat/phone data सफा — यो
-      // UI लाई कुनै हालतमा block नगरोस् (fire-and-forget)।
-      unawaited(purgeSensitiveDataOnCompletion(widget.docId));
-      if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(S.jobMarkedComplete)));
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-
-    Widget methodChip(String value, String label, IconData icon) {
-      final selected = _method == value;
-      return Expanded(
-        child: GestureDetector(
-          onTap: () => setState(() => _method = value),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            decoration: BoxDecoration(
-              color: selected
-                  ? AppColors.igViolet.withValues(alpha: 0.12)
-                  : theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(AppRadius.md),
-              border: Border.all(
-                  color: selected ? AppColors.igViolet : theme.dividerColor),
-            ),
-            child: Column(
-              children: [
-                Icon(icon,
-                    color:
-                        selected ? AppColors.igViolet : theme.iconTheme.color),
-                const SizedBox(height: 6),
-                Text(label,
-                    style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: selected ? AppColors.igViolet : null)),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottomInset),
-      child: Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          borderRadius:
-              const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: theme.dividerColor,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                const LimeIconBadge(Icons.payments_rounded, size: 42),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(S.collectPayment,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 15.5)),
-                      Text('${S.amountDue}: Rs. ${widget.amount}',
-                          style: theme.textTheme.bodySmall),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            Text(S.paymentMethodLabel,
-                style: const TextStyle(
-                    fontSize: 12.5, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                methodChip('cash', S.cashWord, Icons.payments_outlined),
-                const SizedBox(width: 10),
-                methodChip(
-                    'digital', S.digitalWord, Icons.account_balance_wallet),
-              ],
-            ),
-            const SizedBox(height: 20),
-            PrimaryButton(
-              label: S.confirmPaymentReceived,
-              icon: Icons.check_circle_rounded,
-              loading: _saving,
-              onPressed: _confirm,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

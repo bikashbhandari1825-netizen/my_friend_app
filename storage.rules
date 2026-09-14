@@ -26,7 +26,7 @@ service firebase.storage {
       allow create, update: if isSignedIn()
         && request.auth.uid == uid
         && fileName.matches(
-             '(license|selfie|certificate|citizenship_front|citizenship_back|document|id)(_[0-9]+)?[.](jpg|jpeg|png|webp|pdf)')
+             '(license|selfie|certificate|citizenship_front|citizenship_back|document|id|driving_license|vehicle_registration)(_[0-9]+)?[.](jpg|jpeg|png|webp|pdf)')
         && isValidDoc();
       allow delete: if isSignedIn() && request.auth.uid == uid;
     }
