@@ -122,6 +122,17 @@ exports.sendPushForNotification = onDocumentCreated(
       if (!token) return; // token नभेटिए in-app notification doc मात्रै पर्याप्त
 
       const requestId = data.requestId;
+      // सबै extra field (type/mode/callerName/callerUid जस्ता) client ले
+      // पहिले `requestId` मात्र नछोडी forward गर्ने — नत्र client-side FCM
+      // message.data मा ती कहिल्यै आउँदैनथे, र incoming-call push notification
+      // ट्याप गर्दा client ले "call" भनेर चिन्नै नसकी सामान्य job-update जस्तै
+      // (गलत रूपमा नक्सा screen मा) पठाउँथ्यो।
+      const pushData = {};
+      if (requestId) pushData.requestId = String(requestId);
+      if (data.type) pushData.type = String(data.type);
+      if (data.mode) pushData.mode = String(data.mode);
+      if (data.callerName) pushData.callerName = String(data.callerName);
+      if (data.callerUid) pushData.callerUid = String(data.callerUid);
       try {
         await admin.messaging().send({
           token,
@@ -129,7 +140,7 @@ exports.sendPushForNotification = onDocumentCreated(
             title: data.title || "",
             body: data.body || "",
           },
-          data: requestId ? {requestId: String(requestId)} : {},
+          data: pushData,
           android: {
             notification: {channelId: "kaammitra_job_updates"},
           },

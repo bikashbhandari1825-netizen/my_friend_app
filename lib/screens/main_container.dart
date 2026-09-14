@@ -154,6 +154,9 @@ class _MainContainerState extends State<MainContainer> {
     final callerUid = (c['callerUid'] ?? '').toString();
     // आफैंले सुरु गरेको कल (caller side) लाई "आउँदो कल" ठान्दैन।
     if (callerUid.isEmpty || callerUid == me) return;
+    // यही requestId कै लागि CallScreen पहिल्यै कतैबाट (यहीँ, वा
+    // push-notification tap बाट) खुलिसकेको भए दोहोर्‍याएर नखोल्ने।
+    if (activeCallRequestId == requestId) return;
     if (_inCall || _ringingHandledFor.contains(requestId)) return;
     _ringingHandledFor.add(requestId);
     _showIncomingCall(

@@ -189,25 +189,39 @@ class CallSession {
           {'channelCount': 1.0},
         ],
       },
-      // Frame-rate cap + CPU-overuse detection — low/mid-range Android chips
+      // Frame-rate cap + CPU-overuse detection — low/mid-range Android चिप
       // (जस्तै यो प्रोजेक्टको test device, MediaTek Helio G35) ले 640x480 लाई
       // पूरा 30fps मा software-encode गर्दा CPU/heat थेग्न नसकेर frame drop/
-      // stutter ("lag") हुन्थ्यो। यहाँ पनि माथिकै audio जस्तै `optional`
-      // array-of-single-key-map ढाँचा (Android ConstraintsMap parser कै
-      // लागि सुरक्षित, माथिको comment हेर्नुहोस्) प्रयोग गरिएको — width/height
-      // भने पहिल्यै काम गरिरहेको top-level shorthand नै अछुतो राखिएको।
-      'video': video
-          ? {
-              'facingMode': 'user',
-              'width': 640,
-              'height': 480,
-              'optional': <Map<String, dynamic>>[
-                {'minFrameRate': 15.0},
-                {'maxFrameRate': 24.0},
-                {'googCpuOveruseDetection': true},
-              ],
-            }
-          : false,
+      // stutter ("lag") हुन्थ्यो। माथिको audio सँग मिल्दो `optional`
+      // array-of-single-key-map ढाँचा भने Android-मात्र सुरक्षित हो — यो
+      // छुट्टै (`video`) क्षेत्रलाई dart_webrtc को Flutter Web layer
+      // (mediadevices_impl.dart) ले audio जस्तै flatten गर्दैन, त्यसैले
+      // browser (Chrome/`flutter run -d chrome`) मा यो `optional` array
+      // ज्यूँकात्यूँ, unrecognized/मान्य-नभएको shape मै पुग्थ्यो —
+      // ठ्याक्कै त्यही थियो "getUserMedia मा malformed constraints" गुनासोको
+      // साँचो जड। यहाँ platform अनुसार छुट्टाछुट्टै: Android/iOS मा अघिकै
+      // (प्रमाणित काम गर्ने) `optional` shorthand, Web मा भने प्रत्यक्ष
+      // W3C `MediaTrackConstraints` (bare `frameRate` field, कुनै
+      // optional/mandatory wrapper छैन)।
+      'video': !video
+          ? false
+          : kIsWeb
+              ? {
+                  'facingMode': 'user',
+                  'width': {'ideal': 640},
+                  'height': {'ideal': 480},
+                  'frameRate': {'ideal': 24, 'max': 24},
+                }
+              : {
+                  'facingMode': 'user',
+                  'width': 640,
+                  'height': 480,
+                  'optional': <Map<String, dynamic>>[
+                    {'minFrameRate': 15.0},
+                    {'maxFrameRate': 24.0},
+                    {'googCpuOveruseDetection': true},
+                  ],
+                },
     });
     // `renderer.srcObject = stream` (synchronous setter) ले native side
     // confirm गर्नुअघि नै फर्किन्छ — त्यही race ले कहिलेकाहीं local/remote

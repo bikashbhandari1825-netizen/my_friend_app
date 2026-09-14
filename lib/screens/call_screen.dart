@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../app_globals.dart';
 import '../l10n/strings.dart';
 import '../services/call_service.dart';
 import '../services/ringtone_service.dart';
@@ -101,6 +102,7 @@ class _CallScreenState extends State<CallScreen>
   @override
   void initState() {
     super.initState();
+    activeCallRequestId = widget.requestId;
     _s.status.addListener(_onStatusChanged);
     if (_awaitingAccept) {
       RingtoneService.playIncoming();
@@ -173,6 +175,7 @@ class _CallScreenState extends State<CallScreen>
 
   @override
   void dispose() {
+    if (activeCallRequestId == widget.requestId) activeCallRequestId = null;
     _s.status.removeListener(_onStatusChanged);
     _preAcceptSub?.cancel();
     _ringPulse.dispose();

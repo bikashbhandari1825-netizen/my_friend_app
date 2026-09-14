@@ -38,6 +38,15 @@ String? activeTestPhone;
 // त्यहीँबाटै counter-offer accept गर्दा) उही screen दोहोरिएर नखुलियोस्।
 String? visibleRouteScreenRequestId;
 
+// अहिले स्क्रिनमा नै देखिरहेको `CallScreen` (ringing/awaiting-accept वा
+// जोडिएको, दुवै) को requestId — `CallScreen` आफैंले initState/dispose मा
+// सेट/खाली गर्छ। MainContainer को Firestore-driven incoming-call watcher र
+// push-notification tap दुवै बाटोले (एउटै कल दुई ठाउँबाट लगभग एकैसाथ पत्ता
+// लाग्न सक्छ — foreground Firestore listener + backgrounded बेला ट्याप
+// गरिएको FCM notification) यही जाँचेर उही requestId कै लागि दोहोरो
+// CallScreen push नहोस् भनेर।
+String? activeCallRequestId;
+
 // जुन uid लाई approval-celebration देखाइसकियो (फेरि नदेखाउन) — logout मा clear।
 final Set<String> celebrationShownFor = {};
 

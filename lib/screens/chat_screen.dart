@@ -178,6 +178,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _notifyOtherPartyOfCall(bool video) async {
     final otherUid = await _otherPartyUid();
     if (otherUid != null) {
+      final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
       createNotificationForUser(
         otherUid,
         S.incomingCallTitle,
@@ -186,6 +187,12 @@ class _ChatScreenState extends State<ChatScreen> {
           'requestId': widget.requestId,
           'type': 'incoming_call',
           'mode': video ? 'video' : 'audio',
+          // Backgrounded/बन्द एपमा push notification ट्याप गर्दा सिधै साँचो
+          // full-screen incoming-call UI मा जान (map मा होइन) यी दुवै
+          // चाहिन्छ — Cloud Function ले पनि यी forward गर्नुपर्छ (तल
+          // functions/index.js हेर्नुहोस्)।
+          'callerName': _myName,
+          'callerUid': myUid,
         },
       );
     }

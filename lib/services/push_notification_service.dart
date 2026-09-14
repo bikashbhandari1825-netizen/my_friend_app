@@ -18,9 +18,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../app_globals.dart';
+import '../screens/call_screen.dart';
 import '../screens/job_actions.dart';
 import '../widgets/job_alert_sound.dart';
 
@@ -110,6 +112,12 @@ class PushNotificationService {
   }
 
   static Future<void> _showLocalNotification(RemoteMessage message) async {
+    // Incoming call — यो foreground मा मात्र चल्ने listener हो, र त्यसबेला
+    // MainContainer कै Firestore-driven watcher ले पहिल्यै साँचो full-screen
+    // ringing UI (CallScreen) देखाइसकेको हुन्छ। यहाँ पनि छुट्टै सानो system
+    // notification banner देखाउँदा त्यो माथि "messy" ओभरल्याप हुन्थ्यो —
+    // त्यसैले call-type message का लागि यो banner नै छोड्ने।
+    if (message.data['type'] == 'incoming_call') return;
     final notif = message.notification;
     final title = notif?.title ?? message.data['title'] ?? '';
     final body = notif?.body ?? message.data['body'] ?? '';
@@ -133,9 +141,17 @@ class PushNotificationService {
 
   static Future<void> _handleMessageTap(RemoteMessage message) async {
     final requestId = message.data['requestId'] as String?;
-    if (requestId != null && requestId.isNotEmpty) {
-      await navigateToAcceptedJob(requestId);
+    if (requestId == null || requestId.isEmpty) return;
+    if (message.data['type'] == 'incoming_call') {
+      // Backgrounded/बन्द एपबाट यो push ट्याप गर्दा सिधै साँचो full-screen
+      // Accept/Decline UI मा — पहिले यहाँ `type` client सम्म कहिल्यै
+      // नआउने (Cloud Function ले forward नगरेको) भएकोले सधैँ तलको
+      // `navigateToAcceptedJob` (नक्सा) मा नै पुग्थ्यो, जुन ठ्याक्कै
+      // "कल accept गर्दा नक्सामा फर्कने" गुनासोको एउटा साँचो जड थियो।
+      await navigateToIncomingCall(message.data);
+      return;
     }
+    await navigateToAcceptedJob(requestId);
   }
 
   static Future<void> _saveTokenForCurrentUser() async {
@@ -170,4 +186,32 @@ Future<void> navigateToAcceptedJob(String requestId) async {
     if (data == null || !ctx.mounted) return;
     openJobRoute(ctx, requestId, data);
   } catch (_) {}
+}
+
+/// Incoming-call push notification (background/terminated एपबाट ट्याप
+/// गरेको) बाट सिधै साँचो full-screen Accept/Decline UI मा — पहिले यो केस
+/// (Cloud Function ले `type` field forward नगर्दा) माथिकै `navigateToAcceptedJob`
+/// (नक्सा) मा गलत रूपमा पुग्थ्यो। `activeCallRequestId` ले यही कल यहिले
+/// अर्को बाटोबाट (MainContainer कै Firestore watcher) पहिल्यै खुलिसकेको
+/// भए दोहोर्‍याएर नखोल्ने ग्यारेन्टी दिन्छ।
+Future<void> navigateToIncomingCall(Map<String, dynamic> data) async {
+  final requestId = (data['requestId'] ?? '').toString();
+  if (requestId.isEmpty || activeCallRequestId == requestId) return;
+  final ctx = rootNavigatorKey.currentContext;
+  if (ctx == null || !ctx.mounted) return;
+  final video = (data['mode'] ?? 'audio').toString() == 'video';
+  final callerName = (data['callerName'] ?? '').toString();
+  final callerUid = (data['callerUid'] ?? '').toString();
+  Navigator.of(ctx, rootNavigator: true).push(MaterialPageRoute(
+    fullscreenDialog: true,
+    builder: (_) => CallScreen(
+      requestId: requestId,
+      otherName: callerName.isEmpty ? 'Caller' : callerName,
+      myName: FirebaseAuth.instance.currentUser?.displayName ?? '',
+      video: video,
+      isCaller: false,
+      otherUid: callerUid,
+      needsAcceptance: true,
+    ),
+  ));
 }
