@@ -14,6 +14,7 @@ import 'package:geolocator/geolocator.dart';
 import '../app_globals.dart';
 import '../l10n/strings.dart';
 import '../services/call_service.dart';
+import '../services/presence_service.dart';
 import '../services/ringtone_service.dart';
 import '../theme/app_theme.dart';
 import '../watchlist_screen.dart';
@@ -95,6 +96,7 @@ class _MainContainerState extends State<MainContainer> {
     super.initState();
     _loadRole();
     _loadMyName();
+    PresenceService.start();
   }
 
   @override
@@ -105,6 +107,7 @@ class _MainContainerState extends State<MainContainer> {
     for (final s in _callWatchers.values) {
       s.cancel();
     }
+    PresenceService.stop();
     super.dispose();
   }
 
@@ -158,6 +161,7 @@ class _MainContainerState extends State<MainContainer> {
       requestId: requestId,
       video: (c['mode'] ?? 'audio').toString() == 'video',
       callerName: (c['callerName'] ?? S.customerWord).toString(),
+      callerUid: callerUid,
     );
   }
 
@@ -165,6 +169,7 @@ class _MainContainerState extends State<MainContainer> {
     required String requestId,
     required bool video,
     required String callerName,
+    required String callerUid,
   }) async {
     _inCall = true;
     unawaited(RingtoneService.playIncoming());
@@ -222,6 +227,7 @@ class _MainContainerState extends State<MainContainer> {
             myName: _myName,
             video: video,
             isCaller: false,
+            otherUid: callerUid,
           ),
         ));
       }

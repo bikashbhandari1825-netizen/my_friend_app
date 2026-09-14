@@ -309,7 +309,8 @@ class WorkerProfileScreen extends StatelessWidget {
                                                   style: const TextStyle(
                                                       fontSize: 14.5,
                                                       fontWeight:
-                                                          FontWeight.w800)),
+                                                          FontWeight.w800,
+                                                      color: Colors.black87)),
                                             ],
                                           ),
                                         ),
@@ -351,7 +352,8 @@ class WorkerProfileScreen extends StatelessWidget {
                                         child: Text(S.workPortfolio,
                                             style: const TextStyle(
                                                 fontWeight: FontWeight.w700,
-                                                fontSize: 14)),
+                                                fontSize: 14,
+                                                color: Colors.black87)),
                                       ),
                                       const Icon(Icons.chevron_right_rounded,
                                           color: Colors.black38),
@@ -412,7 +414,9 @@ class _StatTile extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                    fontWeight: FontWeight.w800, fontSize: 14.5)),
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14.5,
+                    color: Colors.black87)),
             const SizedBox(height: 2),
             Text(label,
                 maxLines: 1,
@@ -459,7 +463,9 @@ class _InfoRow extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700)),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.black87)),
               ],
             ),
           ),

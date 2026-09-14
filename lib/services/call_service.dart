@@ -189,8 +189,25 @@ class CallSession {
           {'channelCount': 1.0},
         ],
       },
-      'video':
-          video ? {'facingMode': 'user', 'width': 640, 'height': 480} : false,
+      // Frame-rate cap + CPU-overuse detection — low/mid-range Android chips
+      // (जस्तै यो प्रोजेक्टको test device, MediaTek Helio G35) ले 640x480 लाई
+      // पूरा 30fps मा software-encode गर्दा CPU/heat थेग्न नसकेर frame drop/
+      // stutter ("lag") हुन्थ्यो। यहाँ पनि माथिकै audio जस्तै `optional`
+      // array-of-single-key-map ढाँचा (Android ConstraintsMap parser कै
+      // लागि सुरक्षित, माथिको comment हेर्नुहोस्) प्रयोग गरिएको — width/height
+      // भने पहिल्यै काम गरिरहेको top-level shorthand नै अछुतो राखिएको।
+      'video': video
+          ? {
+              'facingMode': 'user',
+              'width': 640,
+              'height': 480,
+              'optional': <Map<String, dynamic>>[
+                {'minFrameRate': 15.0},
+                {'maxFrameRate': 24.0},
+                {'googCpuOveruseDetection': true},
+              ],
+            }
+          : false,
     });
     // `renderer.srcObject = stream` (synchronous setter) ले native side
     // confirm गर्नुअघि नै फर्किन्छ — त्यही race ले कहिलेकाहीं local/remote
@@ -205,7 +222,35 @@ class CallSession {
       trackId: _firstTrackId(_local?.getVideoTracks()),
     );
     for (final track in _local!.getTracks()) {
-      await _pc!.addTrack(track, _local!);
+      final sender = await _pc!.addTrack(track, _local!);
+      // Video track मात्र — bitrate cap + "maintain-framerate" degradation।
+      // WebRTC को default (balanced/maintain-resolution) ले नेटवर्क/CPU
+      // दबाबमा resolution नै जोगाउन खोज्दा frame नै छाड्छ (देखिने
+      // "stutter"/lag)। यहाँ स्पष्ट रूपमा frame-rate जोगाउने (आवश्यक परे
+      // resolution स्वतः घट्ने) प्राथमिकता दिँदा Messenger/WhatsApp जस्तै
+      // सहज (कम रिजोल्युसन भए पनि नरुकिने) देखिन्छ। साथै अनलिमिटेड bandwidth
+      // estimation (विशेष गरी free TURN relay बाट जाँदा) ले congestion/jitter
+      // ल्याउनबाट जोगाउन एउटा उचित maximum bitrate पनि तोकिएको।
+      if (video && track.kind == 'video') {
+        try {
+          final params = sender.parameters;
+          final encodings = params.encodings;
+          if (encodings != null && encodings.isNotEmpty) {
+            for (final e in encodings) {
+              e.maxBitrate = 500000; // ~500kbps — 640x480 का लागि पर्याप्त
+              e.maxFramerate = 24;
+            }
+          } else {
+            params.encodings = [
+              RTCRtpEncoding(active: true, maxBitrate: 500000, maxFramerate: 24),
+            ];
+          }
+          params.degradationPreference = RTCDegradationPreference.MAINTAIN_FRAMERATE;
+          await sender.setParameters(params);
+        } catch (_) {
+          // Best-effort tuning मात्र — असफल भए पनि कल सामान्य गुणस्तरमा चल्छ।
+        }
+      }
     }
 
     // कल-प्रकार अनुसार सुरुवाती audio routing — video कलमा speaker (screen

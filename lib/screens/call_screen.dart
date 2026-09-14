@@ -11,7 +11,9 @@ import '../l10n/strings.dart';
 import '../services/call_service.dart';
 import '../services/ringtone_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/online_badge.dart';
 import '../widgets/spring_tap.dart';
+import 'nearby_common.dart' show PulseRings;
 
 class CallScreen extends StatefulWidget {
   final String requestId;
@@ -22,6 +24,11 @@ class CallScreen extends StatefulWidget {
   /// true = यो user ले कल गर्‍यो; false = incoming कल स्वीकार गर्दै।
   final bool isCaller;
 
+  /// अर्को पक्षको uid — थाहा भएमा (दुवै caller/callee sideबाट सजिलै भेटिने
+  /// भएकोले उपलब्ध गराइएको) "Online" presence badge देखाउन प्रयोग हुन्छ।
+  /// नभए (खाली) badge नै नदेखिने — कल आफैं यसबिना पनि सामान्य चल्छ।
+  final String otherUid;
+
   const CallScreen({
     super.key,
     required this.requestId,
@@ -29,13 +36,15 @@ class CallScreen extends StatefulWidget {
     required this.myName,
     required this.video,
     required this.isCaller,
+    this.otherUid = '',
   });
 
   @override
   State<CallScreen> createState() => _CallScreenState();
 }
 
-class _CallScreenState extends State<CallScreen> {
+class _CallScreenState extends State<CallScreen>
+    with SingleTickerProviderStateMixin {
   late final CallSession _s = CallSession(
     requestId: widget.requestId,
     video: widget.video,
@@ -48,6 +57,14 @@ class _CallScreenState extends State<CallScreen> {
   // पक्षले काटेर (remote, _s.status ले 'ended' सूचित गर्छ) दुवै बाटोले यही
   // guard प्रयोग गर्छन्, ताकि Navigator.pop() दुइपटक नचलोस्।
   bool _closing = false;
+
+  // "Ring, ring…" indicator — जोडिनअघि (ringing/connecting) placeholder
+  // avatar वरिपरि radar-जस्तो pulse (नक्सा/searching screen मै प्रयोग हुने
+  // उही `PulseRings` — एपभरि एउटै भाषा)।
+  late final AnimationController _ringPulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1800),
+  )..repeat();
 
   @override
   void initState() {
@@ -93,6 +110,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void dispose() {
     _s.status.removeListener(_onStatusChanged);
+    _ringPulse.dispose();
     RingtoneService.stop();
     // fire-and-forget — dispose() आफैं async हुन सक्दैन, र यसलाई await
     // गर्नु पनि गलत हुन्थ्यो: screen पहिल्यै हटिसकेको छ, track stop/PC
@@ -210,6 +228,18 @@ class _CallScreenState extends State<CallScreen> {
                                 color: Colors.white70, fontSize: 13),
                           ),
                         ),
+                        if (widget.otherUid.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          ValueListenableBuilder<CallStatus>(
+                            valueListenable: _s.status,
+                            builder: (_, st, __) =>
+                                (st == CallStatus.ringing ||
+                                        st == CallStatus.connecting)
+                                    ? OnlineBadge(
+                                        uid: widget.otherUid, onDark: true)
+                                    : const SizedBox.shrink(),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -333,19 +363,38 @@ class _CallScreenState extends State<CallScreen> {
     return Container(
       decoration: const BoxDecoration(gradient: AppColors.instaGradient),
       alignment: Alignment.center,
-      child: Container(
-        width: 120,
-        height: 120,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.18),
-          shape: BoxShape.circle,
-        ),
-        child: Text(initial,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 46,
-                fontWeight: FontWeight.w900)),
+      child: ValueListenableBuilder<CallStatus>(
+        valueListenable: _s.status,
+        builder: (_, st, __) {
+          // जोडिनअघि (ringing/connecting) मात्र — "Ring, ring…" जस्तो radar
+          // pulse; जोडिएपछि (connected) शान्त, स्थिर avatar।
+          final ringing =
+              st == CallStatus.ringing || st == CallStatus.connecting;
+          return SizedBox(
+            width: 140,
+            height: 140,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                if (ringing) PulseRings(t: _ringPulse, color: Colors.white),
+                Container(
+                  width: 120,
+                  height: 120,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(initial,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 46,
+                          fontWeight: FontWeight.w900)),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

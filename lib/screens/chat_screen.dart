@@ -17,6 +17,7 @@ import 'package:image_picker/image_picker.dart';
 import '../app_globals.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/online_badge.dart';
 import '../widgets/spring_tap.dart';
 import '../widgets/voice_recorder_bar.dart';
 import 'call_screen.dart';
@@ -51,6 +52,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _inCall = false;
   String _myName = '';
   String? _lastMarkedReadDocId;
+  String _otherUid = '';
 
   DocumentReference<Map<String, dynamic>> get _chatDoc =>
       FirebaseFirestore.instance.collection('chats').doc(widget.requestId);
@@ -67,6 +69,9 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _loadMyName();
     _markRead();
+    _otherPartyUid().then((uid) {
+      if (mounted && uid != null) setState(() => _otherUid = uid);
+    });
   }
 
   /// यो chat अहिले खुलेको छ भनेर आफ्नो "पढेको समय" बचत गर्ने — Messenger
@@ -170,6 +175,7 @@ class _ChatScreenState extends State<ChatScreen> {
           myName: _myName,
           video: video,
           isCaller: isCaller,
+          otherUid: _otherUid,
         ),
       ),
     );
@@ -335,9 +341,11 @@ class _ChatScreenState extends State<ChatScreen> {
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
                           fontSize: 15)),
-                  Text(S.activeRecently,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 11)),
+                  _otherUid.isEmpty
+                      ? Text(S.activeRecently,
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 11))
+                      : OnlineBadge(uid: _otherUid, onDark: true),
                 ],
               ),
             ),
