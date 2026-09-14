@@ -558,6 +558,39 @@ Polyline routePolyline(String id, RoadRoute route) => Polyline(
           route.real ? const [] : [PatternItem.dash(24), PatternItem.gap(14)],
     );
 
+/// यो भन्दा कम भए (route कै अन्त्य बिन्दु र साँचो marker लगभग एउटै ठाउँमा
+/// भएकोले) जोड्ने डट्टेड रेखा नै नदेखाउने — GPS jitter/rounding-मात्रको
+/// नगन्य फरकमा अनावश्यक साना थोप्ला नआऊन्।
+const double kWalkConnectorThresholdKm = 0.02; // ~20m
+
+/// Google Maps-शैली "last-mile"/walking connector — सडक-पछ्याउने solid
+/// route polyline ठ्याक्कै marker (गन्तव्य वा worker/employer को लाइभ
+/// स्थान) सम्मै नपुगेको (उदाहरण: गन्तव्य कम्पाउन्ड भित्र, वा routing engine
+/// ले नजिकैको सडकसम्म मात्र पुर्‍याएको) बेला त्यो खाली ठाउँलाई साना
+/// थोप्लाहरू (dot pattern, dash होइन — त्यो अघिकै "अनुमानित route" अर्थमा
+/// प्रयोग भइसकेको छ, यहाँ अर्कै अर्थ भएकोले छुट्टै देखिने) ले जोड्छ। फरक
+/// नगण्य (< [kWalkConnectorThresholdKm]) भए `null` — कुनै polyline
+/// देखाउँदैन।
+Polyline? walkConnectorPolyline({
+  required String id,
+  required LatLng routeEnd,
+  required LatLng markerPos,
+}) {
+  final gapKm = haversineKm(routeEnd.latitude, routeEnd.longitude,
+      markerPos.latitude, markerPos.longitude);
+  if (gapKm < kWalkConnectorThresholdKm) return null;
+  return Polyline(
+    polylineId: PolylineId(id),
+    points: [routeEnd, markerPos],
+    color: const Color(0xFF111111),
+    width: 4,
+    patterns: [PatternItem.dot, PatternItem.gap(10)],
+    jointType: JointType.round,
+    endCap: Cap.roundCap,
+    startCap: Cap.roundCap,
+  );
+}
+
 /// झन्डा-पिनको SVG-सटीक ज्यामिति — दिइएको Leaflet SVG (viewBox 0 0 96 200,
 /// display 48×100) सँग ठ्याक्कै मिल्ने "display space" (48×100) मा। यही
 /// coordinate system दुवैतिर प्रयोग हुन्छ: [destinationFlagPin] ले पोल +

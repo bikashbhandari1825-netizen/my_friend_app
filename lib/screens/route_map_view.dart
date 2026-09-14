@@ -25,6 +25,7 @@ import 'nearby_common.dart'
         kCleanMapStyle,
         navigationArrowMarker,
         routePolyline,
+        walkConnectorPolyline,
         RoadRoute,
         FlagPinGeometry,
         PulseRings;
@@ -373,8 +374,23 @@ class _RouteMapViewState extends State<RouteMapView>
                     ),
                 },
                 polylines: {
-                  if (route != null && route.points.length >= 2)
+                  if (route != null && route.points.length >= 2) ...[
                     routePolyline('route', route),
+                    // Google Maps-शैली "last-mile" डट्टेड connector — solid
+                    // road route ठ्याक्कै marker सम्मै नपुगेको खाली ठाउँमा
+                    // (गन्तव्य/लाइभ स्थान दुवैतिर हुन सक्छ)।
+                    if (renderedOrigin != null)
+                      walkConnectorPolyline(
+                        id: 'walk_origin',
+                        routeEnd: route.points.first,
+                        markerPos: renderedOrigin,
+                      ),
+                    walkConnectorPolyline(
+                      id: 'walk_destination',
+                      routeEnd: route.points.last,
+                      markerPos: widget.destination,
+                    ),
+                  ].whereType<Polyline>(),
                 },
               );
             },
