@@ -76,6 +76,22 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
   RoadRoute? _route;
   bool _routeLoading = false;
 
+  // तल्लो orange panel को उचाइ स्थिर छैन — worker chip row देखिए/नदेखिए
+  // अनुसार बढ्छ/घट्छ। _ProviderCard लाई त्यसमाथि सधैं पूरै देखिने गरी राख्न
+  // (अघि hardcoded `bottom: 270` ले chip row देखिँदा panel यो भन्दा अग्लो
+  // भएर card को तल्लो भाग ढाकिदिन्थ्यो) यो panel को साँचो rendered height
+  // नाप्ने — GlobalKey बाट।
+  final _panelKey = GlobalKey();
+  double _panelHeight = 260;
+
+  void _measurePanel() {
+    final box = _panelKey.currentContext?.findRenderObject() as RenderBox?;
+    final h = box?.size.height;
+    if (h != null && h > 0 && (h - _panelHeight).abs() > 0.5) {
+      setState(() => _panelHeight = h);
+    }
+  }
+
   Future<void> _selectWorker(
       String id, Map<String, dynamic> data, double km, LatLng pos) async {
     setState(() {
@@ -337,6 +353,11 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // हरेक build पछि तल्लो panel को साँचो उचाइ नाप्ने — फरक भेटिए मात्र
+    // setState हुन्छ (_measurePanel भित्रैको guard), त्यसैले loop बस्दैन।
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _measurePanel();
+    });
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -413,7 +434,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                 Positioned(
                   left: 12,
                   right: 12,
-                  bottom: 270,
+                  bottom: _panelHeight + 12,
                   child: _ProviderCard(
                     data: _selData!,
                     workerId: _selId!,
@@ -433,6 +454,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                 right: 0,
                 bottom: 0,
                 child: Container(
+                  key: _panelKey,
                   decoration: const BoxDecoration(
                     gradient: AppColors.igGradient,
                     borderRadius: BorderRadius.vertical(

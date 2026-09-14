@@ -105,6 +105,12 @@ class CallSession {
     }
   }
 
+  /// पहिलो video track को id — नभए null। `setSrcObject`लाई trackId दिन
+  /// चाहिन्छ (Flutter Web को renderer ले exact match नभई कुनै track
+  /// देखाउँदैन); voice-only कलमा video track नै हुँदैन, त्यसबेला null नै सही।
+  static String? _firstTrackId(List<MediaStreamTrack>? tracks) =>
+      (tracks != null && tracks.isNotEmpty) ? tracks.first.id : null;
+
   Future<void> _markRemoteDescSet() async {
     _remoteDescSet = true;
     final pending = List<RTCIceCandidate>.from(_pendingRemoteCandidates);
@@ -150,15 +156,54 @@ class CallSession {
     _pc = await createPeerConnection(_iceServers);
 
     _local = await navigator.mediaDevices.getUserMedia({
-      'audio': true,
+      // AEC/NS/AGC + fixed 48kHz mono — बिना यसको आवाज तन्किएको/कम्पन
+      // भएको/echo जस्तो सुनिन्थ्यो (speaker बाट फेरि आफ्नै mic मा फर्केको
+      // आवाज echo-cancel नभई थपिँदा हुने classic distortion)।
+      //
+      // यो `optional` (array-of-single-key-map) ढाँचा नै दुवैतिर सही काम
+      // गर्ने एकमात्र formatहो — फ्ल्याट map (`{'echoCancellation': true}`)
+      // दिए Android native plugin (GetUserMediaImpl.parseMediaConstraints)
+      // ले mandatory/optional नभेटेर खाली constraints नै मान्छ (कुनै पनि
+      // audio processing लागू नहुने!), जबकि यो array ढाँचालाई भने Android
+      // ले सीधै KeyValuePair मा पार्स गर्छ र Flutter Web (dart_webrtc) ले
+      // पनि यही ढाँचालाई विशेष रूपमा चिनेर flat W3C constraints मा उल्काउँछ।
+      'audio': {
+        'optional': <Map<String, dynamic>>[
+          {'echoCancellation': true},
+          {'noiseSuppression': true},
+          {'autoGainControl': true},
+          {'googEchoCancellation': true},
+          {'googEchoCancellation2': true},
+          {'googAutoGainControl': true},
+          {'googAutoGainControl2': true},
+          {'googNoiseSuppression': true},
+          {'googNoiseSuppression2': true},
+          {'googHighpassFilter': true},
+          {'googTypingNoiseDetection': true},
+          {'googAudioMirroring': false},
+          // Android native plugin (ConstraintsMap.getDouble) crashes with a
+          // ClassCastException if a numeric constraint value serializes as
+          // a Java Integer instead of Double — त्यसैले int होइन, double नै
+          // (48000 होइन 48000.0) दिनुपर्छ।
+          {'sampleRate': 48000.0},
+          {'channelCount': 1.0},
+        ],
+      },
       'video':
           video ? {'facingMode': 'user', 'width': 640, 'height': 480} : false,
     });
     // `renderer.srcObject = stream` (synchronous setter) ले native side
     // confirm गर्नुअघि नै फर्किन्छ — त्यही race ले कहिलेकाहीं local/remote
     // preview कालो/खाली नै रहिरहने बग दिन्थ्यो। `setSrcObject()` (awaited)
-    // ले टेक्स्चर साँच्चै bind नभएसम्म पर्खन्छ, र trackId पनि स्पष्ट पठाउँछ।
-    await localRenderer.setSrcObject(stream: _local);
+    // ले टेक्स्चर साँच्चै bind नभएसम्म पर्खन्छ। trackId पनि स्पष्ट पठाउनुपर्छ
+    // — Flutter Web को renderer implementation ले trackId नदिए (null) कहिल्यै
+    // कुनै video track नमिलाई खाली/कालो स्क्रिन दिन्छ (audio भने trackId
+    // फिल्टर बिनै सबै track थप्ने भएकोले चलिरहन्थ्यो — mobile↔web कलमा "audio
+    // चल्छ तर video कालो" बग ठ्याक्कै यही थियो)।
+    await localRenderer.setSrcObject(
+      stream: _local,
+      trackId: _firstTrackId(_local?.getVideoTracks()),
+    );
     for (final track in _local!.getTracks()) {
       await _pc!.addTrack(track, _local!);
     }
@@ -173,7 +218,11 @@ class CallSession {
 
     _pc!.onTrack = (RTCTrackEvent e) async {
       if (e.streams.isNotEmpty) {
-        await remoteRenderer.setSrcObject(stream: e.streams.first);
+        final stream = e.streams.first;
+        await remoteRenderer.setSrcObject(
+          stream: stream,
+          trackId: _firstTrackId(stream.getVideoTracks()),
+        );
         remoteJoined.value = true;
         status.value = CallStatus.connected;
       }
