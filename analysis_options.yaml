@@ -18,6 +18,8 @@ analyzer:
     - linux/**
     # vendored third-party source (see third_party/*/PATCH.md) — not ours to lint
     - third_party/**
+    # accidental nested clone of this same repo — not real project source
+    - my_friend_app/**
 include: package:flutter_lints/flutter.yaml
 
 linter:

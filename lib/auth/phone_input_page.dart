@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import '../config/app_config.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
@@ -95,7 +96,19 @@ class _PhoneInputPageState extends State<PhoneInputPage> {
     final existing = await phoneAccountExists(phone);
     if (!mounted) return;
 
-    // पहिले real Phone Auth कोसिस; enable नभए / असफल भए नि:शुल्क test-mode।
+    // टेस्टिङ चरणमा साँचो Firebase Phone Auth (SMS + web reCAPTCHA) सिधै
+    // छुँदैनौं — त्यही नै "अड्किने/break वा loop हुने" गुनासोको मूल कारण
+    // थियो (reCAPTCHA popup-block, unauthorized domain, दोस्रोपटक "already
+    // rendered" त्रुटि आदि)। सिधै अन्तर्निहित नि:शुल्क test-mode मा जाने —
+    // बटन/screen उस्तै काम गर्छन्, केवल SMS चाहिँदैन। kUseRealPhoneSms
+    // (config/app_config.dart) लाई `true` पारेपछि मात्र तलको साँचो-SMS
+    // बाटो फेरि प्रयोग हुन्छ।
+    if (!kUseRealPhoneSms) {
+      _goOtp(testMode: true, existing: existing, phone: phone);
+      return;
+    }
+
+    // साँचो Phone Auth कोसिस; enable नभए / असफल भए फेरि नि:शुल्क test-mode।
     try {
       if (kIsWeb) {
         final result = await FirebaseAuth.instance.signInWithPhoneNumber(phone);

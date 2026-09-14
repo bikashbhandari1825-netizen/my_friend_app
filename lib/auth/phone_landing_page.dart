@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 
 import '../auth_page.dart';
+import '../config/app_config.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
@@ -82,29 +83,37 @@ class PhoneLandingPage extends StatelessWidget {
                         fontSize: 13,
                         fontWeight: FontWeight.w500)),
                 const Spacer(flex: 3),
+                // Email/Password नै primary (टेस्टिङमा सबैभन्दा भरपर्दो) —
+                // Phone बटन भने भविष्यको प्रयोगका लागि सधैँ देखिन्छ (secondary,
+                // तल)। बटन थिचेपछिको वास्तविक व्यवहार (test-mode बनाम साँचो
+                // SMS) `kUseRealPhoneSms` ले नियन्त्रण गर्छ — phone_input_page.dart
+                // हेर्नुहोस्।
                 PrimaryButton(
-                  label: S.continueWithPhone,
-                  icon: Icons.phone_iphone_rounded,
-                  onPressed: () => _go(context, const PhoneInputPage()),
+                  label: S.continueWithEmail,
+                  icon: Icons.mail_outline_rounded,
+                  onPressed: () => _go(context, const EmailAuthPage()),
                 ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _go(context, const EmailAuthPage()),
-                    icon: const Icon(Icons.mail_outline_rounded,
-                        color: Colors.white),
-                    label: Text(S.continueWithEmail,
-                        style: const TextStyle(color: Colors.white)),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white70),
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppRadius.pill)),
+                if (kEnablePhoneAuth) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _go(context, const PhoneInputPage()),
+                      icon: const Icon(Icons.phone_iphone_rounded,
+                          color: Colors.white),
+                      label: Text(S.continueWithPhone,
+                          style: const TextStyle(color: Colors.white)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white70),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius:
+                                BorderRadius.circular(AppRadius.pill)),
+                      ),
                     ),
                   ),
-                ),
+                ],
                 const SizedBox(height: 6),
                 TextButton(
                   onPressed: () => Navigator.push(

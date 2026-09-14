@@ -2,6 +2,35 @@
 // App owner ले बदल्न सक्ने setting हरू (Firestore `config` collection मा)।
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// ── टेस्टिङ चरण auth toggle ──────────────────────────────────────────────
+/// Google Sign-In फेरि सक्रिय गरिएको छ — physical device मा live SHA-1 +
+/// signInWithCredential root-cause debug गरेर पुष्टि भइसक्यो (काम गर्छ,
+/// नेटवर्क slow भएमा केही सेकेन्ड लाग्न सक्छ, त्यसैले button मा अब busy/
+/// spinner राखिएको छ ताकि user "केही भएन" भनेर बीचमै app बाट बाहिरिएर
+/// प्रक्रिया नरोकियोस्)। साथै Email/Password login असफल हुँदा देखिने hint
+/// (`login_no_match_hint`) ले नै "Google बाट जारी राख्नुहोस्" भन्छ — त्यो
+/// बटन लुकाइराखे hint अर्थहीन हुन्थ्यो। `false` पार्दा बटन फेरि लुक्छ।
+const bool kEnableGoogleSignIn = true;
+
+/// "Continue with phone number" बटन UI मा सधैँ देखिन्छ (भविष्यको प्रयोगको
+/// लागि) — यसलाई लुकाउने toggle होइन। यसको सट्टा तलको `kUseRealPhoneSms`
+/// ले नियन्त्रण गर्छ: बटन थिचेर नम्बर हालेपछि साँचो Firebase Phone Auth
+/// (SMS + reCAPTCHA) प्रयोग गर्ने कि, अन्तर्निहित नि:शुल्क test-mode
+/// (जुनसुकै नम्बर + code 123456, हेर्नुहोस् dev_login.dart::kTestCode)
+/// प्रयोग गर्ने।
+const bool kEnablePhoneAuth = true;
+
+/// Web मा साँचो Firebase Phone Auth (`signInWithPhoneNumber`) ले invisible
+/// reCAPTCHA चालु गर्छ — त्यो domain properly configure नभएसम्म वा
+/// popup-blocked भए UI अड्किने/"break वा loop" हुने मुख्य कारण यही थियो।
+/// अहिलेको टेस्टिङ चरणमा `false` राखेर phone flow सिधै अन्तर्निहित
+/// test-mode (dev_login.dart, कुनै SMS/reCAPTCHA चाहिँदैन) मा जान्छ — बटन
+/// र OTP screen दुवै उस्तै काम गर्छन्, केवल वास्तविक SMS भन्दा free
+/// bypass प्रयोग हुन्छ। प्रोडक्सनमा साँचो SMS चाहिएपछि यसलाई मात्र `true`
+/// पार्नुहोस् (Firebase Console मा Phone sign-in enable + SHA-1/domain
+/// setup पूरा भएपछि) — बाँकी कोड उस्तै रहन्छ।
+const bool kUseRealPhoneSms = false;
+
 /// KaamMitra ले हरेक पूरा भएको कामबाट लिने कमिसन (०.१० = १०%)।
 /// एउटै ठाउँमा — earnings/wallet हिसाब यहीँबाट आउँछ।
 const double kCommissionRate = 0.10;

@@ -177,6 +177,9 @@ class _RequestCard extends StatelessWidget {
       'status': 'accepted',
       'finalPrice': price,
       'acceptedAt': FieldValue.serverTimestamp(),
+      // employer ले Call थिच्दा नम्बर भेट्टाओस् भनेर — पहिले यहाँ कहिल्यै
+      // लेखिँदैनथ्यो, त्यसैले accepted भइसकेपछि पनि "no phone on file" देखिन्थ्यो।
+      'workerPhone': await myPhoneNumber(uid),
       // route-map तुरुन्तै काम गरोस् भनेर accept गर्ने क्षणमै worker को
       // स्थान लेख्ने — job_actions.dart कै साझा function (JobRouteScreen
       // खोलेपछि मात्र पर्खनुपर्दैन)।
@@ -270,6 +273,7 @@ class _RequestCard extends StatelessWidget {
       'status': 'accepted',
       'finalPrice': price,
       'acceptedAt': FieldValue.serverTimestamp(),
+      'workerPhone': await myPhoneNumber(uid),
       ...await workerLocationForWrite(uid),
     });
     if (!context.mounted) return;
@@ -439,6 +443,27 @@ class _RequestCard extends StatelessWidget {
               ],
             ),
           ],
+          // काम स्वीकार भइसकेपछि ग्राहकको फोन नम्बर सिधै देखिने — Call
+          // बटन थिच्नुअघि नै थाहा होस्, लुकेको बटनमा मात्र सीमित नराखी।
+          if (active &&
+              (data['employerPhone'] ?? '').toString().trim().isNotEmpty) ...[
+            const SizedBox(height: 6),
+            GestureDetector(
+              onTap: () => _callEmployer(context),
+              child: Row(
+                children: [
+                  const Icon(Icons.call_rounded,
+                      size: 14, color: AppColors.igViolet),
+                  const SizedBox(width: 4),
+                  Text((data['employerPhone']).toString().trim(),
+                      style: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.igViolet)),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 6),
           Text('प्रस्तावित मूल्य: Rs. $price',
               style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -603,9 +628,7 @@ class _PaymentSettlementSheetState extends State<_PaymentSettlementSheet> {
                   : theme.colorScheme.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(AppRadius.md),
               border: Border.all(
-                  color: selected
-                      ? AppColors.igViolet
-                      : theme.dividerColor),
+                  color: selected ? AppColors.igViolet : theme.dividerColor),
             ),
             child: Column(
               children: [

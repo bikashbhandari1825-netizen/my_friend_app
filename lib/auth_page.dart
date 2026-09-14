@@ -27,8 +27,15 @@ class _AuthPageState extends State<AuthPage> {
 
   bool _isLoginMode = true;
   bool _obscurePassword = true;
+  // Google/email दुवै sign-inले network round-trip पर्खनुपर्छ — त्यो बेला
+  // बटन disable + spinner नदेखाए user "केही भएन" भनेर बीचमै app बाट
+  // बाहिरिन्छन् वा फेरि tap गर्छन्, जसले गर्दा process backgrounded हुँदा
+  // (यो device जस्तो aggressive-kill भएको OEM मा) in-flight sign-in हराएर
+  // "welcome screen मा बाउन्स भएको" जस्तो देखिन्थ्यो — साँचो कारण यही थियो।
+  bool _busy = false;
 
   Future<void> _submit() async {
+    if (_busy) return;
     // इमेल मात्र trim/lowercase — पासवर्ड जस्ताको तस्तै (trim गर्दा mismatch हुन्छ)।
     final email =
         _emailController.text.replaceAll(RegExp(r'\s+'), '').toLowerCase();
@@ -39,6 +46,7 @@ class _AuthPageState extends State<AuthPage> {
       );
       return;
     }
+    setState(() => _busy = true);
     try {
       if (_isLoginMode) {
         // LOGIN: verify मात्र — कहिल्यै नयाँ खाता बनाउँदैन।
@@ -58,6 +66,7 @@ class _AuthPageState extends State<AuthPage> {
       Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
+      setState(() => _busy = false);
       final msg = switch (e.code) {
         'invalid-credential' ||
         'INVALID_LOGIN_CREDENTIALS' ||
@@ -78,6 +87,44 @@ class _AuthPageState extends State<AuthPage> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
       if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("${S.errorWord}: $e")),
+      );
+    }
+  }
+
+  /// Google बाट दर्ता भएको (password कहिल्यै नबनेको) खातालाई password सेट
+  /// गर्न दिने — Firebase को reset email ले provider जे भए पनि त्यो
+  /// खातामा password auth थप्छ, त्यसैले यो नै on-device credential-linking
+  /// नचाहिने, भरपर्दो "Google account link" बाटो हो।
+  Future<void> _forgotPassword() async {
+    if (_busy) return;
+    final email =
+        _emailController.text.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    if (!email.contains('@') || !email.contains('.')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(S.resetEmailEnterFirst)),
+      );
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(S.resetEmailSent)),
+      );
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? e.code)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("${S.errorWord}: $e")),
       );
@@ -90,6 +137,8 @@ class _AuthPageState extends State<AuthPage> {
   //    आफै authorize गर्छ — त्यसैले `origin_mismatch` (400) आउँदैन।
   //  - Mobile: google_sign_in प्लगिन प्रयोग गर्छ।
   Future<void> _signInWithGoogle() async {
+    if (_busy) return;
+    setState(() => _busy = true);
     try {
       if (kIsWeb) {
         final provider = GoogleAuthProvider();
@@ -102,6 +151,7 @@ class _AuthPageState extends State<AuthPage> {
         final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
 
         if (googleUser == null) {
+          if (mounted) setState(() => _busy = false);
           return; // प्रयोगकर्ताले रद्द गर्‍यो
         }
 
@@ -120,6 +170,7 @@ class _AuthPageState extends State<AuthPage> {
       Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
+      setState(() => _busy = false);
       if (e.code == 'popup-closed-by-user' ||
           e.code == 'cancelled-popup-request') {
         return; // प्रयोगकर्ताले popup बन्द गर्‍यो — त्रुटि देखाउनु पर्दैन
@@ -137,6 +188,7 @@ class _AuthPageState extends State<AuthPage> {
       );
     } on PlatformException catch (e) {
       if (!mounted) return;
+      setState(() => _busy = false);
       // Android native sign-in sheet बाट आउने असफलता — raw
       // "PlatformException(sign_in_failed, ... ApiException: 10 ...)" को
       // सट्टा प्रस्ट सन्देश। code 10 (DEVELOPER_ERROR) प्रायः SHA-1
@@ -152,6 +204,7 @@ class _AuthPageState extends State<AuthPage> {
       );
     } catch (e) {
       if (!mounted) return;
+      setState(() => _busy = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Google Sign-In त्रुटि: $e")),
       );
@@ -326,13 +379,25 @@ class _AuthPageState extends State<AuthPage> {
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 22),
+                            if (_isLoginMode) ...[
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: _busy ? null : _forgotPassword,
+                                  child: Text(S.forgotPassword,
+                                      style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 12.5)),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 8),
 
                             // लगइन/साइन-अप बटन — onPressed: _submit उस्तै
                             SizedBox(
                               width: double.infinity,
                               child: ElevatedButton(
-                                onPressed: _submit,
+                                onPressed: _busy ? null : _submit,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.white,
                                   foregroundColor: const Color(0xFF7B1FA2),
@@ -343,12 +408,22 @@ class _AuthPageState extends State<AuthPage> {
                                     borderRadius: BorderRadius.circular(14),
                                   ),
                                 ),
-                                child: Text(
-                                  _isLoginMode ? S.loginAction : S.signupAction,
-                                  style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w800),
-                                ),
+                                child: _busy
+                                    ? const SizedBox(
+                                        width: 22,
+                                        height: 22,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2.4,
+                                            color: Color(0xFF7B1FA2)),
+                                      )
+                                    : Text(
+                                        _isLoginMode
+                                            ? S.loginAction
+                                            : S.signupAction,
+                                        style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w800),
+                                      ),
                               ),
                             ),
                           ],
@@ -360,8 +435,9 @@ class _AuthPageState extends State<AuthPage> {
 
                   // ३. toggle — logic उस्तै
                   TextButton(
-                    onPressed: () =>
-                        setState(() => _isLoginMode = !_isLoginMode),
+                    onPressed: _busy
+                        ? null
+                        : () => setState(() => _isLoginMode = !_isLoginMode),
                     child: Text(
                       _isLoginMode ? S.toSignup : S.toLogin,
                       style: const TextStyle(
@@ -389,13 +465,26 @@ class _AuthPageState extends State<AuthPage> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Google Sign-In — onPressed: _signInWithGoogle उस्तै
+                  // Google Sign-In — onPressed: _signInWithGoogle उस्तै।
+                  // network slow भएमा seconds लाग्न सक्छ — त्यो बेला बटन
+                  // disable + spinner देखाएर user लाई "अझै काम भइरहेको छ"
+                  // भन्ने प्रस्ट संकेत दिने (यो नभएकोले नै पहिले user बीचमै
+                  // app बाट बाहिरिएर/अर्को app मा गएर in-flight sign-in
+                  // हराउँथ्यो — "welcome screen मा बाउन्स" जस्तो देखिने
+                  // साँचो कारण)।
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: _signInWithGoogle,
-                      icon: const Icon(Icons.g_mobiledata,
-                          size: 28, color: Colors.red),
+                      onPressed: _busy ? null : _signInWithGoogle,
+                      icon: _busy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2.2, color: Colors.black54),
+                            )
+                          : const Icon(Icons.g_mobiledata,
+                              size: 28, color: Colors.red),
                       label: Text(
                         S.signInWithGoogle,
                         style: const TextStyle(

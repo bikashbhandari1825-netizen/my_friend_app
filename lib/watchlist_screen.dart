@@ -77,6 +77,7 @@ class WatchlistScreen extends StatelessWidget {
                           'location': location,
                           'price': price,
                           'document': (d['document'] ?? '').toString(),
+                          'phone': (d['phone'] ?? '').toString(),
                         }),
                       ),
                     ),

@@ -667,6 +667,27 @@ class _ProviderTrackCard extends StatelessWidget {
                       ],
                     ),
                   ],
+                  // फोन नम्बर सिधै देखिने — Call बटन थिच्नुअघि नै थाहा
+                  // होस्/कल गर्न सजिलो होस् भनेर, लुकेको Call बटनमा मात्र
+                  // सीमित नराखी।
+                  if (phone.isNotEmpty) ...[
+                    const Divider(height: 16),
+                    GestureDetector(
+                      onTap: () => _callWorker(context, phone),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.call_rounded,
+                              size: 15, color: AppColors.igViolet),
+                          const SizedBox(width: 6),
+                          Text(phone,
+                              style: const TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.igViolet)),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

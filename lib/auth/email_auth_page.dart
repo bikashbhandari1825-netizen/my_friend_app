@@ -14,6 +14,7 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../auth_page.dart' show kGoogleWebClientId;
+import '../config/app_config.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
@@ -221,6 +222,57 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
     return '$base  (${e.code})';
   }
 
+  /// पासवर्ड बिर्सिएको (वा Google बाट दर्ता भएको, password कहिल्यै नबनेको)
+  /// खातालाई password सेट/रिसेट गर्न दिने — Firebase को reset email ले
+  /// provider जे भए पनि (Google-only भए पनि) त्यो खातामा password auth
+  /// थप्छ, त्यसैले यो नै "Google account लाई link गर्ने" भरपर्दो, on-device
+  /// credential-linking नचाहिने बाटो हो।
+  Future<void> _forgotPassword() async {
+    if (_busy) return;
+    final email = _cleanEmail;
+    if (email.isEmpty || !email.contains('@') || !email.contains('.')) {
+      setState(() => _emailError = S.enterValidEmail);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+      _notice = null;
+      _emailError = null;
+    });
+    try {
+      await FirebaseAuth.instance
+          .sendPasswordResetEmail(email: email)
+          .timeout(_timeout);
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _isLogin = true;
+        _notice = S.resetEmailSent;
+      });
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = _mapError(e);
+      });
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = S.isNepali
+            ? 'सर्भरबाट जवाफ आएन — फेरि प्रयास गर्नुहोस्'
+            : 'No response from the server — try again';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '${S.errorWord}: $e';
+      });
+    }
+  }
+
   Future<void> _google() async {
     if (_busy) return;
     setState(() {
@@ -401,6 +453,16 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
                             ),
                           ),
                         ),
+                        if (_isLogin) ...[
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: _busy ? null : _forgotPassword,
+                              child: Text(S.forgotPassword,
+                                  style: const TextStyle(fontSize: 12.5)),
+                            ),
+                          ),
+                        ],
                         if (_notice != null) ...[
                           const SizedBox(height: 12),
                           _msgBox(_notice!, info: true),
@@ -418,40 +480,46 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
                           loading: _busy,
                           onPressed: _submit,
                         ),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            const Expanded(child: Divider()),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 8),
-                              child: Text(S.orWord,
+                        // टेस्टिङ चरणमा Google Sign-In लुकाइएको — popup-block/
+                        // redirect-loop जस्ता समस्याले Email/Password टेस्टिङमा
+                        // अवरोध नहोस् भनेर। kEnableGoogleSignIn ले नियन्त्रण गर्छ।
+                        if (kEnableGoogleSignIn) ...[
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              const Expanded(child: Divider()),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 8),
+                                child: Text(S.orWord,
+                                    style: const TextStyle(
+                                        color: Colors.black45, fontSize: 12)),
+                              ),
+                              const Expanded(child: Divider()),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _busy ? null : _google,
+                              icon: const Icon(Icons.g_mobiledata_rounded,
+                                  size: 26, color: Color(0xFFDB4437)),
+                              label: Text(S.signInWithGoogle,
                                   style: const TextStyle(
-                                      color: Colors.black45, fontSize: 12)),
-                            ),
-                            const Expanded(child: Divider()),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: _busy ? null : _google,
-                            icon: const Icon(Icons.g_mobiledata_rounded,
-                                size: 26, color: Color(0xFFDB4437)),
-                            label: Text(S.signInWithGoogle,
-                                style: const TextStyle(
-                                    color: Colors.black87,
-                                    fontWeight: FontWeight.w700)),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 13),
-                              side: const BorderSide(color: Colors.black26),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius:
-                                      BorderRadius.circular(AppRadius.pill)),
+                                      color: Colors.black87,
+                                      fontWeight: FontWeight.w700)),
+                              style: OutlinedButton.styleFrom(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 13),
+                                side: const BorderSide(color: Colors.black26),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius:
+                                        BorderRadius.circular(AppRadius.pill)),
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                         const SizedBox(height: 4),
                         TextButton(
                           onPressed: _busy ? null : () => _setMode(!_isLogin),
@@ -463,17 +531,22 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  onPressed: () => Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(builder: (_) => const PhoneInputPage()),
+                // "Use phone instead" — kEnablePhoneAuth ले नियन्त्रण गर्छ
+                // (अहिले सधैँ देखिन्छ, भविष्यको प्रयोगका लागि)।
+                if (kEnablePhoneAuth) ...[
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: () => Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const PhoneInputPage()),
+                    ),
+                    icon: const Icon(Icons.phone_iphone_rounded,
+                        color: Colors.white70, size: 18),
+                    label: Text(S.usePhoneInstead,
+                        style: const TextStyle(color: Colors.white70)),
                   ),
-                  icon: const Icon(Icons.phone_iphone_rounded,
-                      color: Colors.white70, size: 18),
-                  label: Text(S.usePhoneInstead,
-                      style: const TextStyle(color: Colors.white70)),
-                ),
+                ],
               ],
             ),
           ),

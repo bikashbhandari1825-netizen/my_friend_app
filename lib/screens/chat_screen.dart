@@ -12,15 +12,16 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:record/record.dart';
 
+import '../app_globals.dart';
 import '../l10n/strings.dart';
 import '../services/call_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/spring_tap.dart';
+import '../widgets/voice_recorder_bar.dart';
 import 'call_screen.dart';
+import 'image_preview_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String requestId;
@@ -41,19 +42,22 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _controller = TextEditingController();
   final _scroll = ScrollController();
-  final _audioRecorder = AudioRecorder();
-  bool _isRecording = false;
+  bool _recordingVoice = false;
   bool _canSend = false;
-  bool _callBusy = false;
+  // दुई कल बटन (audio/video) ले आ-आफ्नै छुट्टै busy-state राख्छन् — एउटा
+  // साझा flag भएमा एउटामा थिच्दा अर्को बटन पनि "लोड हुँदै" देखिन्थ्यो
+  // (independent touch handling तोडिएको बग)।
+  bool _audioCallBusy = false;
+  bool _videoCallBusy = false;
   bool _inCall = false;
   String _myName = '';
-  StreamSubscription<Map<String, dynamic>?>? _callWatch;
+  String? _lastMarkedReadDocId;
+
+  DocumentReference<Map<String, dynamic>> get _chatDoc =>
+      FirebaseFirestore.instance.collection('chats').doc(widget.requestId);
 
   CollectionReference<Map<String, dynamic>> get _messages =>
-      FirebaseFirestore.instance
-          .collection('chats')
-          .doc(widget.requestId)
-          .collection('messages');
+      _chatDoc.collection('messages');
 
   @override
   void initState() {
@@ -63,7 +67,19 @@ class _ChatScreenState extends State<ChatScreen> {
       if (can != _canSend) setState(() => _canSend = can);
     });
     _loadMyName();
-    _watchForIncomingCall();
+    _markRead();
+  }
+
+  /// यो chat अहिले खुलेको छ भनेर आफ्नो "पढेको समय" बचत गर्ने — Messenger
+  /// जस्तै अर्को पक्षले पठाएको पछिल्लो सन्देश मुनि "Seen" देखिन यही चाहिन्छ।
+  Future<void> _markRead() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      await _chatDoc.set({
+        'readBy': {uid: FieldValue.serverTimestamp()},
+      }, SetOptions(merge: true));
+    } catch (_) {}
   }
 
   Future<void> _loadMyName() async {
@@ -80,67 +96,62 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) setState(() => _myName = name.isEmpty ? 'KaamMitra' : name);
   }
 
-  void _watchForIncomingCall() {
-    final me = FirebaseAuth.instance.currentUser?.uid;
-    _callWatch = CallService.watch(widget.requestId).listen((c) {
-      if (!mounted || _inCall || c == null) return;
-      final status = (c['status'] ?? '').toString();
-      final callerUid = (c['callerUid'] ?? '').toString();
-      // कसैले कल गर्‍यो, त्यो म होइन, अझै जोडिएको छैन → incoming दिखाउने
-      if (status == 'ringing' && callerUid.isNotEmpty && callerUid != me) {
-        _showIncoming(
-          video: (c['mode'] ?? 'audio').toString() == 'video',
-          callerName: (c['callerName'] ?? widget.workerName).toString(),
-        );
-      }
-    });
-  }
-
-  Future<void> _showIncoming(
-      {required bool video, required String callerName}) async {
-    _inCall = true;
-    final accept = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        title: Row(children: [
-          Icon(video ? Icons.videocam_rounded : Icons.call_rounded,
-              color: AppColors.igViolet),
-          const SizedBox(width: 8),
-          Text(S.incomingCallTitle),
-        ]),
-        content: Text('$callerName  ·  ${video ? S.videoCall : S.voiceCall}'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(S.decline,
-                style: const TextStyle(color: AppColors.danger)),
-          ),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.success,
-                foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(context, true),
-            icon: const Icon(Icons.call_rounded, size: 18),
-            label: Text(S.accept),
-          ),
-        ],
-      ),
-    );
-    if (!mounted) return;
-    if (accept == true) {
-      await _openCall(video: video, isCaller: false);
-    } else {
-      await CallService.resetSignal(widget.requestId);
-      _inCall = false;
+  /// अर्को पक्षको uid — `serviceRequests/{requestId}` बाट। Notification
+  /// पठाउन (call सुरु हुनेबित्तिकै backgrounded भए पनि थाहा पाओस्) चाहिन्छ;
+  /// आउँदो-कल पत्ता लगाउने काम अब यहाँ होइन, MainContainer कै साझा
+  /// (tab-independent) watcher ले गर्छ — त्यसैले यो screen खुला नभए पनि
+  /// अर्को tab/screen मा भए पनि कल आएको देखिन्छ।
+  Future<String?> _otherPartyUid() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('serviceRequests')
+          .doc(widget.requestId)
+          .get();
+      final data = doc.data();
+      if (data == null) return null;
+      final me = FirebaseAuth.instance.currentUser?.uid;
+      final employerUid = (data['employerUid'] ?? '').toString();
+      final workerUid = (data['workerUid'] ?? '').toString();
+      if (me == employerUid) return workerUid.isEmpty ? null : workerUid;
+      if (me == workerUid) return employerUid.isEmpty ? null : employerUid;
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 
   Future<void> _startCall({required bool video}) async {
-    if (_callBusy || _inCall) return;
-    setState(() => _callBusy = true);
+    if (_audioCallBusy || _videoCallBusy || _inCall) return;
+    setState(() {
+      if (video) {
+        _videoCallBusy = true;
+      } else {
+        _audioCallBusy = true;
+      }
+    });
     await CallService.resetSignal(widget.requestId);
-    setState(() => _callBusy = false);
+    if (mounted) {
+      setState(() {
+        _audioCallBusy = false;
+        _videoCallBusy = false;
+      });
+    }
+    // अर्को पक्ष अहिले app मै नभए/backgrounded भए पनि थाहा पाओस् भनेर —
+    // real-time signaling त `calls/{requestId}` doc ले नै गर्छ, यो त
+    // additional push/in-app alert मात्र हो।
+    final otherUid = await _otherPartyUid();
+    if (otherUid != null) {
+      createNotificationForUser(
+        otherUid,
+        S.incomingCallTitle,
+        '$_myName  ·  ${video ? S.videoCall : S.voiceCall}',
+        data: {
+          'requestId': widget.requestId,
+          'type': 'incoming_call',
+          'mode': video ? 'video' : 'audio',
+        },
+      );
+    }
     await _openCall(video: video, isCaller: true);
     _stampLast(video ? '📹 ${S.videoCall}' : '📞 ${S.voiceCall}');
     _messages.add({
@@ -171,10 +182,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
-    _callWatch?.cancel();
     _controller.dispose();
     _scroll.dispose();
-    _audioRecorder.dispose();
     super.dispose();
   }
 
@@ -225,11 +234,24 @@ class _ChatScreenState extends State<ChatScreen> {
     _stampLast('📷 ${S.photo}');
   }
 
+  /// Camera/gallery बाट छानेको तस्बिर — सिधै नपठाई पहिले preview देखाउने,
+  /// "Send" थिचेपछि मात्र साँच्चै अपलोड हुने।
+  Future<void> _previewThenSend(Uint8List bytes) async {
+    final confirmed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => ImagePreviewScreen(bytes: bytes),
+      ),
+    );
+    if (confirmed == true) await _sendImage(bytes);
+  }
+
   Future<void> _pickCamera() async {
     try {
       final XFile? p = await ImagePicker()
-          .pickImage(source: ImageSource.camera, imageQuality: 70);
-      if (p != null) await _sendImage(await p.readAsBytes());
+          .pickImage(source: ImageSource.camera, imageQuality: 85);
+      if (p != null) await _previewThenSend(await p.readAsBytes());
     } catch (e) {
       _snack('${S.errorWord}: $e');
     }
@@ -238,35 +260,23 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _pickGallery() async {
     try {
       final file = await FilePicker.pickFile(type: FileType.image);
-      if (file != null) await _sendImage(await file.readAsBytes());
+      if (file != null) await _previewThenSend(await file.readAsBytes());
     } catch (e) {
       _snack('${S.errorWord}: $e');
     }
   }
 
-  Future<void> _toggleRecording() async {
-    if (_isRecording) {
-      final path = await _audioRecorder.stop();
-      setState(() => _isRecording = false);
-      if (path != null) await _sendVoice(path);
-    } else {
-      if (!await _audioRecorder.hasPermission()) {
-        _snack('Microphone अनुमति चाहिन्छ');
-        return;
-      }
-      await _audioRecorder.start(const RecordConfig(), path: 'voice_message');
-      setState(() => _isRecording = true);
-    }
-  }
-
-  Future<void> _sendVoice(String blobUrl) async {
+  /// Voice-note recorder bar (widgets/voice_recorder_bar.dart) ले नै रेकर्ड
+  /// + waveform + preview सबै सम्हाल्छ — यहाँ त प्रयोगकर्ताले Send थिचेपछि
+  /// आएको bytes मात्र साँच्चै Firestore मा लेख्ने।
+  Future<void> _sendVoiceBytes(Uint8List bytes) async {
+    setState(() => _recordingVoice = false);
     try {
-      final res = await http.get(Uri.parse(blobUrl));
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
       await _messages.add({
         'senderUid': uid,
         'type': 'audio',
-        'audioBase64': base64Encode(res.bodyBytes),
+        'audioBase64': base64Encode(bytes),
         'createdAt': FieldValue.serverTimestamp(),
       });
       _stampLast('🎤 ${S.voiceMessage}');
@@ -339,13 +349,15 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           _CallBtn(
+            key: const ValueKey('audioCallBtn'),
             icon: Icons.call_rounded,
-            busy: _callBusy,
+            busy: _audioCallBusy,
             onTap: () => _startCall(video: false),
           ),
           _CallBtn(
+            key: const ValueKey('videoCallBtn'),
             icon: Icons.videocam_rounded,
-            busy: _callBusy,
+            busy: _videoCallBusy,
             onTap: () => _startCall(video: true),
           ),
           const SizedBox(width: 6),
@@ -379,15 +391,38 @@ class _ChatScreenState extends State<ChatScreen> {
                   );
                 }
                 _jumpToBottom();
+                // अर्को पक्षले नयाँ सन्देश पठायो र म यो chat हेर्दै नै छु भने
+                // तुरुन्तै "पढेको" म्हार्क गर्ने — Messenger जस्तै live "Seen"।
+                final lastDoc = docs.last;
+                if (lastDoc.id != _lastMarkedReadDocId &&
+                    lastDoc.data()['senderUid'] != me) {
+                  _lastMarkedReadDocId = lastDoc.id;
+                  _markRead();
+                }
+                // अर्को पक्षको uid — सन्देश इतिहासबाटै (सबभन्दा पछिल्लो
+                // "मैले नपठाएको" सन्देशको sender) निकालिन्छ, अलग Firestore
+                // पढाइ नचाहिने गरी।
+                final otherUid = docs
+                    .map((d) => (d.data()['senderUid'] ?? '').toString())
+                    .lastWhere((u) => u.isNotEmpty && u != me,
+                        orElse: () => '');
+
                 return ListView.builder(
                   controller: _scroll,
-                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
                   itemCount: docs.length,
                   itemBuilder: (context, i) {
                     final data = docs[i].data();
                     final id = docs[i].id;
                     final isMe = data['senderUid'] == me;
                     final type = (data['type'] ?? 'text').toString();
+                    final isLast = i == docs.length - 1;
+                    // लगातार एउटै व्यक्तिका सन्देश Messenger-शैलीमा नजिक-नजिक
+                    // देखिने — समूहको पछिल्लोमा मात्र समय देखाउने।
+                    final isLastOfGroup = isLast ||
+                        docs[i + 1].data()['senderUid'] != data['senderUid'];
+                    final isFirstOfGroup = i == 0 ||
+                        docs[i - 1].data()['senderUid'] != data['senderUid'];
 
                     return Dismissible(
                       key: Key(id),
@@ -400,14 +435,45 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                       confirmDismiss: (_) => _confirmDelete(),
                       onDismissed: (_) => _messages.doc(id).delete(),
-                      child: Align(
-                        alignment:
-                            isMe ? Alignment.centerRight : Alignment.centerLeft,
-                        child: _Bubble(
-                          isMe: isMe,
-                          time: _time(data['createdAt']),
-                          child: _content(type, data, isMe, theme),
-                        ),
+                      child: Column(
+                        crossAxisAlignment: isMe
+                            ? CrossAxisAlignment.end
+                            : CrossAxisAlignment.start,
+                        children: [
+                          Align(
+                            alignment: isMe
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: TweenAnimationBuilder<double>(
+                              key: ValueKey(id),
+                              tween: Tween(begin: 0, end: 1),
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeOut,
+                              builder: (context, t, child) => Opacity(
+                                opacity: t,
+                                child: Transform.translate(
+                                  offset: Offset(0, (1 - t) * 8),
+                                  child: child,
+                                ),
+                              ),
+                              child: _Bubble(
+                                isMe: isMe,
+                                showTail: isLastOfGroup,
+                                topMargin: isFirstOfGroup ? 8 : 2,
+                                time: isLastOfGroup
+                                    ? _time(data['createdAt'])
+                                    : null,
+                                child: _content(type, data, isMe, theme),
+                              ),
+                            ),
+                          ),
+                          if (isMe && isLast)
+                            _SeenLabel(
+                              chatDoc: _chatDoc,
+                              otherUid: otherUid,
+                              messageTime: data['createdAt'],
+                            ),
+                        ],
                       ),
                     );
                   },
@@ -478,6 +544,20 @@ class _ChatScreenState extends State<ChatScreen> {
       );
 
   Widget _inputBar(ThemeData theme) {
+    if (_recordingVoice) {
+      return Container(
+        padding: EdgeInsets.fromLTRB(
+            8, 6, 8, 6 + MediaQuery.of(context).padding.bottom),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          border: Border(top: BorderSide(color: theme.dividerColor)),
+        ),
+        child: VoiceRecorderBar(
+          onSend: _sendVoiceBytes,
+          onCancel: () => setState(() => _recordingVoice = false),
+        ),
+      );
+    }
     return Container(
       padding: EdgeInsets.fromLTRB(
           8, 6, 8, 6 + MediaQuery.of(context).padding.bottom),
@@ -498,10 +578,8 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: _pickGallery,
           ),
           IconButton(
-            icon: Icon(
-                _isRecording ? Icons.stop_circle_rounded : Icons.mic_rounded,
-                color: _isRecording ? AppColors.danger : AppColors.igOrange),
-            onPressed: _toggleRecording,
+            icon: const Icon(Icons.mic_rounded, color: AppColors.igOrange),
+            onPressed: () => setState(() => _recordingVoice = true),
           ),
           Expanded(
             child: TextField(
@@ -567,7 +645,8 @@ class _CallBtn extends StatelessWidget {
   final IconData icon;
   final bool busy;
   final VoidCallback onTap;
-  const _CallBtn({required this.icon, required this.busy, required this.onTap});
+  const _CallBtn(
+      {super.key, required this.icon, required this.busy, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -597,15 +676,27 @@ class _CallBtn extends StatelessWidget {
 
 class _Bubble extends StatelessWidget {
   final bool isMe;
-  final String time;
+  // null = यो समूहको अन्तिम सन्देश होइन — Messenger जस्तै लगातार सन्देशमा
+  // समय हरेकमा नदेखाई अन्तिममा मात्र देखाउने।
+  final String? time;
+  // समूहको अन्तिम सन्देशमा मात्र "tail" कुनो (bottom corner) देखिने; बीचका
+  // सन्देश दुवैतिर उस्तै गोलो हुन्छन् (Messenger/WhatsApp कै परिचित ढाँचा)।
+  final bool showTail;
+  final double topMargin;
   final Widget child;
-  const _Bubble({required this.isMe, required this.time, required this.child});
+  const _Bubble({
+    required this.isMe,
+    required this.time,
+    required this.child,
+    this.showTail = true,
+    this.topMargin = 8,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 3),
+      margin: EdgeInsets.only(top: topMargin, bottom: 1),
       constraints:
           BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
       padding: const EdgeInsets.fromLTRB(12, 9, 12, 7),
@@ -615,8 +706,8 @@ class _Bubble extends StatelessWidget {
         borderRadius: BorderRadius.only(
           topLeft: const Radius.circular(18),
           topRight: const Radius.circular(18),
-          bottomLeft: Radius.circular(isMe ? 18 : 4),
-          bottomRight: Radius.circular(isMe ? 4 : 18),
+          bottomLeft: Radius.circular(isMe || !showTail ? 18 : 4),
+          bottomRight: Radius.circular(!isMe || !showTail ? 18 : 4),
         ),
       ),
       child: Column(
@@ -624,15 +715,55 @@ class _Bubble extends StatelessWidget {
             isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
           child,
-          const SizedBox(height: 3),
-          Text(time,
-              style: TextStyle(
-                  fontSize: 9.5,
-                  color: isMe
-                      ? Colors.white70
-                      : theme.colorScheme.onSurfaceVariant)),
+          if (time != null) ...[
+            const SizedBox(height: 3),
+            Text(time!,
+                style: TextStyle(
+                    fontSize: 9.5,
+                    color: isMe
+                        ? Colors.white70
+                        : theme.colorScheme.onSurfaceVariant)),
+          ],
         ],
       ),
+    );
+  }
+}
+
+/// पठाइएको पछिल्लो सन्देश मुनि "Seen" — अर्को पक्षले त्यो सन्देश आइसकेपछि
+/// यो chat खोलेको (उसको `readBy` timestamp त्यो सन्देशको समयभन्दा पछिको)
+/// भेटिए मात्र देखिन्छ, ठ्याक्कै Messenger जस्तै।
+class _SeenLabel extends StatelessWidget {
+  final DocumentReference<Map<String, dynamic>> chatDoc;
+  final String otherUid;
+  final dynamic messageTime;
+  const _SeenLabel({
+    required this.chatDoc,
+    required this.otherUid,
+    required this.messageTime,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (otherUid.isEmpty || messageTime is! Timestamp) {
+      return const SizedBox.shrink();
+    }
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: chatDoc.snapshots(),
+      builder: (context, snap) {
+        final readBy = snap.data?.data()?['readBy'] as Map<String, dynamic>?;
+        final readAt = readBy?[otherUid];
+        final seen = readAt is Timestamp &&
+            !readAt.toDate().isBefore((messageTime as Timestamp).toDate());
+        if (!seen) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(right: 4, top: 2),
+          child: Text(S.seenWord,
+              style: TextStyle(
+                  fontSize: 10.5,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        );
+      },
     );
   }
 }

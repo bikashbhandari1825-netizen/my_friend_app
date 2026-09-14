@@ -6,6 +6,16 @@
          push/local notification देखाउन यो घोषणा चाहिन्छ (firebase_messaging
          + flutter_local_notifications ले runtime request गर्छ)। -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- In-app voice/video call (flutter_webrtc) — यी बिना getUserMedia ले
+         सधैँ अनुमति अस्वीकृत भएझैँ व्यवहार गर्छ (कल कहिल्यै नजोडिने/कालो
+         स्क्रिन देखिने), किनभने Android मा manifest मा नै घोषणा नभएको
+         permission runtime मा माग्नै मिल्दैन। -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <application
         android:label="my_friend_app"
         android:name="${applicationName}"

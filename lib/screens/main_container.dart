@@ -13,6 +13,8 @@ import 'package:geolocator/geolocator.dart';
 
 import '../app_globals.dart';
 import '../l10n/strings.dart';
+import '../services/call_service.dart';
+import '../services/ringtone_service.dart';
 import '../theme/app_theme.dart';
 import '../watchlist_screen.dart';
 import '../widgets/active_job_bar.dart';
@@ -20,6 +22,7 @@ import '../widgets/job_alert_sound.dart';
 import '../widgets/spring_tap.dart';
 import '../worker_requests_page.dart';
 import 'bookings_screen.dart';
+import 'call_screen.dart';
 import 'home_screen.dart';
 import 'job_actions.dart' show openJobRoute;
 import 'job_feed_screen.dart';
@@ -73,10 +76,25 @@ class _MainContainerState extends State<MainContainer> {
   StreamSubscription<Position>? _workerPosSub;
   String? _workerTrackingForJobId;
 
+  // ── आउँदो कल (incoming call) — tab-independent, ChatScreen नै खुला
+  // नभए पनि ──
+  // पहिले यो केवल ChatScreen भित्रै (त्यही screen खुला हुँदा मात्र) पत्ता
+  // लाग्थ्यो — त्यसैले employer/worker अर्को कुनै tab/screen मा हुँदा कल
+  // गरे callee लाई कहिल्यै थाहै हुँदैनथ्यो ("रिङ नहुने" गुनासोको साँचो जड)।
+  // अब यहाँ MainContainer कै साझा shell मा नै — active job भएसम्म (जति
+  // वटा भए पनि) ती हरेकको `calls/{id}` doc सुन्ने, ringing भेटिए जुनसुकै
+  // tab/screen मा भए पनि तुरुन्तै incoming-call dialog देखाउने।
+  String _myName = '';
+  final Map<String, StreamSubscription<Map<String, dynamic>?>>
+      _callWatchers = {};
+  final Set<String> _ringingHandledFor = {};
+  bool _inCall = false;
+
   @override
   void initState() {
     super.initState();
     _loadRole();
+    _loadMyName();
   }
 
   @override
@@ -84,7 +102,134 @@ class _MainContainerState extends State<MainContainer> {
     _negotiationSub?.cancel();
     _activeJobSub?.cancel();
     _workerPosSub?.cancel();
+    for (final s in _callWatchers.values) {
+      s.cancel();
+    }
     super.dispose();
+  }
+
+  Future<void> _loadMyName() async {
+    final user = FirebaseAuth.instance.currentUser;
+    var name = user?.displayName ?? '';
+    try {
+      final u = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user?.uid)
+          .get();
+      final n = (u.data()?['name'] ?? '').toString().trim();
+      if (n.isNotEmpty) name = n;
+    } catch (_) {}
+    _myName = name.isEmpty ? 'KaamMitra' : name;
+  }
+
+  /// सक्रिय काम (जति वटा भए पनि) को सेटसँग मिलाएर `calls/{id}` watcher
+  /// थप्ने/हटाउने — काम अब सक्रिय नरहेको बित्तिकै त्यसको कल-listener पनि बन्द।
+  void _syncCallWatchers(Set<String> activeIds) {
+    final toRemove =
+        _callWatchers.keys.where((id) => !activeIds.contains(id)).toList();
+    for (final id in toRemove) {
+      _callWatchers.remove(id)?.cancel();
+      _ringingHandledFor.remove(id);
+    }
+    for (final id in activeIds) {
+      if (_callWatchers.containsKey(id)) continue;
+      _callWatchers[id] =
+          CallService.watch(id).listen((c) => _onCallDocChanged(id, c));
+    }
+  }
+
+  void _onCallDocChanged(String requestId, Map<String, dynamic>? c) {
+    if (c == null) {
+      _ringingHandledFor.remove(requestId);
+      return;
+    }
+    final status = (c['status'] ?? '').toString();
+    if (status != 'ringing') {
+      _ringingHandledFor.remove(requestId);
+      return;
+    }
+    final me = FirebaseAuth.instance.currentUser?.uid;
+    final callerUid = (c['callerUid'] ?? '').toString();
+    // आफैंले सुरु गरेको कल (caller side) लाई "आउँदो कल" ठान्दैन।
+    if (callerUid.isEmpty || callerUid == me) return;
+    if (_inCall || _ringingHandledFor.contains(requestId)) return;
+    _ringingHandledFor.add(requestId);
+    _showIncomingCall(
+      requestId: requestId,
+      video: (c['mode'] ?? 'audio').toString() == 'video',
+      callerName: (c['callerName'] ?? S.customerWord).toString(),
+    );
+  }
+
+  Future<void> _showIncomingCall({
+    required String requestId,
+    required bool video,
+    required String callerName,
+  }) async {
+    _inCall = true;
+    unawaited(RingtoneService.playIncoming());
+    // Caller ले उठ्नुअघि नै कल काटिदिए (मन फेरे/गल्तिले थिचे) यो dialog
+    // आफैं बन्द होस् र फेरि नबज्ने — नत्र callee को फोन ringing dialog +
+    // ringtone सधैंलाई अडिरहन्थ्यो।
+    StreamSubscription<Map<String, dynamic>?>? cancelWatch;
+    cancelWatch = CallService.watch(requestId).listen((c) {
+      if (!mounted) return;
+      final status = (c?['status'] ?? '').toString();
+      if (c == null || status == 'ended') {
+        final nav = Navigator.of(context, rootNavigator: true);
+        if (nav.canPop()) nav.pop(false);
+      }
+    });
+    final accept = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: Row(children: [
+          Icon(video ? Icons.videocam_rounded : Icons.call_rounded,
+              color: AppColors.igViolet),
+          const SizedBox(width: 8),
+          Text(S.incomingCallTitle),
+        ]),
+        content: Text('$callerName  ·  ${video ? S.videoCall : S.voiceCall}'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(S.decline,
+                style: const TextStyle(color: AppColors.danger)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.success,
+                foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.call_rounded, size: 18),
+            label: Text(S.accept),
+          ),
+        ],
+      ),
+    );
+    await cancelWatch.cancel();
+    await RingtoneService.stop();
+    if (accept == true) {
+      if (!mounted) {
+        await CallService.resetSignal(requestId);
+      } else {
+        await Navigator.of(context).push(MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => CallScreen(
+            requestId: requestId,
+            otherName: callerName,
+            myName: _myName,
+            video: video,
+            isCaller: false,
+          ),
+        ));
+      }
+    } else {
+      await CallService.resetSignal(requestId);
+    }
+    _ringingHandledFor.remove(requestId);
+    _inCall = false;
   }
 
   /// worker मात्र — सक्रिय काम भएसम्म आफ्नो GPS लगातार Firestore मा लेख्ने,
@@ -169,6 +314,7 @@ class _MainContainerState extends State<MainContainer> {
       if (activeDocs.isEmpty) {
         _knownActiveJobIds.clear();
         _autoOpenedForJobId = null;
+        _syncCallWatchers(const {});
         if (isWorker) _stopWorkerLocationTracking();
         if (mounted && (_pinnedActiveJobId != null || _activeJobCount != 0)) {
           setState(() {
@@ -179,6 +325,7 @@ class _MainContainerState extends State<MainContainer> {
         }
         return;
       }
+      _syncCallWatchers(activeIds);
 
       // pinned ActiveJobBar + Bookings tab badge — सधैँ सबैभन्दा पछिल्लो
       // सक्रिय काम, cold start मा र नयाँ थपिँदा दुवैमा (माथि नै sort भइसकेको)।

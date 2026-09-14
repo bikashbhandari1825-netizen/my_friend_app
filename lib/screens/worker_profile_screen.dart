@@ -4,6 +4,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
@@ -142,6 +143,28 @@ class WorkerProfileScreen extends StatelessWidget {
                     padding: const EdgeInsets.all(8.0),
                     child: Column(
                       children: [
+                        // फोन नम्बर सिधै देखिने — सम्पर्क गर्न सजिलो होस्।
+                        if ((worker['phone'] ?? '').trim().isNotEmpty) ...[
+                          ListTile(
+                            leading: const Icon(Icons.call_rounded,
+                                color: AppColors.igViolet),
+                            title: const Text('Phone',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13.5)),
+                            subtitle: Text(worker['phone']!.trim(),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700)),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.call_rounded,
+                                  color: AppColors.success),
+                              onPressed: () => launchUrl(Uri(
+                                  scheme: 'tel',
+                                  path: worker['phone']!.trim())),
+                            ),
+                          ),
+                          const Divider(height: 1),
+                        ],
                         _row(Icons.location_on_rounded, 'Location',
                             worker['location'] ?? 'N/A'),
                         const Divider(height: 1),

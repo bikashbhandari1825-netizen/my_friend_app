@@ -102,8 +102,13 @@ service cloud.firestore {
 
     // ── chats ───────────────────────────────────────────────
     // TODO: booking को पक्ष हो कि भनेर get() ले कस्न सकिन्छ।
-    match /chats/{requestId}/messages/{msg} {
-      allow read, create, update, delete: if isSignedIn();
+    // parent doc — अहिले "seen/read" receipt (`readBy.{uid}`) राख्न मात्र
+    // प्रयोग हुन्छ; message हरू भने subcollection मै छन्।
+    match /chats/{requestId} {
+      allow read, create, update: if isSignedIn();
+      match /messages/{msg} {
+        allow read, create, update, delete: if isSignedIn();
+      }
     }
 
     // ── calls (WebRTC signaling: offer/answer/ICE) ──────────

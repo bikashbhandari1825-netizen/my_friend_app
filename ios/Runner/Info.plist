@@ -4,6 +4,10 @@
 <dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>KaamMitra needs your location to show nearby workers and their distance.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>KaamMitra needs camera access for in-app video calls with workers/employers.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>KaamMitra needs microphone access for in-app voice and video calls.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

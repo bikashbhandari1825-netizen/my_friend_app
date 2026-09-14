@@ -33,6 +33,7 @@ class S {
   static String get cancel => _t('cancel');
   static String get ok => _t('ok');
   static String get save => _t('save');
+  static String get send => _t('send');
   static String get delete => _t('delete');
   static String get logout => _t('logout');
   static String get errorWord => _t('error');
@@ -501,6 +502,9 @@ class S {
   static String get googleSignInGenericError =>
       _t('google_sign_in_generic_error');
   static String get tooManyAttemptsHint => _t('too_many_attempts_hint');
+  static String get forgotPassword => _t('forgot_password');
+  static String get resetEmailEnterFirst => _t('reset_email_enter_first');
+  static String get resetEmailSent => _t('reset_email_sent');
   static String get loginToYourAccount => _t('login_to_your_account');
   static String get createNewAccount => _t('create_new_account');
   static String get loginModeNote => _t('login_mode_note');
@@ -560,6 +564,7 @@ class S {
   static String get callConnecting => _t('call_connecting');
   static String get incomingCallTitle => _t('incoming_call_title');
   static String get cameraMicNeeded => _t('camera_mic_needed');
+  static String get seenWord => _t('seen_word');
   static String etaAway(int min) =>
       isNepali ? 'करिब $min मिनेट टाढा' : 'about $min min away';
 
@@ -611,6 +616,7 @@ class S {
     'keep_job': {'en': 'Keep job', 'ne': 'काम राख्ने'},
     'ok': {'en': 'OK', 'ne': 'ठीक छ'},
     'save': {'en': 'Save', 'ne': 'सुरक्षित गर्नुहोस्'},
+    'send': {'en': 'Send', 'ne': 'पठाउनुहोस्'},
     'delete': {'en': 'Delete', 'ne': 'मेटाउनुहोस्'},
     'logout': {'en': 'Logout', 'ne': 'लगआउट'},
     'error': {'en': 'Error', 'ne': 'त्रुटि'},
@@ -1456,6 +1462,17 @@ class S {
       'en': 'This email is already registered. Enter your password and log in.',
       'ne': 'यो इमेल पहिले नै दर्ता छ। पासवर्ड हालेर लगइन गर्नुहोस्।'
     },
+    'forgot_password': {'en': 'Forgot password?', 'ne': 'पासवर्ड बिर्सनुभयो?'},
+    'reset_email_enter_first': {
+      'en': 'Enter your email above first, then tap "Forgot password?".',
+      'ne': 'पहिले माथि आफ्नो इमेल हाल्नुहोस्, अनि "पासवर्ड बिर्सनुभयो?" थिच्नुहोस्।'
+    },
+    'reset_email_sent': {
+      'en':
+          'Password reset link sent — check your email. If this account was created with Google, opening the link will also let you set a password for it.',
+      'ne':
+          'पासवर्ड रिसेट लिङ्क पठाइयो — इमेल जाँच्नुहोस्। यो खाता Google बाट बनेको भए पनि, लिङ्क खोलेर यसको लागि पासवर्ड सेट गर्न सकिन्छ।'
+    },
     'login_to_your_account': {
       'en': 'Log in to your account',
       'ne': 'आफ्नो खातामा लगइन गर्नुहोस्'
@@ -1576,6 +1593,7 @@ class S {
       'en': 'Allow camera & microphone access to make calls.',
       'ne': 'कल गर्न क्यामेरा र माइक्रोफोन अनुमति दिनुहोस्।'
     },
+    'seen_word': {'en': 'Seen', 'ne': 'हेरियो'},
     'welcome_to': {'en': 'Welcome to KaamMitra', 'ne': 'KaamMitra मा स्वागत छ'},
     'welcome_tagline': {
       'en': 'Trusted local workers, your price.',

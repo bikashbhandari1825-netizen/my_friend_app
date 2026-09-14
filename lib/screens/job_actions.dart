@@ -66,6 +66,25 @@ Future<String> myWorkerName(String? uid) async {
   return name;
 }
 
+/// प्रयोगकर्ताको साँचो सम्पर्क नम्बर — Firebase Auth कै `user.phoneNumber`
+/// त्यही खाता फोन-OTP मार्फत साइन-इन भएको बेला मात्र भरिन्छ; इमेल/पासवर्डबाट
+/// दर्ता भएका (आजकल धेरैजसो) प्रयोगकर्ताको हकमा त्यो सधैँ खाली हुन्छ, जबकि
+/// रजिस्ट्रेसनकै बेला उनीहरूले भरेको नम्बर भने `users/{uid}.phone` मा
+/// बचत भइसकेको हुन्छ। यहीं नै हो "Call गर्दा फोन नम्बर भेटिएन" गुनासोको
+/// मूल कारण — accept/counter गर्ने हरेक ठाउँले यो function प्रयोग गर्नुपर्छ,
+/// सिधै `user?.phoneNumber` होइन।
+Future<String> myPhoneNumber(String? uid) async {
+  final user = FirebaseAuth.instance.currentUser;
+  String phone = user?.phoneNumber ?? '';
+  try {
+    final u =
+        await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final p = (u.data()?['phone'] ?? '').toString().trim();
+    if (p.isNotEmpty) phone = p;
+  } catch (_) {}
+  return phone;
+}
+
 Future<bool> _stillOpen(String docId) async {
   final fresh = await FirebaseFirestore.instance
       .collection('serviceRequests')
@@ -109,12 +128,11 @@ Future<void> acceptBroadcastJob(
     {String? myService}) async {
   final messenger = ScaffoldMessenger.of(context);
   if (!await workerSkillMatchesJob(data, workerService: myService)) {
-    messenger.showSnackBar(
-        SnackBar(content: Text(S.notAuthorizedForJobCategory)));
+    messenger
+        .showSnackBar(SnackBar(content: Text(S.notAuthorizedForJobCategory)));
     return;
   }
   final uid = FirebaseAuth.instance.currentUser?.uid;
-  final user = FirebaseAuth.instance.currentUser;
   try {
     if (!await _stillOpen(docId)) {
       messenger.showSnackBar(
@@ -127,7 +145,7 @@ Future<void> acceptBroadcastJob(
         .update({
       'workerUid': uid,
       'workerName': await myWorkerName(uid),
-      'workerPhone': user?.phoneNumber ?? '',
+      'workerPhone': await myPhoneNumber(uid),
       'status': 'accepted',
       'finalPrice': data['proposedPrice'],
       'acceptedAt': FieldValue.serverTimestamp(),
@@ -154,12 +172,11 @@ Future<void> counterBroadcastJob(
     {String? myService}) async {
   final messenger = ScaffoldMessenger.of(context);
   if (!await workerSkillMatchesJob(data, workerService: myService)) {
-    messenger.showSnackBar(
-        SnackBar(content: Text(S.notAuthorizedForJobCategory)));
+    messenger
+        .showSnackBar(SnackBar(content: Text(S.notAuthorizedForJobCategory)));
     return;
   }
   final uid = FirebaseAuth.instance.currentUser?.uid;
-  final user = FirebaseAuth.instance.currentUser;
   final suggested = (data['proposedPrice'] as num?)?.toInt() ?? 500;
   final controller = TextEditingController(text: suggested.toString());
 
@@ -199,7 +216,7 @@ Future<void> counterBroadcastJob(
                   .update({
                 'workerUid': uid,
                 'workerName': await myWorkerName(uid),
-                'workerPhone': user?.phoneNumber ?? '',
+                'workerPhone': await myPhoneNumber(uid),
                 'status': 'pending_employer_approval',
                 'workerCounterPrice': newPrice,
                 'counteredAt': FieldValue.serverTimestamp(),
@@ -277,10 +294,12 @@ Future<void> acceptWorkerCounterOffer(
         'workerUid': (data['workerUid'] ?? '').toString(),
       };
       // Call बटनका लागि employer को फोन — job सिर्जना हुँदा नलेखिएको भए
-      // अहिले (accept गर्ने बेला) भरिदिने।
+      // अहिले (accept गर्ने बेला) भरिदिने। Firestore users/{uid}.phone बाट
+      // (Auth कै phoneNumber होइन — इमेलबाट दर्ता भएकाको हकमा त्यो सधैँ खाली)।
       final existingPhone = (data['employerPhone'] as String?)?.trim() ?? '';
       if (existingPhone.isEmpty) {
-        final myPhone = FirebaseAuth.instance.currentUser?.phoneNumber ?? '';
+        final myPhone =
+            await myPhoneNumber(FirebaseAuth.instance.currentUser?.uid);
         if (myPhone.isNotEmpty) update['employerPhone'] = myPhone;
       }
       tx.update(ref, update);

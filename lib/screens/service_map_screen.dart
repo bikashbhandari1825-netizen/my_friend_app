@@ -259,6 +259,10 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
     try {
       final user = FirebaseAuth.instance.currentUser;
       String employerName = user?.displayName ?? user?.email ?? 'Customer';
+      // users/{uid}.phone बाट — Auth कै user.phoneNumber होइन, त्यो इमेलबाट
+      // दर्ता भएकाको हकमा सधैँ खाली हुन्छ (Call बटनले फोन नम्बर नभेट्ने
+      // गुनासोको मूल कारण यही थियो)।
+      String employerPhone = user?.phoneNumber ?? '';
       try {
         final u = await FirebaseFirestore.instance
             .collection('users')
@@ -266,6 +270,8 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
             .get();
         final n = (u.data()?['name'] ?? '').toString().trim();
         if (n.isNotEmpty) employerName = n;
+        final p = (u.data()?['phone'] ?? '').toString().trim();
+        if (p.isNotEmpty) employerPhone = p;
       } catch (_) {}
 
       final db = FirebaseFirestore.instance;
@@ -274,7 +280,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
         'broadcast': true,
         'employerUid': user?.uid ?? '',
         'employerName': employerName,
-        'employerPhone': user?.phoneNumber ?? '',
+        'employerPhone': employerPhone,
         'workerUid': '',
         'workerName': '',
         'status': 'broadcasting',
@@ -928,6 +934,7 @@ class _ProviderCard extends StatelessWidget {
                         'location': (data['location'] ?? '').toString(),
                         'price': price,
                         'document': (data['document'] ?? '').toString(),
+                        'phone': (data['phone'] ?? '').toString(),
                       }),
                     ),
                   ),

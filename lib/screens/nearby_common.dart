@@ -231,8 +231,8 @@ Future<BitmapDescriptor> navigationArrowMarker(Color color) async {
 
   // हल्का बाहिरी halo + सेतो डिस्क — जुनसुकै नक्सा/tile रङमा पनि arrow
   // छुट्टै र प्रस्ट देखियोस्।
-  canvas.drawCircle(
-      const Offset(c, c), c - 4, Paint()..color = color.withValues(alpha: 0.18));
+  canvas.drawCircle(const Offset(c, c), c - 4,
+      Paint()..color = color.withValues(alpha: 0.18));
   canvas.drawCircle(const Offset(c, c), c - 14, Paint()..color = Colors.white);
 
   // उत्तरतिर (माथि) देखाउने chevron — Marker.rotation ले घुमाउँछ, त्यसैले
@@ -826,10 +826,26 @@ class _OfferSheetState extends State<OfferSheet> {
     setState(() => _sending = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
+      // users/{uid} बाट साँचो नाम/फोन — Auth कै email/phoneNumber भन्दा
+      // भरपर्दो (इमेलबाट दर्ता भएकाको हकमा Auth phoneNumber सधैँ खाली हुन्छ,
+      // जुन "Call गर्दा नम्बर भेटिएन" गुनासोको मूल कारण थियो)।
+      var employerName = user?.displayName ?? user?.email ?? 'Employer';
+      var employerPhone = user?.phoneNumber ?? '';
+      try {
+        final u = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user?.uid)
+            .get();
+        final n = (u.data()?['name'] ?? '').toString().trim();
+        if (n.isNotEmpty) employerName = n;
+        final p = (u.data()?['phone'] ?? '').toString().trim();
+        if (p.isNotEmpty) employerPhone = p;
+      } catch (_) {}
       await FirebaseFirestore.instance.collection('serviceRequests').add({
         'workerUid': widget.data['uid'] ?? widget.workerId,
         'employerUid': user?.uid ?? '',
-        'employerName': user?.email ?? 'Employer',
+        'employerName': employerName,
+        'employerPhone': employerPhone,
         'workerName': widget.data['name'] ?? '',
         'service': widget.data['service'] ?? '',
         'details': _detailsCtrl.text.trim(),
