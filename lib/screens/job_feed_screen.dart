@@ -1133,8 +1133,9 @@ class JobLocationScreen extends StatelessWidget {
       body: Stack(
         children: [
           GoogleMap(
+            // Close-up — घर/क्षेत्रको ~50-100m वरपर प्रष्ट देखिने।
             initialCameraPosition:
-                CameraPosition(target: LatLng(lat, lng), zoom: 15.5),
+                CameraPosition(target: LatLng(lat, lng), zoom: 17.5),
             markers: {
               Marker(
                 markerId: const MarkerId('job'),

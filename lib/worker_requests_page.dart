@@ -5,6 +5,8 @@
 //  • accepted / confirmed → सक्रिय काम (Message + स्थान हेर्ने)
 // नयाँ खुला कामहरू "कामको सूची" (JobFeedScreen) मा देखिन्छन्।
 // कुनै live location tracking छैन (ride-style हटाइयो)।
+import 'dart:async' show unawaited;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -496,7 +498,7 @@ class _RequestCard extends StatelessWidget {
                   label: S.viewJobLocation,
                   onPressed: () => openJobRoute(context, docId, data),
                 )
-              else if (lat != null && lng != null)
+              else if (status != 'completed' && lat != null && lng != null)
                 GradientActionButton(
                   icon: Icons.place_rounded,
                   label: S.viewJobLocation,
@@ -512,7 +514,10 @@ class _RequestCard extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (active || status == 'completed')
+              // काम completed भइसकेपछि live location/message दुवै हट्छन् —
+              // Post-Completion: History मा मात्र बस्छ (माथिको card नै त्यो
+              // record हो — StatusBadge + अन्तिम मूल्य)।
+              if (active)
                 GradientActionButton(
                   icon: Icons.chat_bubble_rounded,
                   label: S.messageWord,
@@ -522,6 +527,7 @@ class _RequestCard extends StatelessWidget {
                       builder: (_) => ChatScreen(
                         requestId: docId,
                         workerName: employer,
+                        initialStatus: status,
                       ),
                     ),
                   ),
@@ -598,6 +604,9 @@ class _PaymentSettlementSheetState extends State<_PaymentSettlementSheet> {
         'paymentMethod': _method,
         'paidAmount': widget.amount,
       });
+      // काम completed भएपछि तुरुन्तै संवेदनशील chat/phone data सफा — यो
+      // UI लाई कुनै हालतमा block नगरोस् (fire-and-forget)।
+      unawaited(purgeSensitiveDataOnCompletion(widget.docId));
       if (!mounted) return;
       Navigator.pop(context);
       ScaffoldMessenger.of(context)

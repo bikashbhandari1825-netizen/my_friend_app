@@ -225,7 +225,9 @@ class _RouteMapViewState extends State<RouteMapView>
     if (c == null) return;
     final origin = widget.origin;
     final update = origin == null
-        ? CameraUpdate.newLatLngZoom(widget.destination, 15)
+        // Close-up — घर/क्षेत्रको ~50-100m वरपर प्रष्ट देखिने गरी (पहिले 15,
+        // शहर/मोहल्ला स्तरको धेरै टाढा view थियो)।
+        ? CameraUpdate.newLatLngZoom(widget.destination, 17.5)
         : CameraUpdate.newLatLngBounds(
             LatLngBounds(
               southwest: LatLng(min(origin.latitude, widget.destination.latitude),
@@ -309,7 +311,7 @@ class _RouteMapViewState extends State<RouteMapView>
               final heading = _currentHeading;
               return GoogleMap(
                 initialCameraPosition:
-                    CameraPosition(target: widget.destination, zoom: 13),
+                    CameraPosition(target: widget.destination, zoom: 16),
                 style: kCleanMapStyle,
                 onMapCreated: (c) {
                   _map = c;

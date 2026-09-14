@@ -118,6 +118,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                     ? (d['employerName'] ?? 'Customer')
                                     : (d['workerName'] ?? 'Worker'))
                                 .toString();
+                            final rowStatus = (d['status'] ?? '').toString();
                             final last =
                                 (d['lastMessage'] ?? d['service'] ?? '')
                                     .toString();
@@ -135,7 +136,9 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => ChatScreen(
-                                      requestId: id, workerName: name),
+                                      requestId: id,
+                                      workerName: name,
+                                      initialStatus: rowStatus),
                                 ),
                               ),
                               onDelete: () => _deleteChat(context, id),

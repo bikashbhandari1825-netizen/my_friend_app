@@ -249,6 +249,43 @@ Future<void> declineBroadcastJob(String docId) async {
   } catch (_) {}
 }
 
+/// Post-Completion Data Clearance — काम "completed" भइसकेपछि chat भित्रका
+/// सबै सन्देश (फोन नम्बर/ठेगाना जस्ता संवेदनशील कुरा आदान-प्रदान भएको हुन
+/// सक्ने) र request doc मा cache भएका फोन नम्बर (workerPhone/employerPhone)
+/// मेटाउने। Messages tab मा भने यो conversation row — कोसँग काम भएको थियो
+/// भन्ने साधारण record/history — रहिरहन्छ; त्यसभित्रको संवेदनशील विवरण
+/// मात्र हट्छ (`lastMessage` पनि मेटिने भएकोले त्यो row अब chat snippet
+/// होइन, सेवा-नाम मात्र देखाउँछ)। Call-signaling बाट पनि (सामान्यतया
+/// CallService ले प्रत्येक कल सकिनासाथ आफैं सफा गर्छ, तर safety-net) बाँकी
+/// रहन सक्ने कुनै `calls/{id}` doc हटाइन्छ।
+Future<void> purgeSensitiveDataOnCompletion(String docId) async {
+  try {
+    final msgs = await FirebaseFirestore.instance
+        .collection('chats')
+        .doc(docId)
+        .collection('messages')
+        .get();
+    final batch = FirebaseFirestore.instance.batch();
+    for (final m in msgs.docs) {
+      batch.delete(m.reference);
+    }
+    batch.set(
+      FirebaseFirestore.instance.collection('serviceRequests').doc(docId),
+      {
+        'workerPhone': FieldValue.delete(),
+        'employerPhone': FieldValue.delete(),
+        'lastMessage': FieldValue.delete(),
+        'chatClearedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+    await batch.commit();
+    await FirebaseFirestore.instance.collection('calls').doc(docId).delete();
+  } catch (_) {
+    // सफाइ असफल भए पनि काम "completed" भइसकेको छ — payment flow यसले रोक्दैन।
+  }
+}
+
 /// Employer ले कामदारको counter-offer (workerCounterPrice) Accept गर्दा —
 /// `request_tracking_screen.dart` र `bookings_screen.dart` दुवैले यही एउटा
 /// साझा function बोलाउँछन् (post-acceptance flow दुईतिर नदोहोरियोस् भनेर)।

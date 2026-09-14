@@ -117,7 +117,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     if (r.ok) {
       final target = LatLng(r.lat!, r.lng!);
       setState(() => _center = target);
-      await _map?.animateCamera(CameraUpdate.newLatLngZoom(target, 16));
+      await _map?.animateCamera(CameraUpdate.newLatLngZoom(target, 17.5));
       _reverseGeocode();
     } else {
       setState(() => _loadingAddr = false);
@@ -152,7 +152,10 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         alignment: Alignment.center,
         children: [
           GoogleMap(
-            initialCameraPosition: CameraPosition(target: _center, zoom: 15),
+            // Close-up — घर/क्षेत्रको ~50-100m वरपर प्रष्ट देखिने गरी ठ्याक्कै
+            // ठाउँ छान्न सजिलो होस्।
+            initialCameraPosition:
+                CameraPosition(target: _center, zoom: 17.5),
             onMapCreated: (c) => _map = c,
             onCameraMove: (p) => _center = p.target,
             onCameraIdle: _onIdle,

@@ -365,6 +365,7 @@ class BookingsScreen extends StatelessWidget {
                                                   workerName:
                                                       data['workerName'] ??
                                                           'Worker',
+                                                  initialStatus: status,
                                                 ),
                                               ),
                                             ),

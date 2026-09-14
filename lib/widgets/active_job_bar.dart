@@ -329,6 +329,9 @@ class ActiveJobBar extends StatelessWidget {
                             builder: (_) => ChatScreen(
                               requestId: requestId,
                               workerName: otherName,
+                              // यो bar सधैँ active job (accepted/confirmed/
+                              // in_progress) कै लागि मात्र देखिन्छ।
+                              initialStatus: 'accepted',
                             ),
                           ),
                         ),

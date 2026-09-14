@@ -29,21 +29,41 @@ class ChatScreen extends StatefulWidget {
   /// अर्को व्यक्तिको देखाउने नाम।
   final String workerName;
 
+  /// caller लाई पहिल्यै थाहा भएको request status (दिए) — पहिलो Firestore
+  /// snapshot नआएसम्म call बटन/input bar झिम्किएर लुकेर फेरि नदेखियोस्
+  /// (flash) भनेर। caller ले नदिए (null) पहिलो snapshot नआएसम्म सुरक्षित
+  /// default (locked) मानिन्छ।
+  final String? initialStatus;
+
   const ChatScreen({
     super.key,
     required this.requestId,
     required this.workerName,
+    this.initialStatus,
   });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
+/// Call/Message दुवै यही set भित्रको status मा मात्र सक्रिय — Pre-Acceptance
+/// Security (worker ले Accept नगरेसम्म) र Post-Completion (काम सकिएपछि)
+/// दुवै नियम यही एउटा गेटले पूरा गर्छ। `main_container.dart` कै
+/// `_activeJobStatuses` सँगै मिल्ने convention।
+const _kChatActiveStatuses = {'accepted', 'confirmed', 'in_progress'};
+
 class _ChatScreenState extends State<ChatScreen> {
   final _controller = TextEditingController();
   final _scroll = ScrollController();
   bool _recordingVoice = false;
   bool _canSend = false;
+  // requestId कै live status — काम अझै accept नभएको (theoretically यहाँसम्म
+  // कहिल्यै आइपुग्नु हुँदैन, तर defence-in-depth) वा completed भइसकेको भए
+  // call/message दुवै लक हुन्छन्; पहिलो snapshot नआएसम्म पनि (सुरक्षित
+  // default) लक्ड नै मानिन्छ।
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statusSub;
+  late String? _requestStatus = widget.initialStatus;
+  bool get _chatActive => _kChatActiveStatuses.contains(_requestStatus);
   // कल बटन थिचेपछि CallScreen तुरुन्तै (उही frame मा) push हुन्छ — कुनै
   // network round-trip पर्खिनु पर्दैन, त्यसैले छुट्टै "busy" spinner
   // चाहिँदैन। `_inCall` ले मात्र double-tap (दुइटा CallScreen एकैचोटि
@@ -71,6 +91,14 @@ class _ChatScreenState extends State<ChatScreen> {
     _markRead();
     _otherPartyUid().then((uid) {
       if (mounted && uid != null) setState(() => _otherUid = uid);
+    });
+    _statusSub = FirebaseFirestore.instance
+        .collection('serviceRequests')
+        .doc(widget.requestId)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      setState(() => _requestStatus = (snap.data()?['status'])?.toString());
     });
   }
 
@@ -186,6 +214,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _controller.dispose();
     _scroll.dispose();
+    _statusSub?.cancel();
     super.dispose();
   }
 
@@ -352,17 +381,21 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
-          _CallBtn(
-            key: const ValueKey('audioCallBtn'),
-            icon: Icons.call_rounded,
-            onTap: () => _startCall(video: false),
-          ),
-          _CallBtn(
-            key: const ValueKey('videoCallBtn'),
-            icon: Icons.videocam_rounded,
-            onTap: () => _startCall(video: true),
-          ),
-          const SizedBox(width: 6),
+          // Pre-Acceptance/Post-Completion Security — request active
+          // (accepted/confirmed/in_progress) नभएसम्म कल बटन नै नदेखिने।
+          if (_chatActive) ...[
+            _CallBtn(
+              key: const ValueKey('audioCallBtn'),
+              icon: Icons.call_rounded,
+              onTap: () => _startCall(video: false),
+            ),
+            _CallBtn(
+              key: const ValueKey('videoCallBtn'),
+              icon: Icons.videocam_rounded,
+              onTap: () => _startCall(video: true),
+            ),
+            const SizedBox(width: 6),
+          ],
         ],
       ),
       body: Column(
@@ -483,7 +516,35 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
           ),
-          _inputBar(theme),
+          _chatActive ? _inputBar(theme) : _lockedBanner(theme),
+        ],
+      ),
+    );
+  }
+
+  /// Request active नरहेको बेला (Accept हुनुअघि, वा काम completed भइसकेपछि)
+  /// इनपुट/कल दुवैको सट्टा देखिने read-only सूचना पट्टी।
+  Widget _lockedBanner(ThemeData theme) {
+    final completed = _requestStatus == 'completed';
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+          16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(top: BorderSide(color: theme.dividerColor)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.lock_outline_rounded,
+              size: 18, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              completed ? S.chatLockedCompleted : S.contactLockedCaption,
+              style: TextStyle(
+                  fontSize: 12.5, color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
         ],
       ),
     );

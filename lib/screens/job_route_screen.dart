@@ -387,6 +387,9 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
                               builder: (_) => ChatScreen(
                                 requestId: widget.requestId,
                                 workerName: widget.employerName,
+                                // यो screen सधैँ accept भइसकेको काम (worker
+                                // route मा) कै लागि मात्र खुल्छ।
+                                initialStatus: 'accepted',
                               ),
                             ),
                           ),

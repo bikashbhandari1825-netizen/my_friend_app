@@ -223,6 +223,9 @@ class S {
   static String get serviceRequestSentTitle =>
       _t('service_request_sent_title');
   static String get serviceRequestSentBody => _t('service_request_sent_body');
+  static String get contactLockedCaption => _t('contact_locked_caption');
+  static String get openChatLabel => _t('open_chat_label');
+  static String get chatLockedCompleted => _t('chat_locked_completed');
 
   // ── Nearby / bidding ─────────────────────────────────────
   static String get nearbyTitle => _t('nearby_title');
@@ -926,6 +929,20 @@ class S {
       'en':
           'Your service request has been sent successfully. The worker will accept it soon!',
       'ne': 'तपाईंको सेवा अनुरोध सफलतापूर्वक पठाइयो। कामदारले चाँडै स्वीकार गर्नेछन्!'
+    },
+    'contact_locked_caption': {
+      'en': 'Call & Message unlock once your request is accepted',
+      'ne': 'तपाईंको अनुरोध स्वीकार भएपछि मात्र कल र म्यासेज उपलब्ध हुन्छ'
+    },
+    'open_chat_label': {
+      'en': 'Tap to chat',
+      'ne': 'कुराकानी गर्न ट्याप गर्नुहोस्'
+    },
+    'chat_locked_completed': {
+      'en':
+          'This job is completed. Chat & calls are closed — see History for your records.',
+      'ne':
+          'यो काम सकिएको छ। च्याट र कल बन्द छन् — तपाईंको रेकर्ड History मा हेर्नुहोस्।'
     },
     'nearby_title': {'en': 'Nearby workers', 'ne': 'नजिकका कामदार'},
     'find_nearby': {
