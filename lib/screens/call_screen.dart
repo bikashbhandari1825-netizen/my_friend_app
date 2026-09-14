@@ -1,7 +1,15 @@
 // screens/call_screen.dart
 // एपभित्रैको full-screen WebRTC कल UI — remote video full-bleed, local PiP,
 // mic / camera / flip / hang-up नियन्त्रण। कुनै browser redirect छैन।
-import 'dart:async' show unawaited;
+//
+// Incoming कल पनि यही एउटै स्क्रिनको भाग हो (`needsAcceptance: true`) — छुट्टै
+// सानो `AlertDialog` (पहिले जस्तो, map/chat माथि टाँसिएर "messy overlay"
+// देखिने र Accept थिचेपछि दोस्रोपटक फेरि Navigator.push गर्दा कहिलेकाहीं
+// map मा बाउन्स-ब्याक हुने) होइन। एउटै full-screen route भित्रै "Accept
+// नगरेसम्म" (ringing UI + ठूला Accept/Decline बटन) देखाउँछ, Accept थिचेपछि
+// त्यही स्क्रिनमै (कुनै दोस्रो push/pop नगरी) साँचो कल सुरु हुन्छ — यसैले
+// "pop back / crash on accept" जस्तो navigation race सम्भवै छैन।
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -29,6 +37,11 @@ class CallScreen extends StatefulWidget {
   /// नभए (खाली) badge नै नदेखिने — कल आफैं यसबिना पनि सामान्य चल्छ।
   final String otherUid;
 
+  /// true = यो screen आउँदो कलको हो र callee ले अझै Accept/Decline गर्नुपर्छ
+  /// — त्यसबेलासम्म WebRTC session (`_s.start()`) सुरुै हुँदैन, केवल पूर्ण
+  /// पर्दाको ringing UI देखिन्छ। isCaller (आफैं कल गर्दा) मा यो सधैं false।
+  final bool needsAcceptance;
+
   const CallScreen({
     super.key,
     required this.requestId,
@@ -37,6 +50,7 @@ class CallScreen extends StatefulWidget {
     required this.video,
     required this.isCaller,
     this.otherUid = '',
+    this.needsAcceptance = false,
   });
 
   @override
@@ -58,9 +72,27 @@ class _CallScreenState extends State<CallScreen>
   // guard प्रयोग गर्छन्, ताकि Navigator.pop() दुइपटक नचलोस्।
   bool _closing = false;
 
-  // "Ring, ring…" indicator — जोडिनअघि (ringing/connecting) placeholder
-  // avatar वरिपरि radar-जस्तो pulse (नक्सा/searching screen मै प्रयोग हुने
-  // उही `PulseRings` — एपभरि एउटै भाषा)।
+  // Accept नगरेसम्म true — त्यतिञ्जेल ठूलो ringing UI (Accept/Decline बटन
+  // सहित) देखिन्छ, WebRTC session सुरुै हुँदैन। needsAcceptance नभएको
+  // (outgoing कल) मा सुरुदेखि नै false।
+  late bool _awaitingAccept = widget.needsAcceptance;
+  // `_s.start()` साँच्चै एकपटक भए मात्र true — dispose() मा `_s.hangUp()`
+  // (track/PC/renderer cleanup) यही भए मात्र चलाउने। Accept नगरी Decline
+  // गरे session कहिल्यै सुरुै नभएकोले त्यो cleanup चलाउनु आवश्यक पर्दैन, र
+  // चलाए पनि (`hangUp()` भित्रैको batch-write) `resetSignal()` ले भर्खरै
+  // मेटेको call doc लाई फेरि `{status:'ended'}` सहित पुनः-सिर्जना गर्ने
+  // race हुन्थ्यो।
+  bool _sessionStarted = false;
+
+  // Accept नगरेसम्म — caller आफैंले कल काटिदिए (मन फेरे/गल्तिले थिचे) यो
+  // स्क्रिन आफैं बन्द होस् र फेरि नबजोस् भनेर call doc हेर्ने हल्का watcher।
+  // Accept गरेपछि यो चाहिँदैन (त्यसपछि `CallSession.start()` भित्रकै
+  // आफ्नै doc-listener ले यही काम गर्छ)।
+  StreamSubscription<Map<String, dynamic>?>? _preAcceptSub;
+
+  // "Ring, ring…" indicator — जोडिनअघि (ringing/connecting/awaiting-accept)
+  // placeholder avatar वरिपरि radar-जस्तो pulse (नक्सा/searching screen मै
+  // प्रयोग हुने उही `PulseRings` — एपभरि एउटै भाषा)।
   late final AnimationController _ringPulse = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1800),
@@ -70,10 +102,22 @@ class _CallScreenState extends State<CallScreen>
   void initState() {
     super.initState();
     _s.status.addListener(_onStatusChanged);
-    _boot();
+    if (_awaitingAccept) {
+      RingtoneService.playIncoming();
+      _preAcceptSub = CallService.watch(widget.requestId).listen((c) {
+        final status = (c?['status'] ?? '').toString();
+        if ((c == null || status == 'ended') && _awaitingAccept && mounted) {
+          RingtoneService.stop();
+          Navigator.of(context).pop();
+        }
+      });
+    } else {
+      _boot();
+    }
   }
 
   Future<void> _boot() async {
+    _sessionStarted = true;
     try {
       await _s.start();
     } catch (e) {
@@ -83,6 +127,26 @@ class _CallScreenState extends State<CallScreen>
         _permissionDenied = e is CallPermissionDenied;
       });
     }
+  }
+
+  /// Accept बटन — ringing UI तुरुन्तै हट्छ (उही स्क्रिनमै), अनि साँचो WebRTC
+  /// session सुरु हुन्छ। कुनै दोस्रो Navigator.push/pop छैन।
+  Future<void> _acceptIncoming() async {
+    if (!_awaitingAccept) return;
+    await _preAcceptSub?.cancel();
+    RingtoneService.stop();
+    setState(() => _awaitingAccept = false);
+    await _boot();
+  }
+
+  /// Decline बटन — session कहिल्यै सुरु नगरिकनै call doc मेटेर सिधै pop।
+  Future<void> _declineIncoming() async {
+    if (!_awaitingAccept || _closing) return;
+    _closing = true;
+    RingtoneService.stop();
+    await _preAcceptSub?.cancel();
+    unawaited(CallService.resetSignal(widget.requestId));
+    if (mounted) Navigator.of(context).pop();
   }
 
   /// Ring-back tone (caller मात्र, जबसम्म callee ले उठाउँदैन) + अर्को
@@ -110,12 +174,15 @@ class _CallScreenState extends State<CallScreen>
   @override
   void dispose() {
     _s.status.removeListener(_onStatusChanged);
+    _preAcceptSub?.cancel();
     _ringPulse.dispose();
     RingtoneService.stop();
     // fire-and-forget — dispose() आफैं async हुन सक्दैन, र यसलाई await
     // गर्नु पनि गलत हुन्थ्यो: screen पहिल्यै हटिसकेको छ, track stop/PC
-    // close/Firestore cleanup ले UI लाई कुनै हालतमा block नगरोस्।
-    unawaited(_s.hangUp());
+    // close/Firestore cleanup ले UI लाई कुनै हालतमा block नगरोस्। session
+    // साँच्चै सुरु भएकोमा मात्र — Accept नगरी बन्द भए यो चाहिँदैन (माथि
+    // `_sessionStarted` को doc हेर्नुहोस्)।
+    if (_sessionStarted) unawaited(_s.hangUp());
     super.dispose();
   }
 
@@ -136,16 +203,23 @@ class _CallScreenState extends State<CallScreen>
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _end();
+        if (didPop) return;
+        if (_awaitingAccept) {
+          _declineIncoming();
+        } else {
+          _end();
+        }
       },
       child: Scaffold(
         backgroundColor: const Color(0xFF10061E),
         // अनुमति अस्वीकृत भएमा साधारण कालो/अड्किएको स्क्रिन देखाउनुको सट्टा
         // स्पष्ट कारण + "Settings खोल्नुहोस्" बटन — प्रयोगकर्तालाई थाहा
         // होस् किन कल जोडिएन।
-        body: _permissionDenied
-            ? _permissionDeniedView()
-            : Stack(
+        body: _awaitingAccept
+            ? _incomingCallView()
+            : _permissionDenied
+                ? _permissionDeniedView()
+                : Stack(
                 children: [
                   // remote video / placeholder
                   Positioned.fill(
@@ -305,6 +379,135 @@ class _CallScreenState extends State<CallScreen>
                 ],
               ),
       ),
+    );
+  }
+
+  /// Accept नगरेसम्मको full-screen incoming-call UI — Instagram/Messenger
+  /// जस्तै: पूरा-पर्दा gradient, धड्किने avatar, ठूलो नाम, र तल ठूला
+  /// Accept/Decline बटन। कुनै सानो dialog/overlay होइन — यो आफैं स्वतन्त्र
+  /// full route हो, त्यसैले map/chat माथि "टाँसिएर" कहिल्यै overlap हुँदैन।
+  Widget _incomingCallView() {
+    final initial = widget.otherName.trim().isEmpty
+        ? '?'
+        : widget.otherName.trim()[0].toUpperCase();
+    return Container(
+      decoration: const BoxDecoration(gradient: AppColors.instaGradient),
+      child: SafeArea(
+        child: Column(
+          children: [
+            const SizedBox(height: 20),
+            Text(S.incomingCallTitle,
+                style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3)),
+            const Spacer(),
+            SizedBox(
+              width: 180,
+              height: 180,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  PulseRings(t: _ringPulse, color: Colors.white),
+                  Container(
+                    width: 150,
+                    height: 150,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Text(initial,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 58,
+                            fontWeight: FontWeight.w900)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(widget.otherName,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    shadows: [
+                      Shadow(color: Colors.black38, blurRadius: 10),
+                    ])),
+            const SizedBox(height: 6),
+            Text(widget.video ? S.videoCall : S.voiceCall,
+                style: const TextStyle(color: Colors.white70, fontSize: 15)),
+            if (widget.otherUid.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              OnlineBadge(uid: widget.otherUid, onDark: true),
+            ],
+            const Spacer(),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 40),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _bigCallBtn(
+                    icon: Icons.call_end_rounded,
+                    label: S.decline,
+                    color: AppColors.danger,
+                    onTap: _declineIncoming,
+                  ),
+                  _bigCallBtn(
+                    icon: widget.video
+                        ? Icons.videocam_rounded
+                        : Icons.call_rounded,
+                    label: S.accept,
+                    gradient: AppColors.buttonGradient,
+                    onTap: _acceptIncoming,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _bigCallBtn({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    Color? color,
+    Gradient? gradient,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SpringTap(
+          onTap: onTap,
+          pressedScale: 0.88,
+          child: Container(
+            width: 78,
+            height: 78,
+            decoration: BoxDecoration(
+              color: color,
+              gradient: gradient,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                    color: (color ?? AppColors.igPink).withValues(alpha: 0.5),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6)),
+              ],
+            ),
+            child: Icon(icon, color: Colors.white, size: 32),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(label,
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+      ],
     );
   }
 

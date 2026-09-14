@@ -15,7 +15,6 @@ import '../app_globals.dart';
 import '../l10n/strings.dart';
 import '../services/call_service.dart';
 import '../services/presence_service.dart';
-import '../services/ringtone_service.dart';
 import '../theme/app_theme.dart';
 import '../watchlist_screen.dart';
 import '../widgets/active_job_bar.dart';
@@ -165,6 +164,15 @@ class _MainContainerState extends State<MainContainer> {
     );
   }
 
+  /// आउँदो कल — सिधै full-screen `CallScreen` (needsAcceptance: true) push
+  /// गर्ने, कुनै सानो `AlertDialog` होइन। त्यो dialog-आधारित पुरानो बाटोले
+  /// दुई ठाउँमा समस्या दिन्थ्यो: (१) साना overlay ले map/chat माथि टाँसिएर
+  /// "messy" देखिन्थ्यो, (२) Accept थिचेपछि dialog बन्द भएर फेरि छुट्टै
+  /// `Navigator.push` गर्दा (दुई अलग-अलग navigation event) कहिलेकाहीं
+  /// त्यसैको बीचमा कुनै कारणले (context stale, exception, आदि) map मा
+  /// फर्किन्थ्यो। अब एउटै route ले नै ringing UI र साँचो कल UI दुवै
+  /// सम्हाल्छ (CallScreen भित्रैको `_awaitingAccept` हेर्नुहोस्) — Accept ले
+  /// कहिल्यै दोस्रो push/pop गर्दैन, त्यसैले त्यो race सम्भवै छैन।
   Future<void> _showIncomingCall({
     required String requestId,
     required bool video,
@@ -172,68 +180,18 @@ class _MainContainerState extends State<MainContainer> {
     required String callerUid,
   }) async {
     _inCall = true;
-    unawaited(RingtoneService.playIncoming());
-    // Caller ले उठ्नुअघि नै कल काटिदिए (मन फेरे/गल्तिले थिचे) यो dialog
-    // आफैं बन्द होस् र फेरि नबज्ने — नत्र callee को फोन ringing dialog +
-    // ringtone सधैंलाई अडिरहन्थ्यो।
-    StreamSubscription<Map<String, dynamic>?>? cancelWatch;
-    cancelWatch = CallService.watch(requestId).listen((c) {
-      if (!mounted) return;
-      final status = (c?['status'] ?? '').toString();
-      if (c == null || status == 'ended') {
-        final nav = Navigator.of(context, rootNavigator: true);
-        if (nav.canPop()) nav.pop(false);
-      }
-    });
-    final accept = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        title: Row(children: [
-          Icon(video ? Icons.videocam_rounded : Icons.call_rounded,
-              color: AppColors.igViolet),
-          const SizedBox(width: 8),
-          Text(S.incomingCallTitle),
-        ]),
-        content: Text('$callerName  ·  ${video ? S.videoCall : S.voiceCall}'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(S.decline,
-                style: const TextStyle(color: AppColors.danger)),
-          ),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.success,
-                foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(context, true),
-            icon: const Icon(Icons.call_rounded, size: 18),
-            label: Text(S.accept),
-          ),
-        ],
+    await Navigator.of(context).push(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => CallScreen(
+        requestId: requestId,
+        otherName: callerName,
+        myName: _myName,
+        video: video,
+        isCaller: false,
+        otherUid: callerUid,
+        needsAcceptance: true,
       ),
-    );
-    await cancelWatch.cancel();
-    await RingtoneService.stop();
-    if (accept == true) {
-      if (!mounted) {
-        await CallService.resetSignal(requestId);
-      } else {
-        await Navigator.of(context).push(MaterialPageRoute(
-          fullscreenDialog: true,
-          builder: (_) => CallScreen(
-            requestId: requestId,
-            otherName: callerName,
-            myName: _myName,
-            video: video,
-            isCaller: false,
-            otherUid: callerUid,
-          ),
-        ));
-      }
-    } else {
-      await CallService.resetSignal(requestId);
-    }
+    ));
     _ringingHandledFor.remove(requestId);
     _inCall = false;
   }
