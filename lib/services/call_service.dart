@@ -167,7 +167,21 @@ class CallSession {
       // audio processing लागू नहुने!), जबकि यो array ढाँचालाई भने Android
       // ले सीधै KeyValuePair मा पार्स गर्छ र Flutter Web (dart_webrtc) ले
       // पनि यही ढाँचालाई विशेष रूपमा चिनेर flat W3C constraints मा उल्काउँछ।
-      'audio': {
+      // स्पष्ट रूपमा `<String, dynamic>` type — यो एकमात्र key
+      // (`optional`) भएको map literal लाई type inference ले आफैं
+      // `Map<String, List<Map<String, dynamic>>>` (साँघुरो, यही एउटा
+      // key कै value-type अनुसार) मान्थ्यो, `Map<String, dynamic>`
+      // होइन। Android मा त्यसले कहिल्यै असर गर्दैन (त्यो पूरै अलग,
+      // platform-channel बाटो प्रयोग गर्छ), तर Flutter Web
+      // (dart_webrtc) कै flattening logic ले पछि यही map माथि
+      // `.addAll(audioMap)` (bool/double मान भएको फरक-type map)
+      // गर्दा त्यही साँघुरो runtime-type सँग नमिली silently असफल
+      // हुन्थ्यो (आफ्नै try/catch ले निल्थ्यो, print मात्र) — अनि
+      // `optional` array कहिल्यै flatten नभई browser कै साँचो
+      // getUserMedia call मा त्यही अनमान्य ढाँचामै पुग्थ्यो, जुन
+      // "web मा कल accept गर्दा getUserMedia असफल" गुनासोको साँचो
+      // जड थियो।
+      'audio': <String, dynamic>{
         'optional': <Map<String, dynamic>>[
           {'echoCancellation': true},
           {'noiseSuppression': true},
