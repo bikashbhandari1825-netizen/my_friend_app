@@ -1,0 +1,11 @@
+{
+  "name": "kaammitra-release",
+  "private": true,
+  "description": "One-command release: bump versionCode, build the release APK, upload it to Firebase Storage, and publish config/appUpdate so testers get the in-app update prompt.",
+  "scripts": {
+    "release": "node release.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.6.0"
+  }
+}
