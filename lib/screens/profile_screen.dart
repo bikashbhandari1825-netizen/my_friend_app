@@ -240,6 +240,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   final role = data['role'] ?? '';
                   final service = (data['service'] ?? '').toString().trim();
                   final experience = data['experience'];
+                  final selfieUrl = (data['selfieUrl'] ?? '').toString();
 
                   String dobFormatted = '';
                   if (dob.toString().isNotEmpty) {
@@ -265,8 +266,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   radius: 35,
                                   backgroundImage: sessionProfilePhoto != null
                                       ? MemoryImage(sessionProfilePhoto!)
-                                      : null,
-                                  child: sessionProfilePhoto == null
+                                          as ImageProvider
+                                      : (selfieUrl.isNotEmpty
+                                          ? NetworkImage(selfieUrl)
+                                          : null),
+                                  child: sessionProfilePhoto == null &&
+                                          selfieUrl.isEmpty
                                       ? const Icon(Icons.person, size: 40)
                                       : null,
                                 ),

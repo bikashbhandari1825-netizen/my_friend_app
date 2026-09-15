@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import '../widgets/worker_avatar.dart';
 import 'worker_profile_screen.dart';
 
 // 13. Worker List Screen (Firestore बाट वास्तविक Approved Workers)
@@ -53,8 +54,8 @@ class WorkerListScreen extends StatelessWidget {
                 margin: const EdgeInsets.only(bottom: 12),
                 child: ListTile(
                   contentPadding: const EdgeInsets.all(12),
-                  leading:
-                      const CircleAvatar(radius: 25, child: Icon(Icons.person)),
+                  leading: WorkerAvatar(
+                      uid: (data['uid'] ?? '').toString(), size: 50),
                   title: Text(data['name'] ?? '',
                       style: const TextStyle(fontWeight: FontWeight.bold)),
                   subtitle: Column(

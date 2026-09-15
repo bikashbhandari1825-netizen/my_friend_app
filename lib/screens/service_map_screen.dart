@@ -15,6 +15,7 @@ import '../l10n/strings.dart';
 import '../location_util.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/worker_avatar.dart';
 import 'nearby_common.dart';
 import 'request_tracking_screen.dart';
 import 'worker_profile_screen.dart';
@@ -503,6 +504,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                                 final selected = r.id == _selId;
                                 final name = (r.data['name'] ?? '—').toString();
                                 return _WorkerChip(
+                                  uid: r.id,
                                   name: name,
                                   distanceKm: r.km,
                                   serviceType: widget.serviceType,
@@ -661,12 +663,14 @@ class _StepBtn extends StatelessWidget {
 // ── तल्लो horizontal सूचीको एउटा worker कार्ड — नक्सामा कुनै pin नभई
 // यहींबाट tap गरेर details card खोल्ने/बन्द गर्ने ──
 class _WorkerChip extends StatelessWidget {
+  final String uid;
   final String name;
   final double distanceKm;
   final String serviceType;
   final bool selected;
   final VoidCallback onTap;
   const _WorkerChip({
+    required this.uid,
     required this.name,
     required this.distanceKm,
     required this.serviceType,
@@ -696,10 +700,11 @@ class _WorkerChip extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircleAvatar(
-              radius: 16,
+            WorkerAvatar(
+              uid: uid,
+              size: 32,
               backgroundColor: color.withValues(alpha: 0.18),
-              child: Icon(Icons.engineering_rounded, color: color, size: 18),
+              iconColor: color,
             ),
             const SizedBox(height: 4),
             Text(
@@ -858,12 +863,12 @@ class _ProviderCard extends StatelessWidget {
             children: [
               Stack(
                 children: [
-                  CircleAvatar(
-                    radius: 24,
+                  WorkerAvatar(
+                    uid: workerId,
+                    size: 48,
                     backgroundColor:
                         serviceMarkerColor(serviceType).withValues(alpha: 0.15),
-                    child: Icon(Icons.engineering_rounded,
-                        color: serviceMarkerColor(serviceType), size: 26),
+                    iconColor: serviceMarkerColor(serviceType),
                   ),
                   if (online)
                     const Positioned(

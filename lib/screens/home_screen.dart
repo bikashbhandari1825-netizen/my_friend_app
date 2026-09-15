@@ -1330,6 +1330,7 @@ class _HomeDrawer extends StatelessWidget {
                   .trim();
               final role = (data['role'] ?? '').toString();
               final isWorker = role == 'worker';
+              final selfieUrl = (data['selfieUrl'] ?? '').toString();
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1346,8 +1347,18 @@ class _HomeDrawer extends StatelessWidget {
                             color: Colors.white.withValues(alpha: 0.22),
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(Icons.person_rounded,
-                              color: Colors.white, size: 30),
+                          clipBehavior: Clip.antiAlias,
+                          child: selfieUrl.isEmpty
+                              ? const Icon(Icons.person_rounded,
+                                  color: Colors.white, size: 30)
+                              : Image.network(
+                                  selfieUrl,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => const Icon(
+                                      Icons.person_rounded,
+                                      color: Colors.white,
+                                      size: 30),
+                                ),
                         ),
                         const SizedBox(width: 14),
                         Expanded(

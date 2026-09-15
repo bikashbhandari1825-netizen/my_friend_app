@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'l10n/strings.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_ui.dart';
+import 'widgets/worker_avatar.dart';
 import 'screens/worker_profile_screen.dart';
 
 class WatchlistScreen extends StatelessWidget {
@@ -60,6 +61,7 @@ class WatchlistScreen extends StatelessWidget {
                   final rating = (d['rating'] ?? '5.0').toString();
 
                   return _WorkerCard(
+                    uid: (d['uid'] ?? '').toString(),
                     name: name,
                     service: service,
                     experience: experience,
@@ -93,6 +95,7 @@ class WatchlistScreen extends StatelessWidget {
 }
 
 class _WorkerCard extends StatelessWidget {
+  final String uid;
   final String name;
   final String service;
   final String experience;
@@ -102,6 +105,7 @@ class _WorkerCard extends StatelessWidget {
   final VoidCallback onTap;
 
   const _WorkerCard({
+    required this.uid,
     required this.name,
     required this.service,
     required this.experience,
@@ -126,11 +130,11 @@ class _WorkerCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  const CircleAvatar(
-                    radius: 22,
-                    backgroundColor: Color(0x22833AB4),
-                    child: Icon(Icons.person_rounded,
-                        color: AppColors.igViolet, size: 24),
+                  WorkerAvatar(
+                    uid: uid,
+                    size: 44,
+                    backgroundColor: const Color(0x22833AB4),
+                    iconColor: AppColors.igViolet,
                   ),
                   const SizedBox(width: 12),
                   Expanded(

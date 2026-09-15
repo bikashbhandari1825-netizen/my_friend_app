@@ -13,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/worker_avatar.dart';
 import '../widgets/worker_stats.dart';
 import 'chat_screen.dart';
 import 'portfolio_screen.dart';
@@ -169,8 +170,13 @@ class WorkerProfileScreen extends StatelessWidget {
                                 offset: const Offset(0, 8)),
                           ],
                         ),
-                        child: const Icon(Icons.person_rounded,
-                            size: 58, color: AppColors.igViolet),
+                        padding: const EdgeInsets.all(3),
+                        child: WorkerAvatar(
+                          uid: uid,
+                          size: 98,
+                          backgroundColor: Colors.white,
+                          iconColor: AppColors.igViolet,
+                        ),
                       ),
                       const SizedBox(height: 14),
                       Text(name,

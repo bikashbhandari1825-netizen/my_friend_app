@@ -10,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/worker_avatar.dart';
 import 'nearby_common.dart';
 
 class NearbyScreen extends StatefulWidget {
@@ -321,7 +322,7 @@ class _WorkerCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const LimeIconBadge(Icons.person, size: 48),
+              WorkerAvatar(uid: workerId, size: 48),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

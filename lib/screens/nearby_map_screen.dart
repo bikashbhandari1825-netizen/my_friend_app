@@ -11,6 +11,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/worker_avatar.dart';
 import 'nearby_common.dart';
 import 'nearby_screen.dart';
 
@@ -326,7 +327,7 @@ class _WorkerSheet extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const LimeIconBadge(Icons.person, size: 44),
+              WorkerAvatar(uid: workerId, size: 44),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

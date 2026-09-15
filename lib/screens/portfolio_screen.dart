@@ -135,9 +135,12 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
 
     final db = FirebaseFirestore.instance;
     for (final c in ['providers', 'users', 'registeredWorkers']) {
+      // `url` छ्यानल्ट पछिको दुबै सम्भावित स्रोतबाट हटाउने — पोर्टफोलियोमा
+      // `_addPhoto()` ले थपेको वा registration बेलाको certificate, दुवै।
       await db.collection(c).doc(_uid).set(
         {
-          'portfolioUrls': FieldValue.arrayRemove([url])
+          'portfolioUrls': FieldValue.arrayRemove([url]),
+          'certificateUrls': FieldValue.arrayRemove([url]),
         },
         SetOptions(merge: true),
       );
@@ -195,10 +198,18 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                       .doc(_uid)
                       .snapshots(),
                   builder: (context, snap) {
-                    final urls =
-                        ((snap.data?.data()?['portfolioUrls'] as List?) ??
-                                const [])
-                            .cast<String>();
+                    final doc = snap.data?.data() ?? const {};
+                    // Registration बेला upload भएका "certificate/work photo"
+                    // हरू पनि यहीं देखियोस् भनेर — पहिले यी `certificateUrls`
+                    // मा मात्र बस्थे, `_addPhoto()` ले लेख्ने छुट्टै
+                    // `portfolioUrls` मा कहिल्यै नआउने भएकोले गर्दा हरेक
+                    // नयाँ worker को portfolio सधैं "खाली" देखिन्थ्यो।
+                    final urls = <String>{
+                      ...((doc['portfolioUrls'] as List?) ?? const [])
+                          .cast<String>(),
+                      ...((doc['certificateUrls'] as List?) ?? const [])
+                          .cast<String>(),
+                    }.toList();
 
                     if (urls.isEmpty && !_editable) {
                       return Center(

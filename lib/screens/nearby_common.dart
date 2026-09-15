@@ -13,6 +13,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/worker_avatar.dart';
 
 // काठमाडौँ केन्द्र — location नपाउँदा fallback।
 const double fallbackLat = 27.7172;
@@ -1001,7 +1002,8 @@ class _OfferSheetState extends State<OfferSheet> {
             const SizedBox(height: 16),
             Row(
               children: [
-                const LimeIconBadge(Icons.person, size: 42),
+                WorkerAvatar(
+                    uid: (widget.data['uid'] ?? '').toString(), size: 42),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
