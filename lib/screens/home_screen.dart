@@ -1260,9 +1260,20 @@ class _HomeDrawer extends StatelessWidget {
     final uid = user?.uid;
     final isOwner = user?.email == _ownerEmail;
 
+    // Drawer बाट खोलिएको जुनसुकै sub-screen (City, Bookings, Settings,
+    // Help & Support, आदि) बाट back थिच्दा सिधै "खाली" नक्सामा नखसेर, फेरि
+    // यही menu (Drawer) मा नै फर्कियोस् भनेर — pop गर्नुअघि यो Home Scaffold
+    // को ScaffoldState समातेर राख्ने, अनि pushed page pop भएपछि (Future
+    // complete हुँदा) त्यही Drawer फेरि खोल्ने। यसरी "sub-menu बाट back ->
+    // सिधै home map मा पुग्ने" गुनासो हट्छ — प्रयोगकर्ताले सधैं अघिल्लो
+    // menu मै फर्किएको महसुस गर्छन्, नक्सा होइन।
     void go(Widget page) {
-      Navigator.pop(context);
-      Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+      final scaffold = Scaffold.of(context);
+      scaffold.closeDrawer();
+      Navigator.push(context, MaterialPageRoute(builder: (_) => page))
+          .then((_) {
+        if (scaffold.mounted) scaffold.openDrawer();
+      });
     }
 
     // gradient panel माथिको glass menu button
