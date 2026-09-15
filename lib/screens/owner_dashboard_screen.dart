@@ -447,7 +447,11 @@ class OwnerDashboardScreen extends StatelessWidget {
           flexibleSpace: const DecoratedBox(
             decoration: BoxDecoration(gradient: AppColors.buttonGradient),
           ),
-          actions: const [_SupportNumberButton(), _NotifBell()],
+          actions: const [
+            _SupportNumberButton(),
+            _AppUpdateButton(),
+            _NotifBell(),
+          ],
           bottom: const TabBar(
             isScrollable: true,
             labelColor: Colors.white,
@@ -521,6 +525,105 @@ class _SupportNumberButton extends StatelessWidget {
     return IconButton(
       icon: const Icon(Icons.contact_phone_outlined),
       tooltip: S.editSupportNumber,
+      onPressed: () => _edit(context),
+    );
+  }
+}
+
+/// In-app auto-update — नयाँ APK release publish गर्ने (`config/appUpdate`,
+/// `services/app_update_service.dart` ले app startup मा पढ्छ)। testerहरूले
+/// यहाँ owner ले भरेको versionCode भन्दा पुरानो APK चलाइरहेको भेटिए, आफैं
+/// एप भित्रैबाट download+install गर्न पाउँछन्।
+class _AppUpdateButton extends StatelessWidget {
+  const _AppUpdateButton();
+
+  Future<void> _edit(BuildContext context) async {
+    final current = await AppUpdateConfig.readOnce();
+    if (!context.mounted) return;
+    final codeCtrl = TextEditingController(
+        text: (current?['latestVersionCode'] ?? '').toString());
+    final nameCtrl =
+        TextEditingController(text: (current?['versionName'] ?? '').toString());
+    final urlCtrl =
+        TextEditingController(text: (current?['apkUrl'] ?? '').toString());
+    final notesCtrl = TextEditingController(
+        text: (current?['releaseNotes'] ?? '').toString());
+    var force = current?['forceUpdate'] == true;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('App Update'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: codeCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                      labelText: 'Latest version code (integer, e.g. 2)'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'Version name (e.g. 1.1.0)'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: urlCtrl,
+                  decoration:
+                      const InputDecoration(labelText: 'APK download URL'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: notesCtrl,
+                  minLines: 2,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                      labelText: 'Release notes (optional)'),
+                ),
+                const SizedBox(height: 6),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: force,
+                  onChanged: (v) => setState(() => force = v ?? false),
+                  title: const Text('Force update (block "Later")'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: Text(S.cancel)),
+            ElevatedButton(
+              onPressed: () async {
+                final code = int.tryParse(codeCtrl.text.trim());
+                if (code == null || urlCtrl.text.trim().isEmpty) return;
+                await AppUpdateConfig.publish(
+                  latestVersionCode: code,
+                  versionName: nameCtrl.text,
+                  apkUrl: urlCtrl.text,
+                  releaseNotes: notesCtrl.text,
+                  forceUpdate: force,
+                );
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: Text(S.save),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: const Icon(Icons.system_update_rounded),
+      tooltip: 'App update',
       onPressed: () => _edit(context),
     );
   }
@@ -781,7 +884,8 @@ Widget _workerApplicationBody(BuildContext context, Map<String, dynamic> data) {
       if ((data['drivingLicenseUrl'] ?? '').toString().isNotEmpty ||
           (data['vehicleRegistrationUrl'] ?? '').toString().isNotEmpty) ...[
         const SizedBox(height: 10),
-        Text('Driver documents (${data['vehicleType'] ?? data['service'] ?? ''})',
+        Text(
+            'Driver documents (${data['vehicleType'] ?? data['service'] ?? ''})',
             style: Theme.of(context)
                 .textTheme
                 .bodySmall
@@ -818,8 +922,7 @@ Widget _workerApplicationBody(BuildContext context, Map<String, dynamic> data) {
           spacing: 8,
           runSpacing: 8,
           children: [
-            for (final c
-                in ((data['certificateUrls'] as List?) ?? const []))
+            for (final c in ((data['certificateUrls'] as List?) ?? const []))
               SizedBox(
                 width: 90,
                 child: _LabeledPreview(label: 'Cert', url: c.toString()),
@@ -1014,8 +1117,8 @@ class _HistoryTabState extends State<_HistoryTab> {
                 }
                 return const Center(child: CircularProgressIndicator());
               }
-              var docs = [...snap.data!.docs]
-                ..sort((a, b) => _sortKey(b.data()).compareTo(_sortKey(a.data())));
+              var docs = [...snap.data!.docs]..sort(
+                  (a, b) => _sortKey(b.data()).compareTo(_sortKey(a.data())));
 
               if (_query.isNotEmpty) {
                 docs = docs.where((d) {
@@ -1047,8 +1150,7 @@ class _HistoryTabState extends State<_HistoryTab> {
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 24),
                 itemCount: docs.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, i) =>
-                    _HistoryCard(data: docs[i].data()),
+                itemBuilder: (context, i) => _HistoryCard(data: docs[i].data()),
               );
             },
           ),
@@ -1064,8 +1166,7 @@ class _HistoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name =
-        '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}'.trim();
+    final name = '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}'.trim();
     final status =
         (data['status'] ?? data['verificationStatus'] ?? '—').toString();
     final Color pillColor = switch (status) {

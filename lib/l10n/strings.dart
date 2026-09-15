@@ -505,6 +505,23 @@ class S {
   static String get workerBusyWithOtherJob => _t('worker_busy_with_other_job');
   static String get finishCurrentJobFirst => _t('finish_current_job_first');
 
+  // ── In-app auto-update ──────────────────────────────────
+  static String get updateAvailableTitle => _t('update_available_title');
+  static String updateAvailableBody(String versionName) {
+    final v = versionName.isEmpty
+        ? ''
+        : (isNepali ? '$versionName ' : 'v$versionName ');
+    return isNepali
+        ? 'नयाँ संस्करण $vउपलब्ध छ। अपडेट गर्नुहोस्।'
+        : 'A new version ${v}is available. Update now for the latest fixes.';
+  }
+
+  static String get updateNow => _t('update_now');
+  static String get updateLater => _t('update_later');
+  static String get downloadingUpdate => _t('downloading_update');
+  static String get updateDownloadFailed => _t('update_download_failed');
+  static String get installUpdate => _t('install_update');
+
   // ── Canonical job status labels ────────────────────────
   static String get statusSearching => _t('status_searching');
   static String get statusNew => _t('status_new');
@@ -1443,6 +1460,21 @@ class S {
       'en': 'Finish your current job first',
       'ne': 'पहिले तपाईंको हालको काम सक्नुहोस्',
     },
+    'update_available_title': {
+      'en': 'Update available',
+      'ne': 'अपडेट उपलब्ध छ',
+    },
+    'update_now': {'en': 'Update now', 'ne': 'अहिले अपडेट गर्नुहोस्'},
+    'update_later': {'en': 'Later', 'ne': 'पछि'},
+    'downloading_update': {
+      'en': 'Downloading update…',
+      'ne': 'अपडेट डाउनलोड हुँदैछ…',
+    },
+    'update_download_failed': {
+      'en': 'Download failed. Please check your connection and try again.',
+      'ne': 'डाउनलोड असफल भयो। इन्टरनेट जाँचेर फेरि प्रयास गर्नुहोस्।',
+    },
+    'install_update': {'en': 'Install', 'ne': 'स्थापना गर्नुहोस्'},
     'status_searching': {'en': 'Searching', 'ne': 'खोज्दै'},
     'status_new': {'en': 'New request', 'ne': 'नयाँ अनुरोध'},
     'status_counter': {'en': 'Counter-offer', 'ne': 'नयाँ मूल्य'},

@@ -11,6 +11,7 @@ import 'app.dart';
 import 'app_globals.dart';
 import 'firebase_options.dart';
 import 'prefs.dart';
+import 'services/app_update_service.dart';
 import 'services/push_notification_service.dart';
 
 // साझा State/Helper र सबै स्क्रिन — पुराना relative import सँग compatibility को लागि
@@ -86,4 +87,13 @@ void main() async {
 
   await Prefs.load(); // save गरेको theme/भाषा/notification setting फेरि लोड
   runApp(const KaamMitraApp());
+
+  // App startup मा एकपटक — पहिलो frame render भइसकेपछि (rootNavigatorKey
+  // को context तब मात्र उपलब्ध हुन्छ), auto-update जाँच्ने। Login भए/नभए
+  // दुवै अवस्थामा चल्छ (Firestore `config/*` सार्वजनिक-पढ्न मिल्ने), ताकि
+  // tester ले login गर्नुअघि नै नयाँ APK उपलब्ध छ भन्ने थाहा पाओस्।
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final ctx = rootNavigatorKey.currentContext;
+    if (ctx != null) AppUpdateService.checkForUpdate(ctx);
+  });
 }

@@ -63,3 +63,42 @@ class SupportConfig {
         SetOptions(merge: true),
       );
 }
+
+/// In-app auto-update checker (Android APK) — Firestore: config/appUpdate
+/// { latestVersionCode: int, versionName: string, apkUrl: string,
+///   releaseNotes: string, forceUpdate: bool }
+/// `services/app_update_service.dart` ले app startup मा यही doc पढेर हालको
+/// installed versionCode सँग तुलना गर्छ — Admin Dashboard बाट owner ले नयाँ
+/// APK release गर्दा यहीं update गर्नुपर्छ (Firebase Console बाट पनि मिल्छ)।
+class AppUpdateConfig {
+  AppUpdateConfig._();
+
+  static final _doc =
+      FirebaseFirestore.instance.collection('config').doc('appUpdate');
+
+  static Future<Map<String, dynamic>?> readOnce() async {
+    final s = await _doc.get();
+    return s.data();
+  }
+
+  static Stream<Map<String, dynamic>?> stream() =>
+      _doc.snapshots().map((s) => s.data());
+
+  /// Admin ले नयाँ release publish गर्दा — [apkUrl] Firebase Storage वा
+  /// अरू जुनसुकै सिधा-download URL हुन सक्छ।
+  static Future<void> publish({
+    required int latestVersionCode,
+    required String versionName,
+    required String apkUrl,
+    String releaseNotes = '',
+    bool forceUpdate = false,
+  }) =>
+      _doc.set({
+        'latestVersionCode': latestVersionCode,
+        'versionName': versionName.trim(),
+        'apkUrl': apkUrl.trim(),
+        'releaseNotes': releaseNotes.trim(),
+        'forceUpdate': forceUpdate,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+}
