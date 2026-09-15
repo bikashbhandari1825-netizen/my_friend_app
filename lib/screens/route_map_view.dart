@@ -19,11 +19,10 @@ import '../location_util.dart';
 import '../theme/app_theme.dart';
 import 'nearby_common.dart'
     show
-        bearingBetween,
         destinationFlagPin,
         haversineKm,
         kCleanMapStyle,
-        navigationArrowMarker,
+        pulseDotMarker,
         routePolyline,
         walkConnectorPolyline,
         RoadRoute,
@@ -90,52 +89,8 @@ class _RouteMapViewState extends State<RouteMapView>
     duration: const Duration(milliseconds: 1800),
   )..repeat();
 
-  // ── worker/vehicle marker: नयाँ GPS बिन्दु आउनेबित्तिकै तुरुन्तै नउफ्रिने
-  // (teleport), बरु navigation app जस्तै ~900ms मा सहज गरी सर्ने + दिशा
-  // (bearing) अनुसार घुम्ने। स्थान/दिशा दुवै `build()` भित्रैको
-  // `AnimatedBuilder` ले (यहाँ `setState` कहीं छैन — पहिले `onCameraMove`
-  // मा जस्तै हरेक frame मा पूरै widget rebuild हुने गल्ती यहाँ दोहोर्‍याइएको
-  // छैन) `_move.value` बाट live computed हुन्छन्; GoogleMap कै Camera-fit
-  // भने सधैँ साँचो (interpolate नभएको) `widget.origin` प्रयोग गर्छ।
-  late final AnimationController _move = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 900),
-  );
-  LatLng? _lastKnownOrigin; // पछिल्लो साँचो (राw) GPS बिन्दु — bearing निकाल्न
-  LatLng? _posStart;
-  LatLng? _posTarget;
-  double _headingStart = 0;
-  double _headingTarget = 0;
-
-  /// `_move` को अहिलेको मानमा आधारित, अहिले नक्सामा देखिनुपर्ने (interpolated)
-  /// स्थान। `_posStart`/`_posTarget` नभेटिए (अझै कुनै GPS नआएको) null।
-  LatLng? get _currentRenderedOrigin {
-    final start = _posStart;
-    final target = _posTarget;
-    if (start == null || target == null) return _lastKnownOrigin;
-    final t = Curves.easeInOut.transform(_move.value);
-    return LatLng(
-      start.latitude + (target.latitude - start.latitude) * t,
-      start.longitude + (target.longitude - start.longitude) * t,
-    );
-  }
-
-  double get _currentHeading {
-    final t = Curves.easeInOut.transform(_move.value);
-    return _lerpAngle(_headingStart, _headingTarget, t);
-  }
-
-  /// कोण दुई मानको छोटो बाटो हुँदै interpolate — नत्र ३५०°→१०° जस्तो
-  /// घुमाइ गलत दिशाबाट (लामो बाटो, -३४०°) हुन्थ्यो।
-  static double _lerpAngle(double a, double b, double t) {
-    var diff = (b - a) % 360;
-    if (diff > 180) diff -= 360;
-    if (diff < -180) diff += 360;
-    return (a + diff * t) % 360;
-  }
-
   BitmapDescriptor? _flagIcon;
-  BitmapDescriptor? _navIcon;
+  BitmapDescriptor? _originIcon;
   Offset? _pulseAt;
 
   @override
@@ -144,19 +99,15 @@ class _RouteMapViewState extends State<RouteMapView>
     destinationFlagPin().then((b) {
       if (mounted) setState(() => _flagIcon = b);
     });
-    navigationArrowMarker().then((b) {
-      if (mounted) setState(() => _navIcon = b);
+    // स्थिर "तपाईं यहाँ हुनुहुन्छ" dot — पहिले यहाँ हरेक GPS बिन्दुबीच सहज
+    // गरी सर्ने/घुम्ने animated navigation-arrow थियो, जुन नक्सामा एउटा
+    // सानो icon "आफैं हिँडिरहेको" जस्तो देखिन्थ्यो र प्रत्येक movement मा
+    // ~900ms सम्म frame-by-frame GoogleMap rebuild पनि गराउँथ्यो। अब मार्कर
+    // सिधै नयाँ स्थानमा (कुनै interpolation/animation बिना) देखिन्छ —
+    // हल्का पनि, अनावश्यक चलायमान UI पनि हट्यो।
+    pulseDotMarker(AppColors.igViolet).then((b) {
+      if (mounted) setState(() => _originIcon = b);
     });
-    final origin = widget.origin;
-    if (origin != null) {
-      _lastKnownOrigin = origin;
-      _posStart = origin;
-      _posTarget = origin;
-      // गाडी चल्न सुरु नगरेसम्म — गन्तव्यतिरै फर्किएको मान्ने (सामान्य
-      // navigation app को default व्यवहार)।
-      _headingStart = bearingBetween(origin, widget.destination);
-      _headingTarget = _headingStart;
-    }
   }
 
   @override
@@ -168,45 +119,14 @@ class _RouteMapViewState extends State<RouteMapView>
       WidgetsBinding.instance.addPostFrameCallback((_) => _fitBounds());
     } else if (old.origin != widget.origin) {
       // हरेक GPS movement मा पूरै camera फेरि fit नगरी — halo मात्र refresh
-      // (नत्र worker आफैं चल्दा नक्सा बारम्बार जर्क हुन्छ)।
+      // (नत्र worker आफैं चल्दा नक्सा बारम्बार jerk हुन्छ)।
       _refreshPulse();
     }
-
-    final newOrigin = widget.origin;
-    if (newOrigin == null) return;
-    final last = _lastKnownOrigin;
-    if (last == null) {
-      // पहिलोपटक GPS आयो — सीधै देखाउने, कतैबाट "उड्ने" एनिमेसन चाहिँदैन।
-      _lastKnownOrigin = newOrigin;
-      _posStart = newOrigin;
-      _posTarget = newOrigin;
-      _headingStart = bearingBetween(newOrigin, widget.destination);
-      _headingTarget = _headingStart;
-      return;
-    }
-    // GPS jitter (केही मिटर भित्रको शोर) ले बारम्बार दिशा नबदलियोस् भनेर
-    // कम्तिमा ~3m चलेको भए मात्र नयाँ bearing/एनिमेसन।
-    final movedKm = haversineKm(
-        last.latitude, last.longitude, newOrigin.latitude, newOrigin.longitude);
-    if (movedKm < 0.003) return;
-
-    // अघिल्लो एनिमेसन अझै चलिरहेको भए, त्यसको अहिलेकै (बीचैमा भएको) देखिने
-    // स्थान/दिशाबाटै नयाँ यात्रा सुरु हुने — नत्र बीचमै अर्को अपडेट आउँदा
-    // marker पुरानो लक्ष्यमा फर्केर उफ्रिन्थ्यो।
-    _headingStart = _currentHeading;
-    _headingTarget = bearingBetween(last, newOrigin);
-    _posStart = _currentRenderedOrigin ?? last;
-    _posTarget = newOrigin;
-    _lastKnownOrigin = newOrigin;
-    _move
-      ..reset()
-      ..forward();
   }
 
   @override
   void dispose() {
     _pulse.dispose();
-    _move.dispose();
     _map?.dispose();
     super.dispose();
   }
@@ -319,80 +239,69 @@ class _RouteMapViewState extends State<RouteMapView>
       color: AppColors.mapPlaceholderBg,
       child: Stack(
         children: [
-          // `_move` को हरेक tick मा यहाँभित्रको GoogleMap मात्र फेरि
-          // बन्छ (setState होइन, AnimatedBuilder) — नक्साबाहिरका अरू
-          // widget (pill, halo स्थिति हिसाब आदि) हरेक frame मा रिबिल्ड
-          // हुँदैनन्, जुन पहिले onCameraMove/radar-wave मा भेटिएको
-          // jank-कारक ढाँचा हो।
-          AnimatedBuilder(
-            animation: _move,
-            builder: (context, _) {
-              final renderedOrigin = _currentRenderedOrigin;
-              final heading = _currentHeading;
-              return GoogleMap(
-                initialCameraPosition:
-                    CameraPosition(target: widget.destination, zoom: 18),
-                style: kCleanMapStyle,
-                onMapCreated: (c) {
-                  _map = c;
-                  _fitBounds();
-                },
-                onCameraMoveStarted: _onCameraMoveStarted,
-                onCameraIdle: _refreshPulse,
-                zoomControlsEnabled: false,
-                mapToolbarEnabled: false,
-                myLocationEnabled: true,
-                myLocationButtonEnabled: false,
-                padding: widget.mapPadding,
-                markers: {
-                  // झन्डाको bitmap load नभएसम्म marker नै नदेखाउने — कुनै
-                  // default/fallback pin कहिल्यै यसको सट्टा नदेखियोस्।
-                  if (_flagIcon != null)
-                    Marker(
-                      markerId: const MarkerId('destination'),
-                      position: widget.destination,
-                      anchor: FlagPinGeometry.markerAnchorFraction,
-                      icon: _flagIcon!,
-                      infoWindow: InfoWindow(
-                        title: widget.destinationLabel,
-                        snippet: widget.destinationAddress.isEmpty
-                            ? S.jobSiteWord
-                            : widget.destinationAddress,
-                      ),
-                    ),
-                  if (renderedOrigin != null)
-                    Marker(
-                      markerId: const MarkerId('origin'),
-                      position: renderedOrigin,
-                      rotation: heading,
-                      flat: true,
-                      anchor: const Offset(0.5, 0.5),
-                      icon: _navIcon ??
-                          BitmapDescriptor.defaultMarkerWithHue(
-                              BitmapDescriptor.hueAzure),
-                      infoWindow: InfoWindow(title: widget.originLabel),
-                    ),
-                },
-                polylines: {
-                  if (route != null && route.points.length >= 2) ...[
-                    routePolyline('route', route),
-                    // Google Maps-शैली "last-mile" डट्टेड connector — solid
-                    // road route ठ्याक्कै marker सम्मै नपुगेको खाली ठाउँमा
-                    // (गन्तव्य/लाइभ स्थान दुवैतिर हुन सक्छ)।
-                    if (renderedOrigin != null)
-                      walkConnectorPolyline(
-                        id: 'walk_origin',
-                        routeEnd: route.points.first,
-                        markerPos: renderedOrigin,
-                      ),
-                    walkConnectorPolyline(
-                      id: 'walk_destination',
-                      routeEnd: route.points.last,
-                      markerPos: widget.destination,
-                    ),
-                  ].whereType<Polyline>(),
-                },
-              );
+          GoogleMap(
+            initialCameraPosition:
+                CameraPosition(target: widget.destination, zoom: 18, bearing: 0),
+            style: kCleanMapStyle,
+            onMapCreated: (c) {
+              _map = c;
+              _fitBounds();
+            },
+            onCameraMoveStarted: _onCameraMoveStarted,
+            onCameraIdle: _refreshPulse,
+            zoomControlsEnabled: false,
+            mapToolbarEnabled: false,
+            myLocationEnabled: true,
+            myLocationButtonEnabled: false,
+            // नक्सा सधैँ उत्तर-माथि (upright) रहोस् — compass/gyroscope वा
+            // दुई-औँला gesture ले घुमाएर "उल्टो/घुमेको" देखिने बग नआओस्।
+            compassEnabled: false,
+            rotateGesturesEnabled: false,
+            tiltGesturesEnabled: false,
+            padding: widget.mapPadding,
+            markers: {
+              // झन्डाको bitmap load नभएसम्म marker नै नदेखाउने — कुनै
+              // default/fallback pin कहिल्यै यसको सट्टा नदेखियोस्।
+              if (_flagIcon != null)
+                Marker(
+                  markerId: const MarkerId('destination'),
+                  position: widget.destination,
+                  anchor: FlagPinGeometry.markerAnchorFraction,
+                  icon: _flagIcon!,
+                  infoWindow: InfoWindow(
+                    title: widget.destinationLabel,
+                    snippet: widget.destinationAddress.isEmpty
+                        ? S.jobSiteWord
+                        : widget.destinationAddress,
+                  ),
+                ),
+              if (widget.origin != null && _originIcon != null)
+                Marker(
+                  markerId: const MarkerId('origin'),
+                  position: widget.origin!,
+                  anchor: const Offset(0.5, 0.5),
+                  icon: _originIcon!,
+                  infoWindow: InfoWindow(title: widget.originLabel),
+                ),
+            },
+            polylines: {
+              if (route != null && route.points.length >= 2) ...[
+                routePolyline('route', route),
+                // Google Maps-शैली "last-mile" डट्टेड connector — solid
+                // road route ठ्याक्कै marker सम्मै नपुगेको खाली ठाउँमा
+                // (गन्तव्य/लाइभ स्थान दुवैतिर हुन सक्छ)।
+                if (widget.origin != null)
+                  walkConnectorPolyline(
+                    id: 'walk_origin',
+                    routeEnd: route.points.first,
+                    markerPos: widget.origin!,
+                  ),
+                walkConnectorPolyline(
+                  id: 'walk_destination',
+                  routeEnd: route.points.last,
+                  markerPos: widget.destination,
+                ),
+              ].whereType<Polyline>(),
             },
           ),
 

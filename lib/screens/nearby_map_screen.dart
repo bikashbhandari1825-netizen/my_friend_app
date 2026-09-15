@@ -207,6 +207,9 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                       myLocationButtonEnabled: false,
                       zoomControlsEnabled: false,
                       mapToolbarEnabled: false,
+                      // नक्सा सधैँ उत्तर-माथि रहोस् — gesture ले घुमाएर
+                      // "उल्टो" देखिने बग नआओस्।
+                      rotateGesturesEnabled: false,
                       markers: _buildMarkers(docs),
                       onTap: (_) => setState(() {
                         _selId = null;

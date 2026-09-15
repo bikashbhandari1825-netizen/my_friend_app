@@ -414,6 +414,9 @@ class _SearchingState extends State<_Searching>
               zoomControlsEnabled: false,
               mapToolbarEnabled: false,
               compassEnabled: false,
+              // नक्सा सधैँ उत्तर-माथि रहोस् — gesture ले घुमाएर "उल्टो"
+              // देखिने बग नआओस्।
+              rotateGesturesEnabled: false,
               markers: {
                 // radar-wave झन्डाकै फेदमुनि — ठ्याक्कै उही `position`
                 // भएकोले कहिल्यै छुट्टिँदैन (माथि class-doc हेर्नुहोस्)।

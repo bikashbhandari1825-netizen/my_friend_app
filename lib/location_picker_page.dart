@@ -161,6 +161,9 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
             mapToolbarEnabled: false,
+            // नक्सा सधैँ उत्तर-माथि रहोस् — pin छान्दा घुमेको नक्सा भ्रमपूर्ण
+            // हुन्छ।
+            rotateGesturesEnabled: false,
           ),
 
           // center pin (bottom tip at center)

@@ -411,7 +411,9 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                 // Confirm sheet खुला हुँदा नक्सा नहल्लियोस्।
                 scrollGesturesEnabled: !_postSheetOpen,
                 zoomGesturesEnabled: !_postSheetOpen,
-                rotateGesturesEnabled: !_postSheetOpen,
+                // नक्सा सधैँ उत्तर-माथि रहोस् — gesture ले घुमाएर "उल्टो"
+                // देखिने बग नआओस्।
+                rotateGesturesEnabled: false,
                 tiltGesturesEnabled: !_postSheetOpen,
                 padding: const EdgeInsets.only(bottom: 260, top: 118),
                 markers: _buildMarkers(rows),

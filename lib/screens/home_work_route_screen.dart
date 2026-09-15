@@ -131,6 +131,9 @@ class _HomeWorkRouteScreenState extends State<HomeWorkRouteScreen> {
             },
             zoomControlsEnabled: false,
             mapToolbarEnabled: false,
+            // नक्सा सधैँ उत्तर-माथि रहोस् — gesture ले घुमाएर "उल्टो"
+            // देखिने बग नआओस्।
+            rotateGesturesEnabled: false,
             padding: const EdgeInsets.only(bottom: 170, top: 20),
             markers: {
               Marker(

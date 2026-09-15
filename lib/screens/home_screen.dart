@@ -529,6 +529,9 @@ class _HomeScreenState extends State<HomeScreen>
                       myLocationButtonEnabled: false,
                       zoomControlsEnabled: false,
                       mapToolbarEnabled: false,
+                      // नक्सा सधैँ उत्तर-माथि रहोस् — gesture ले घुमाएर
+                      // "उल्टो" देखिने बग नआओस्।
+                      rotateGesturesEnabled: false,
                       padding: const EdgeInsets.only(top: 70),
                       markers: _markers(snap.data?.docs ?? []),
                     );

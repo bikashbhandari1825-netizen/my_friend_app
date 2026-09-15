@@ -1204,6 +1204,9 @@ class JobLocationScreen extends StatelessWidget {
             myLocationButtonEnabled: true,
             zoomControlsEnabled: false,
             mapToolbarEnabled: false,
+            // नक्सा सधैँ उत्तर-माथि रहोस् — gesture ले घुमाएर "उल्टो" देखिने
+            // बग नआओस्।
+            rotateGesturesEnabled: false,
           ),
           if (address.isNotEmpty)
             Positioned(
