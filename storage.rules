@@ -14,6 +14,11 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == 'bikashbhandari1825@gmail.com';
+    }
+
     function isValidDoc() {
       return request.resource.size > 0
         && request.resource.size < 5 * 1024 * 1024
@@ -40,6 +45,18 @@ service firebase.storage {
         && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/jpeg|image/png|image/webp');
       allow delete: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // In-app auto-update — release APK हरू। `open_filex`/`http` ले plain
+    // (unauthenticated) GET बाट सिधै download गर्ने भएकोले public read;
+    // upload भने owner-मात्र (Admin Dashboard को "App update" बटन, वा
+    // Firebase Console बाट सिधै)।
+    match /releases/{fileName} {
+      allow read: if true;
+      allow write: if isAdmin()
+        && request.resource.size > 0
+        && request.resource.size < 300 * 1024 * 1024
+        && fileName.matches('[a-zA-Z0-9_.-]+[.]apk');
     }
 
     // बाँकी सबै बन्द

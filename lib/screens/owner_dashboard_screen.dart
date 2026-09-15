@@ -6,6 +6,8 @@
 //   Users    → app का सबै user को list + status
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -549,6 +551,7 @@ class _AppUpdateButton extends StatelessWidget {
     final notesCtrl = TextEditingController(
         text: (current?['releaseNotes'] ?? '').toString());
     var force = current?['forceUpdate'] == true;
+    var uploading = false;
 
     await showDialog(
       context: context,
@@ -577,6 +580,47 @@ class _AppUpdateButton extends StatelessWidget {
                   decoration:
                       const InputDecoration(labelText: 'APK download URL'),
                 ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: uploading
+                        ? null
+                        : () async {
+                            final code = int.tryParse(codeCtrl.text.trim());
+                            if (code == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text(
+                                        'Set the version code first, then upload.')),
+                              );
+                              return;
+                            }
+                            setState(() => uploading = true);
+                            try {
+                              final url = await _uploadApkFromDevice(code);
+                              if (url != null) urlCtrl.text = url;
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Upload failed: $e')),
+                                );
+                              }
+                            } finally {
+                              setState(() => uploading = false);
+                            }
+                          },
+                    icon: uploading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.upload_file_rounded, size: 18),
+                    label: Text(uploading
+                        ? 'Uploading…'
+                        : 'Upload APK from this device'),
+                  ),
+                ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: notesCtrl,
@@ -599,24 +643,44 @@ class _AppUpdateButton extends StatelessWidget {
             TextButton(
                 onPressed: () => Navigator.pop(ctx), child: Text(S.cancel)),
             ElevatedButton(
-              onPressed: () async {
-                final code = int.tryParse(codeCtrl.text.trim());
-                if (code == null || urlCtrl.text.trim().isEmpty) return;
-                await AppUpdateConfig.publish(
-                  latestVersionCode: code,
-                  versionName: nameCtrl.text,
-                  apkUrl: urlCtrl.text,
-                  releaseNotes: notesCtrl.text,
-                  forceUpdate: force,
-                );
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
+              onPressed: uploading
+                  ? null
+                  : () async {
+                      final code = int.tryParse(codeCtrl.text.trim());
+                      if (code == null || urlCtrl.text.trim().isEmpty) return;
+                      await AppUpdateConfig.publish(
+                        latestVersionCode: code,
+                        versionName: nameCtrl.text,
+                        apkUrl: urlCtrl.text,
+                        releaseNotes: notesCtrl.text,
+                        forceUpdate: force,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
               child: Text(S.save),
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// Firebase Storage `releases/{versionCode}.apk` मा upload गरेर public
+  /// download URL फर्काउने — देखाउने APK Android device (सामान्यतया
+  /// `flutter build apk --release` ले बनाएको `app-release.apk`) बाट छानिन्छ।
+  Future<String?> _uploadApkFromDevice(int versionCode) async {
+    final file = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: const ['apk'],
+    );
+    if (file == null) return null;
+    final bytes = await file.readAsBytes();
+    final ref = FirebaseStorage.instance.ref('releases/app-v$versionCode.apk');
+    await ref.putData(
+      bytes,
+      SettableMetadata(contentType: 'application/vnd.android.package-archive'),
+    );
+    return ref.getDownloadURL();
   }
 
   @override
