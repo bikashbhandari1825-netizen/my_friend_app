@@ -23,6 +23,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
 import '../widgets/success_feedback.dart';
 import 'chat_screen.dart';
+import 'job_actions.dart' show otherPartyUid, startInAppCall;
 import 'nearby_common.dart' show haversineKm, fetchRoadRoute, RoadRoute;
 import 'route_map_view.dart';
 
@@ -65,11 +66,21 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
   // लगातार पठाउने। हरेक अपडेटमा OSRM नहित्याउन time-throttle गरिएको।
   StreamSubscription<Position>? _posSub;
   DateTime? _lastRouteFetch;
+  DateTime? _lastWorkerPosWrite;
 
-  // कामदार ग्राहकको ठ्याक्कै coordinate नजिक (~50m भित्र) पुगेपछि एकपटक मात्र
-  // arrival chime + sheet देखाउने — GPS jitter ले पटक-पटक नबजोस्।
-  static const double _arrivalThresholdKm = 0.05;
-  bool _arrived = false;
+  // कामदार ग्राहकको ठ्याक्कै pin बाट यति भित्र (~30m, वास्तविक consumer GPS
+  // ले भरपर्दो रूपमा दिन सक्ने सटीकता) नआएसम्म "On Arrival" बटन disable नै
+  // रहन्छ — टाढाबाटै/proximity मात्रैले काम आफैं सुरु नहोस् भन्ने आवश्यकता
+  // (यहाँ केवल बटन unlock हुन्छ, कुनै status auto-लेखिँदैन)।
+  static const double _arrivalThresholdKm = 0.03;
+  bool _withinArrivalRadius = false;
+  // worker ले "On Arrival" बटन साँच्चै थिचेपछि मात्र true — proximity
+  // आफैंले होइन। यही deliberate tap ले arrival समय लेख्ने, दुवैतिर
+  // सम्पर्क (Call/Video/Message) देखाउने, employer लाई notification पठाउने,
+  // र काम status एकैचोटि 'in_progress' मा सार्ने — छुट्टै "Start Work" चरण
+  // अब चाहिँदैन।
+  bool _arrivalConfirmed = false;
+  bool _confirmingArrival = false;
 
   @override
   void initState() {
@@ -100,38 +111,42 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
       final me = LatLng(p.latitude, p.longitude);
       setState(() => _me = me);
 
-      // ग्राहकलाई लाइभ track गर्न — हरेक movement मा।
-      try {
-        await FirebaseFirestore.instance
-            .collection('serviceRequests')
-            .doc(widget.requestId)
-            .update({
-          'workerLat': p.latitude,
-          'workerLng': p.longitude,
-          'workerLocationUpdatedAt': FieldValue.serverTimestamp(),
-        });
-      } catch (_) {}
+      // ग्राहकलाई लाइभ track गर्न — तर हरेक GPS tick मा होइन, कम्तिमा ५s
+      // पर्खेर मात्र (25m distanceFilter सँगै) — Firestore write/employer
+      // तर्फको snapshot-driven rebuild बारम्बार नहोस् भनेर (performance)।
+      final now = DateTime.now();
+      final dueWrite = _lastWorkerPosWrite == null ||
+          now.difference(_lastWorkerPosWrite!) > const Duration(seconds: 5);
+      if (dueWrite) {
+        _lastWorkerPosWrite = now;
+        try {
+          await FirebaseFirestore.instance
+              .collection('serviceRequests')
+              .doc(widget.requestId)
+              .update({
+            'workerLat': p.latitude,
+            'workerLng': p.longitude,
+            'workerLocationUpdatedAt': FieldValue.serverTimestamp(),
+          });
+        } catch (_) {}
+      }
 
-      // arrival-detection मात्र (सीधा-रेखा दूरी) — यसले कहिल्यै देखिने
-      // polyline/`_route` लाई छुँदैन। `_route` अब EXCLUSIVELY `_loadRoute()`
-      // (getRoute Cloud Function, साँचो सडक मार्ग) बाट मात्र सेट हुन्छ —
-      // पहिले यहाँ हरेक GPS tick मा सीधा रेखा (points: [me, _employer]) ले
-      // `_route` लाई तुरुन्तै ओभरराइट गर्थ्यो (त्यो पनि `real` flag साथैं
-      // साटेर!), जसले साँचो मार्ग आइसकेपछि पनि अर्को tick मा फेरि सीधा
-      // रेखामा फर्किने/झलक्क देखिने बग दिन्थ्यो। अब कहिल्यै सीधा रेखा
-      // बन्दैन — Cloud Function ले `real: true` सहित नदिँदासम्म polyline
-      // नै देखिँदैन (RouteMapView मा "route unavailable"/loading हुन्छ)।
+      // गन्तव्य-नजिक (geofence) भित्र छ/छैन मात्र ट्र्याक — यसले आफैं कुनै
+      // status/arrival नलेख्ने, केवल "On Arrival" बटन unlock/lock गर्ने।
+      // साँचो arrival भने worker आफैंले बटन थिचेपछि मात्र (हेर्नुहोस्
+      // `_confirmArrival`) — proximity मात्रैले काम आफैं सुरु नहोस् भन्ने
+      // आवश्यकता।
       final km = haversineKm(
           me.latitude, me.longitude, _employer.latitude, _employer.longitude);
-      if (!_arrived && km <= _arrivalThresholdKm) {
-        _onArrived();
+      final within = km <= _arrivalThresholdKm;
+      if (within != _withinArrivalRadius) {
+        setState(() => _withinArrivalRadius = within);
       }
 
       // सडक-मार्ग बारम्बार नहित्याउन कम्तिमा १५s पर्खने।
-      final now = DateTime.now();
-      final due = _lastRouteFetch == null ||
+      final dueRoute = _lastRouteFetch == null ||
           now.difference(_lastRouteFetch!) > const Duration(seconds: 15);
-      if (due) {
+      if (dueRoute) {
         _lastRouteFetch = now;
         await _loadRoute();
       }
@@ -179,46 +194,46 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
         _ => null, // 'denied'/'pending' — default S.locationNeededForRoute नै ठीक
       };
 
-  /// कामदार ग्राहकको ठाउँमा पुगेपछि (Step 2: Arrival Notification) — chime +
-  /// SnackBar, र काम स्थलमा पुगेको समय Firestore मा रेकर्ड।
-  Future<void> _onArrived() async {
-    _arrived = true;
-    if (mounted) setState(() {});
+  /// worker ले "On Arrival" बटन थिचेपछि (geofence भित्र भएमा मात्र सक्रिय
+  /// हुने बटन — proximity मात्रैले आफैं यो चल्दैन, deliberate tap नै
+  /// चाहिन्छ) — chime, arrival समय + status एकैचोटि 'in_progress' मा,
+  /// employer लाई "Worker has arrived" notification, र दुवैतिर Call/Video
+  /// Call/Message UI तुरुन्तै प्रस्ट देखिने।
+  Future<void> _confirmArrival() async {
+    if (!_withinArrivalRadius || _confirmingArrival || _arrivalConfirmed) {
+      return;
+    }
+    setState(() => _confirmingArrival = true);
     playSuccessFeedback();
     try {
       await FirebaseFirestore.instance
           .collection('serviceRequests')
           .doc(widget.requestId)
-          .update({'arrivedAt': FieldValue.serverTimestamp()});
-    } catch (_) {}
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(S.arrivedAtLocation),
-        action: SnackBarAction(
-          label: S.startWorkNow,
-          onPressed: _startWorkFromHere,
-        ),
-        duration: const Duration(seconds: 8),
-      ),
-    );
-  }
-
-  /// यहीँबाट सिधै "काम सुरु" (in_progress) मा लैजाने — requests tab मा फर्किन
-  /// नपरोस्।
-  Future<void> _startWorkFromHere() async {
-    try {
-      await FirebaseFirestore.instance
-          .collection('serviceRequests')
-          .doc(widget.requestId)
           .update({
+        'arrivedAt': FieldValue.serverTimestamp(),
         'status': 'in_progress',
         'startedAt': FieldValue.serverTimestamp(),
       });
     } catch (_) {}
+    unawaited(_notifyEmployerArrived());
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(S.workStarted)));
+    setState(() {
+      _arrivalConfirmed = true;
+      _confirmingArrival = false;
+    });
+  }
+
+  Future<void> _notifyEmployerArrived() async {
+    final employerUid = await otherPartyUid(widget.requestId);
+    if (employerUid == null || employerUid.isEmpty) return;
+    try {
+      await createNotificationForUser(
+        employerUid,
+        S.workerArrivedNotifTitle,
+        S.workerArrivedNotifBody,
+        data: {'requestId': widget.requestId, 'type': 'worker_arrived'},
+      );
+    } catch (_) {}
   }
 
   Future<void> _callEmployer() async {
@@ -335,7 +350,7 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
                       ),
                     ],
                   ),
-                  if (_arrived) ...[
+                  if (_arrivalConfirmed) ...[
                     const Divider(height: 20),
                     Row(
                       children: [
@@ -343,7 +358,7 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
                             size: 16, color: AppColors.igViolet),
                         const SizedBox(width: 6),
                         Expanded(
-                          child: Text(S.arrivedAtLocation,
+                          child: Text(S.arrivedJobInProgress,
                               style: const TextStyle(
                                   fontSize: 12.5,
                                   fontWeight: FontWeight.w700,
@@ -353,13 +368,20 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
                     ),
                   ],
                   const SizedBox(height: 12),
-                  if (_arrived)
+                  // "On Arrival" — गन्तव्यको ठ्याक्कै geofence भित्र नआएसम्म
+                  // disabled नै रहन्छ; प्रयोगकर्ताले साँच्चै थिच्नुपर्छ,
+                  // दूरी मात्रैले काम आफैं सुरु हुँदैन।
+                  if (!_arrivalConfirmed)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: PrimaryButton(
-                        label: S.startWorkNow,
-                        icon: Icons.play_arrow_rounded,
-                        onPressed: _startWorkFromHere,
+                        label: _withinArrivalRadius
+                            ? S.onArrivalButton
+                            : S.getCloserToArrive,
+                        icon: Icons.pin_drop_rounded,
+                        loading: _confirmingArrival,
+                        onPressed:
+                            _withinArrivalRadius ? _confirmArrival : null,
                       ),
                     ),
                   Row(
@@ -375,7 +397,24 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => startInAppCall(
+                            context,
+                            requestId: widget.requestId,
+                            otherName: widget.employerName,
+                            video: true,
+                          ),
+                          icon: const Icon(Icons.videocam_rounded, size: 18),
+                          label: Text(S.videoCall),
+                          style: OutlinedButton.styleFrom(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: GradientActionButton(
                           icon: Icons.chat_bubble_rounded,

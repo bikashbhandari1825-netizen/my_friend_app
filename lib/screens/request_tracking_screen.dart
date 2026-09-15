@@ -596,6 +596,7 @@ class _ProviderTrackCard extends StatelessWidget {
         data['proposedPrice'];
     final address = (data['address'] ?? '').toString();
     final status = (data['status'] ?? 'accepted').toString();
+    final arrived = data['arrivedAt'] != null;
 
     return Container(
       decoration: const BoxDecoration(
@@ -613,6 +614,33 @@ class _ProviderTrackCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             JobProgressBar(status: status, onDark: true),
+            // "Worker has arrived at the location" — arrival हुनेबित्तिकै
+            // (push notification कै सँगसँगै) यहाँ पनि प्रस्ट देखिने, ताकि
+            // employer app भित्रै हुँदा पनि तुरुन्तै थाहा पाओस्।
+            if (arrived) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.pin_drop_rounded,
+                        color: Colors.white, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(S.workerArrivedNotifTitle,
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.w800)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [
@@ -716,7 +744,26 @@ class _ProviderTrackCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => startInAppCall(
+                      context,
+                      requestId: requestId,
+                      otherName: name,
+                      video: true,
+                    ),
+                    icon: const Icon(Icons.videocam_rounded,
+                        color: Colors.white),
+                    label: Text(S.videoCall,
+                        style: const TextStyle(color: Colors.white)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.white70),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: () => Navigator.push(

@@ -361,6 +361,13 @@ class S {
   static String get cashWord => _t('cash_word');
   static String get digitalWord => _t('digital_word');
   static String get confirmPaymentReceived => _t('confirm_payment_received');
+  static String get onlinePaymentLabel => _t('online_payment_label');
+  static String get cashPaymentLabel => _t('cash_payment_label');
+  static String get sandboxModeNotice => _t('sandbox_mode_notice');
+  static String get simulatePayment => _t('simulate_payment');
+  static String get paymentSuccessful => _t('payment_successful');
+  static String get completeAndFinish => _t('complete_and_finish');
+  static String get selectOnlineMethod => _t('select_online_method');
   static String get completeJobTitle => _t('complete_job_title');
   static String get confirmCompleteJob => _t('confirm_complete_job');
   static String rateWorkerTitle(String name) =>
@@ -602,6 +609,13 @@ class S {
   static String get retryWord => _t('retry_word');
   static String get arrivedAtLocation => _t('arrived_at_location');
   static String get startWorkNow => _t('start_work_now');
+  // ── Strict arrival geofence flow ───────────────────────
+  static String get onArrivalButton => _t('on_arrival_button');
+  static String get getCloserToArrive => _t('get_closer_to_arrive');
+  static String get arrivedJobInProgress => _t('arrived_job_in_progress');
+  static String get workerArrivedNotifTitle =>
+      _t('worker_arrived_notif_title');
+  static String get workerArrivedNotifBody => _t('worker_arrived_notif_body');
 
   // ── In-chat calls ──────────────────────────────────────
   static String get voiceCall => _t('voice_call');
@@ -1190,6 +1204,27 @@ class S {
     },
     'cash_word': {'en': 'Cash', 'ne': 'नगद'},
     'digital_word': {'en': 'Digital / wallet', 'ne': 'डिजिटल / वालेट'},
+    'online_payment_label': {'en': 'Online Payment', 'ne': 'अनलाइन भुक्तानी'},
+    'cash_payment_label': {'en': 'Cash Payment', 'ne': 'नगद भुक्तानी'},
+    'sandbox_mode_notice': {
+      'en':
+          'Sandbox mode — no real money moves here. Connect production credentials to go live.',
+      'ne':
+          'स्यान्डबक्स मोड — यहाँ साँचो पैसा चल्दैन। लाइभ हुन production credentials जोड्नुहोस्।',
+    },
+    'simulate_payment': {
+      'en': 'Simulate successful payment',
+      'ne': 'भुक्तानी सफल भएको सिमुलेट गर्नुहोस्',
+    },
+    'payment_successful': {'en': 'Payment successful', 'ne': 'भुक्तानी सफल'},
+    'complete_and_finish': {
+      'en': 'Complete & Finish',
+      'ne': 'पूरा गर्नुहोस् र सक्नुहोस्',
+    },
+    'select_online_method': {
+      'en': 'Choose a payment option',
+      'ne': 'भुक्तानी विकल्प छान्नुहोस्',
+    },
     'confirm_payment_received': {
       'en': 'Payment received — mark complete',
       'ne': 'भुक्तानी प्राप्त भयो — काम सकियो',
@@ -1729,6 +1764,26 @@ class S {
     'start_work_now': {
       'en': 'Start work now',
       'ne': 'अहिले काम सुरु गर्नुहोस्'
+    },
+    'on_arrival_button': {
+      'en': 'On Arrival — I\'m here',
+      'ne': 'म त्यहाँ पुगें',
+    },
+    'get_closer_to_arrive': {
+      'en': 'Get closer to the pin to mark arrival',
+      'ne': 'आगमन मार्क गर्न पिन नजिक पुग्नुहोस्',
+    },
+    'arrived_job_in_progress': {
+      'en': 'Arrived — job in progress',
+      'ne': 'पुग्नुभयो — काम अगाडि बढ्दैछ',
+    },
+    'worker_arrived_notif_title': {
+      'en': 'Worker has arrived',
+      'ne': 'कामदार पुग्नुभयो',
+    },
+    'worker_arrived_notif_body': {
+      'en': 'Worker has arrived at the location. You can now call, video call, or message them.',
+      'ne': 'कामदार स्थानमा पुग्नुभयो। अब तपाईं उहाँलाई कल, भिडियो कल, वा म्यासेज गर्न सक्नुहुन्छ।',
     },
     'voice_call': {'en': 'Voice call', 'ne': 'भ्वाइस कल'},
     'video_call': {'en': 'Video call', 'ne': 'भिडियो कल'},

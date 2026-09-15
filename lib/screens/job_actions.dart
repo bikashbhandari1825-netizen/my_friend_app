@@ -4,6 +4,8 @@
 //
 // नोट: Phase 3 (full multi-bid) मा accept/counter ले bids sub-collection प्रयोग
 // गर्नेछ; अहिले पहिलो जवाफ दिने कामदारले काम claim गर्छ।
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +14,7 @@ import '../app_globals.dart';
 import '../l10n/strings.dart';
 import '../location_util.dart';
 import '../theme/app_theme.dart';
+import 'call_screen.dart';
 import 'job_route_screen.dart';
 
 /// worker ले काम स्वीकार्ने/counter गर्ने ठ्याक्कै क्षणमा उसको स्थान — लाइभ
@@ -52,6 +55,81 @@ void openJobRoute(
       employerPhone: (data['employerPhone'] ?? '').toString(),
     ),
   ));
+}
+
+/// यो request मा हाल लगइन भएको व्यक्ति नभएको अर्को पक्ष (employer↔worker)
+/// को uid — `serviceRequests/{requestId}` बाट। इन-एप कल सुरु गर्ने ठाउँहरू
+/// (route/arrival screen जस्ता, जहाँ अर्को पक्षको uid पहिल्यै थाहा नहुन
+/// सक्छ) ले प्रयोग गर्छन्।
+Future<String?> otherPartyUid(String requestId) async {
+  try {
+    final doc = await FirebaseFirestore.instance
+        .collection('serviceRequests')
+        .doc(requestId)
+        .get();
+    final data = doc.data();
+    if (data == null) return null;
+    final me = FirebaseAuth.instance.currentUser?.uid;
+    final employerUid = (data['employerUid'] ?? '').toString();
+    final workerUid = (data['workerUid'] ?? '').toString();
+    if (me == employerUid) return workerUid.isEmpty ? null : workerUid;
+    if (me == workerUid) return employerUid.isEmpty ? null : employerUid;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Chat/route/arrival जुनसुकै screen बाट इन-एप (WebRTC) कल सुरु गर्ने साझा
+/// बाटो — `CallScreen` push + अर्को पक्षलाई incoming-call notification
+/// दुवै एकै ठाउँमा, दोहोरिनबाट जोगिन। `myName`/`otherUid` पहिल्यै थाहा भए
+/// (caller ले cache गरेको) दिनुहोस् — नत्र यहीँ एकपटक Firestore बाट लिन्छ।
+Future<void> startInAppCall(
+  BuildContext context, {
+  required String requestId,
+  required String otherName,
+  required bool video,
+  String? myName,
+  String? otherUid,
+}) async {
+  final resolvedMyName =
+      myName ?? await myWorkerName(FirebaseAuth.instance.currentUser?.uid);
+  if (!context.mounted) return;
+  final resolvedOtherUid = otherUid ?? await otherPartyUid(requestId) ?? '';
+  if (!context.mounted) return;
+
+  // अर्को पक्षलाई कल सुरु हुनेबित्तिकै (screen खुल्दाकै क्षणमा, कल सकिएपछि
+  // होइन) — background/बन्द एपमा भए पनि थाहा पाओस् भनेर fire-and-forget।
+  if (resolvedOtherUid.isNotEmpty) {
+    final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    unawaited(createNotificationForUser(
+      resolvedOtherUid,
+      S.incomingCallTitle,
+      '$resolvedMyName  ·  ${video ? S.videoCall : S.voiceCall}',
+      data: {
+        'requestId': requestId,
+        'type': 'incoming_call',
+        'mode': video ? 'video' : 'audio',
+        'callerName': resolvedMyName,
+        'callerUid': myUid,
+      },
+    ));
+  }
+
+  await Navigator.push(
+    context,
+    MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => CallScreen(
+        requestId: requestId,
+        otherName: otherName,
+        myName: resolvedMyName,
+        video: video,
+        isCaller: true,
+        otherUid: resolvedOtherUid,
+      ),
+    ),
+  );
 }
 
 Future<String> myWorkerName(String? uid) async {
