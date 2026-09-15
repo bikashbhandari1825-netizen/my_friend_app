@@ -22,6 +22,7 @@
 // यो deploy गर्ने बेला थपिनेछ, deploy नगरेसम्म बाँकी app मा कुनै असर पर्दैन।)
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const {onCall, HttpsError} = require("firebase-functions/v2/https");
+const {onSchedule} = require("firebase-functions/v2/scheduler");
 const {defineSecret} = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
@@ -159,5 +160,57 @@ exports.sendPushForNotification = onDocumentCreated(
           console.error("FCM send failed:", err);
         }
       }
+    },
+);
+
+/**
+ * Completed Bookings Cleanup — काम "completed" भएको ठ्याक्कै ३ दिनपछि
+ * त्यसको `serviceRequests` doc (+ associated `chats/{id}` doc/messages र
+ * `calls/{id}` signaling doc) आफैं मेटिन्छ। `Cancelled` भएका booking त
+ * client ले नै accept/cancel गर्नेबित्तिकै तुरुन्तै मेटिसक्छन्
+ * (job_actions.dart::deleteCancelledBooking) — यो scheduled function ले
+ * केवल "completed" (payment/rating सकिएको, history मा अस्थायी रूपमा
+ * देखिनुपर्ने) booking हरू ३ दिनपछि सफा गर्छ।
+ *
+ * `reviews` collection (worker rating) कहिल्यै मेटिँदैन — त्यो worker कै
+ * स्थायी history हो, यो booking record को जीवनकालसँग बाँधिएको छैन।
+ */
+exports.cleanupCompletedBookings = onSchedule(
+    {schedule: "every 24 hours", timeZone: "UTC"},
+    async () => {
+      const cutoff = admin.firestore.Timestamp.fromMillis(
+          Date.now() - 3 * 24 * 60 * 60 * 1000,
+      );
+      const snap = await admin.firestore()
+          .collection("serviceRequests")
+          .where("status", "==", "completed")
+          .where("completedAt", "<=", cutoff)
+          .get();
+      if (snap.empty) {
+        console.log("cleanupCompletedBookings: nothing due.");
+        return;
+      }
+
+      for (const doc of snap.docs) {
+        const id = doc.id;
+        try {
+          const msgs = await admin.firestore()
+              .collection("chats").doc(id).collection("messages").get();
+          const batch = admin.firestore().batch();
+          msgs.docs.forEach((m) => batch.delete(m.ref));
+          batch.delete(admin.firestore().collection("chats").doc(id));
+          batch.delete(
+              admin.firestore().collection("serviceRequests").doc(id),
+          );
+          await batch.commit();
+          await admin.firestore().collection("calls").doc(id).delete()
+              .catch(() => {});
+        } catch (err) {
+          console.error(`cleanupCompletedBookings failed for ${id}:`, err);
+        }
+      }
+      console.log(
+          `cleanupCompletedBookings: removed ${snap.size} booking(s).`,
+      );
     },
 );

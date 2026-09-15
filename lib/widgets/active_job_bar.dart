@@ -17,7 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../screens/chat_screen.dart';
-import '../screens/job_actions.dart' show releaseWorkerActiveJob;
+import '../screens/job_actions.dart' show deleteCancelledBooking;
 import '../screens/nearby_common.dart' show haversineKm, serviceIconFor;
 import 'status_badge.dart';
 
@@ -84,14 +84,12 @@ class ActiveJobBar extends StatelessWidget {
       ),
     );
     if (ok == true) {
-      await _ref.update({
-        'status': 'cancelled',
-        'cancelledAt': FieldValue.serverTimestamp(),
-      });
-      // Single Active Job Restriction — cancel भएपछि worker फेरि अर्को नयाँ
-      // काम accept गर्न मिल्ने बनाउने (पोइन्टर खाली)।
-      unawaited(releaseWorkerActiveJob(
-          (data['workerUid'] ?? '').toString(), requestId));
+      // Cancelled Bookings Cleanup — status मात्र बदल्ने होइन, पूरै मेट्ने
+      // (कुनै अवशेष history नरहोस्)।
+      await deleteCancelledBooking(
+        requestId,
+        workerUid: (data['workerUid'] ?? '').toString(),
+      );
     }
   }
 

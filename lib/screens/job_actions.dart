@@ -460,6 +460,39 @@ Future<void> purgeSensitiveDataOnCompletion(String docId) async {
   }
 }
 
+/// Cancelled Bookings Cleanup — काम "cancelled" भएमा केवल status update
+/// (इतिहासमा बाँकी रहने) होइन, बरु `serviceRequests` doc नै पूर्ण रूपमा
+/// मेटाइन्छ (साथसाथै associated `chats/{id}` + यसका सन्देश, र `calls/{id}`
+/// signaling doc पनि) — रद्द भएको बुकिङको कुनै अवशेष history मा नरहोस्
+/// भन्ने आवश्यकता। worker को single-active-job पोइन्टर पनि खाली हुन्छ।
+Future<void> deleteCancelledBooking(
+  String docId, {
+  String? workerUid,
+}) async {
+  try {
+    final msgs = await FirebaseFirestore.instance
+        .collection('chats')
+        .doc(docId)
+        .collection('messages')
+        .get();
+    final batch = FirebaseFirestore.instance.batch();
+    for (final m in msgs.docs) {
+      batch.delete(m.reference);
+    }
+    batch.delete(FirebaseFirestore.instance.collection('chats').doc(docId));
+    batch.delete(
+        FirebaseFirestore.instance.collection('serviceRequests').doc(docId));
+    await batch.commit();
+    await FirebaseFirestore.instance.collection('calls').doc(docId).delete();
+  } catch (_) {
+    // safety-net मात्र — मुख्य serviceRequests delete माथिकै batch भित्रै
+    // भइसकेको हुन्छ, यहाँको असफलताले "cancelled" अनुभव नरोकोस्।
+  }
+  if (workerUid != null && workerUid.isNotEmpty) {
+    unawaited(releaseWorkerActiveJob(workerUid, docId));
+  }
+}
+
 /// Employer ले कामदारको counter-offer (workerCounterPrice) Accept गर्दा —
 /// `request_tracking_screen.dart` र `bookings_screen.dart` दुवैले यही एउटा
 /// साझा function बोलाउँछन् (post-acceptance flow दुईतिर नदोहोरियोस् भनेर)।

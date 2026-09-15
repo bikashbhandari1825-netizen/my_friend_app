@@ -89,12 +89,10 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
   }
 
   Future<void> _cancel() async {
-    try {
-      await _ref.update({
-        'status': 'cancelled',
-        'cancelledAt': FieldValue.serverTimestamp(),
-      });
-    } catch (_) {}
+    // Cancelled Bookings Cleanup — status मात्र बदल्ने होइन, पूरै मेट्ने
+    // (कुनै अवशेष history नरहोस्)। यो चरणमा (broadcasting/pending_worker)
+    // अझै कुनै worker assign नभएकोले workerUid दिनु पर्दैन।
+    await deleteCancelledBooking(widget.requestId);
     if (mounted) Navigator.pop(context);
   }
 
