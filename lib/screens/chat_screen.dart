@@ -408,115 +408,135 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream:
-                  _messages.orderBy('createdAt', descending: false).snapshots(),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final docs = snap.data?.docs ?? [];
-                if (docs.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.forum_rounded,
-                            size: 54,
-                            color: theme.colorScheme.onSurfaceVariant),
-                        const SizedBox(height: 10),
-                        Text(S.startTheConversation,
-                            style: TextStyle(
-                                color: theme.colorScheme.onSurfaceVariant)),
-                      ],
-                    ),
-                  );
-                }
-                _jumpToBottom();
-                // अर्को पक्षले नयाँ सन्देश पठायो र म यो chat हेर्दै नै छु भने
-                // तुरुन्तै "पढेको" म्हार्क गर्ने — Messenger जस्तै live "Seen"।
-                final lastDoc = docs.last;
-                if (lastDoc.id != _lastMarkedReadDocId &&
-                    lastDoc.data()['senderUid'] != me) {
-                  _lastMarkedReadDocId = lastDoc.id;
-                  _markRead();
-                }
-                // अर्को पक्षको uid — सन्देश इतिहासबाटै (सबभन्दा पछिल्लो
-                // "मैले नपठाएको" सन्देशको sender) निकालिन्छ, अलग Firestore
-                // पढाइ नचाहिने गरी।
-                final otherUid = docs
-                    .map((d) => (d.data()['senderUid'] ?? '').toString())
-                    .lastWhere((u) => u.isNotEmpty && u != me,
-                        orElse: () => '');
+            // Read-receipt tick मार्क हरूका लागि chat-level `readBy` एकपटक
+            // मात्र (सबै सन्देशले साझा गर्ने) — हरेक सन्देश-bubble ले आफ्नै
+            // छुट्टै StreamBuilder राख्दा (पहिले `_SeenLabel` जस्तै) message
+            // जति भयो त्यति नै Firestore listener खुल्थ्यो, जुन एउटै doc
+            // दोहोर्‍याएर सुन्नु मात्र होइन, थुप्रै सन्देश भएको लामो chat मा
+            // वास्तविक jank/lag पनि दिन्थ्यो।
+            child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: _chatDoc.snapshots(),
+              builder: (context, chatSnap) {
+                final readBy =
+                    chatSnap.data?.data()?['readBy'] as Map<String, dynamic>?;
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: _messages
+                      .orderBy('createdAt', descending: false)
+                      .snapshots(),
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final docs = snap.data?.docs ?? [];
+                    if (docs.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.forum_rounded,
+                                size: 54,
+                                color: theme.colorScheme.onSurfaceVariant),
+                            const SizedBox(height: 10),
+                            Text(S.startTheConversation,
+                                style: TextStyle(
+                                    color: theme.colorScheme.onSurfaceVariant)),
+                          ],
+                        ),
+                      );
+                    }
+                    _jumpToBottom();
+                    // अर्को पक्षले नयाँ सन्देश पठायो र म यो chat हेर्दै नै छु भने
+                    // तुरुन्तै "पढेको" म्हार्क गर्ने — Messenger जस्तै live "Seen"।
+                    final lastDoc = docs.last;
+                    if (lastDoc.id != _lastMarkedReadDocId &&
+                        lastDoc.data()['senderUid'] != me) {
+                      _lastMarkedReadDocId = lastDoc.id;
+                      _markRead();
+                    }
+                    // अर्को पक्षको uid — सन्देश इतिहासबाटै (सबभन्दा पछिल्लो
+                    // "मैले नपठाएको" सन्देशको sender) निकालिन्छ, अलग Firestore
+                    // पढाइ नचाहिने गरी।
+                    final otherUid = docs
+                        .map((d) => (d.data()['senderUid'] ?? '').toString())
+                        .lastWhere((u) => u.isNotEmpty && u != me,
+                            orElse: () => '');
 
-                return ListView.builder(
-                  controller: _scroll,
-                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-                  itemCount: docs.length,
-                  itemBuilder: (context, i) {
-                    final data = docs[i].data();
-                    final id = docs[i].id;
-                    final isMe = data['senderUid'] == me;
-                    final type = (data['type'] ?? 'text').toString();
-                    final isLast = i == docs.length - 1;
-                    // लगातार एउटै व्यक्तिका सन्देश Messenger-शैलीमा नजिक-नजिक
-                    // देखिने — समूहको पछिल्लोमा मात्र समय देखाउने।
-                    final isLastOfGroup = isLast ||
-                        docs[i + 1].data()['senderUid'] != data['senderUid'];
-                    final isFirstOfGroup = i == 0 ||
-                        docs[i - 1].data()['senderUid'] != data['senderUid'];
+                    return ListView.builder(
+                      controller: _scroll,
+                      padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+                      itemCount: docs.length,
+                      itemBuilder: (context, i) {
+                        final data = docs[i].data();
+                        final id = docs[i].id;
+                        final isMe = data['senderUid'] == me;
+                        final type = (data['type'] ?? 'text').toString();
+                        final isLast = i == docs.length - 1;
+                        // लगातार एउटै व्यक्तिका सन्देश Messenger-शैलीमा नजिक-नजिक
+                        // देखिने — समूहको पछिल्लोमा मात्र समय देखाउने।
+                        final isLastOfGroup = isLast ||
+                            docs[i + 1].data()['senderUid'] !=
+                                data['senderUid'];
+                        final isFirstOfGroup = i == 0 ||
+                            docs[i - 1].data()['senderUid'] !=
+                                data['senderUid'];
+                        // मैले पठाएको सन्देश अर्को पक्षले हेरिसक्यो/सक्यो — उसको
+                        // `readBy` timestamp यो सन्देश लेखिएको बेलाभन्दा अघि
+                        // नभए (यही वा पछिको भए) मात्र "seen" (double tick)।
+                        final createdAt = data['createdAt'];
+                        final otherReadAt = readBy?[otherUid];
+                        final seen = isMe &&
+                            createdAt is Timestamp &&
+                            otherReadAt is Timestamp &&
+                            !otherReadAt.toDate().isBefore(createdAt.toDate());
 
-                    return Dismissible(
-                      key: Key(id),
-                      direction: DismissDirection.endToStart,
-                      background: Container(
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.only(right: 20),
-                        child: const Icon(Icons.delete_outline_rounded,
-                            color: AppColors.danger),
-                      ),
-                      confirmDismiss: (_) => _confirmDelete(),
-                      onDismissed: (_) => _messages.doc(id).delete(),
-                      child: Column(
-                        crossAxisAlignment: isMe
-                            ? CrossAxisAlignment.end
-                            : CrossAxisAlignment.start,
-                        children: [
-                          Align(
-                            alignment: isMe
-                                ? Alignment.centerRight
-                                : Alignment.centerLeft,
-                            child: TweenAnimationBuilder<double>(
-                              key: ValueKey(id),
-                              tween: Tween(begin: 0, end: 1),
-                              duration: const Duration(milliseconds: 220),
-                              curve: Curves.easeOut,
-                              builder: (context, t, child) => Opacity(
-                                opacity: t,
-                                child: Transform.translate(
-                                  offset: Offset(0, (1 - t) * 8),
-                                  child: child,
+                        return Dismissible(
+                          key: Key(id),
+                          direction: DismissDirection.endToStart,
+                          background: Container(
+                            alignment: Alignment.centerRight,
+                            padding: const EdgeInsets.only(right: 20),
+                            child: const Icon(Icons.delete_outline_rounded,
+                                color: AppColors.danger),
+                          ),
+                          confirmDismiss: (_) => _confirmDelete(),
+                          onDismissed: (_) => _messages.doc(id).delete(),
+                          child: Column(
+                            crossAxisAlignment: isMe
+                                ? CrossAxisAlignment.end
+                                : CrossAxisAlignment.start,
+                            children: [
+                              Align(
+                                alignment: isMe
+                                    ? Alignment.centerRight
+                                    : Alignment.centerLeft,
+                                child: TweenAnimationBuilder<double>(
+                                  key: ValueKey(id),
+                                  tween: Tween(begin: 0, end: 1),
+                                  duration: const Duration(milliseconds: 220),
+                                  curve: Curves.easeOut,
+                                  builder: (context, t, child) => Opacity(
+                                    opacity: t,
+                                    child: Transform.translate(
+                                      offset: Offset(0, (1 - t) * 8),
+                                      child: child,
+                                    ),
+                                  ),
+                                  child: _Bubble(
+                                    isMe: isMe,
+                                    showTail: isLastOfGroup,
+                                    topMargin: isFirstOfGroup ? 8 : 2,
+                                    time: isLastOfGroup
+                                        ? _time(data['createdAt'])
+                                        : null,
+                                    seen: isMe && isLastOfGroup ? seen : null,
+                                    child: _content(type, data, isMe, theme),
+                                  ),
                                 ),
                               ),
-                              child: _Bubble(
-                                isMe: isMe,
-                                showTail: isLastOfGroup,
-                                topMargin: isFirstOfGroup ? 8 : 2,
-                                time: isLastOfGroup
-                                    ? _time(data['createdAt'])
-                                    : null,
-                                child: _content(type, data, isMe, theme),
-                              ),
-                            ),
+                            ],
                           ),
-                          if (isMe && isLast)
-                            _SeenLabel(
-                              chatDoc: _chatDoc,
-                              otherUid: otherUid,
-                              messageTime: data['createdAt'],
-                            ),
-                        ],
-                      ),
+                        );
+                      },
                     );
                   },
                 );
@@ -749,12 +769,18 @@ class _Bubble extends StatelessWidget {
   final bool showTail;
   final double topMargin;
   final Widget child;
+  // WhatsApp/Messenger-शैली read receipt — मैले पठाएको (isMe) सन्देशमा मात्र
+  // अर्थपूर्ण: null = लागू हुँदैन (अर्को पक्षको सन्देश), false = पठाइयो तर
+  // अझै नहेरिएको (एउटा ✓), true = अर्को पक्षले हेरिसक्यो (डबल ✓, highlight
+  // रङमा)।
+  final bool? seen;
   const _Bubble({
     required this.isMe,
     required this.time,
     required this.child,
     this.showTail = true,
     this.topMargin = 8,
+    this.seen,
   });
 
   @override
@@ -782,53 +808,28 @@ class _Bubble extends StatelessWidget {
           child,
           if (time != null) ...[
             const SizedBox(height: 3),
-            Text(time!,
-                style: TextStyle(
-                    fontSize: 9.5,
-                    color: isMe
-                        ? Colors.white70
-                        : theme.colorScheme.onSurfaceVariant)),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(time!,
+                    style: TextStyle(
+                        fontSize: 9.5,
+                        color: isMe
+                            ? Colors.white70
+                            : theme.colorScheme.onSurfaceVariant)),
+                if (seen != null) ...[
+                  const SizedBox(width: 3),
+                  Icon(
+                    seen! ? Icons.done_all_rounded : Icons.done_rounded,
+                    size: 13,
+                    color: seen! ? AppColors.igYellow : Colors.white70,
+                  ),
+                ],
+              ],
+            ),
           ],
         ],
       ),
-    );
-  }
-}
-
-/// पठाइएको पछिल्लो सन्देश मुनि "Seen" — अर्को पक्षले त्यो सन्देश आइसकेपछि
-/// यो chat खोलेको (उसको `readBy` timestamp त्यो सन्देशको समयभन्दा पछिको)
-/// भेटिए मात्र देखिन्छ, ठ्याक्कै Messenger जस्तै।
-class _SeenLabel extends StatelessWidget {
-  final DocumentReference<Map<String, dynamic>> chatDoc;
-  final String otherUid;
-  final dynamic messageTime;
-  const _SeenLabel({
-    required this.chatDoc,
-    required this.otherUid,
-    required this.messageTime,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (otherUid.isEmpty || messageTime is! Timestamp) {
-      return const SizedBox.shrink();
-    }
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: chatDoc.snapshots(),
-      builder: (context, snap) {
-        final readBy = snap.data?.data()?['readBy'] as Map<String, dynamic>?;
-        final readAt = readBy?[otherUid];
-        final seen = readAt is Timestamp &&
-            !readAt.toDate().isBefore((messageTime as Timestamp).toDate());
-        if (!seen) return const SizedBox.shrink();
-        return Padding(
-          padding: const EdgeInsets.only(right: 4, top: 2),
-          child: Text(S.seenWord,
-              style: TextStyle(
-                  fontSize: 10.5,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
-        );
-      },
     );
   }
 }

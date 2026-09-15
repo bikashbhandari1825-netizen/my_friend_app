@@ -81,6 +81,10 @@ class CallSession {
   final _subs = <StreamSubscription>[];
   bool _closed = false;
 
+  // `disconnected` state पछि कल तुरुन्तै नकाटी केही समय पर्खने grace-period
+  // टाइमर — तल `onConnectionState` मा हेर्नुहोस्।
+  Timer? _disconnectGraceTimer;
+
   // ── ICE candidate race-condition fix ──────────────────────────────────
   // अर्को पक्षको ICE candidate, हाम्रो remote description सेट हुनुअघि नै
   // आइपुग्न सक्छ (Firestore का दुई छुट्टाछुट्टै listener — parent doc को
@@ -270,10 +274,12 @@ class CallSession {
             }
           } else {
             params.encodings = [
-              RTCRtpEncoding(active: true, maxBitrate: 500000, maxFramerate: 24),
+              RTCRtpEncoding(
+                  active: true, maxBitrate: 500000, maxFramerate: 24),
             ];
           }
-          params.degradationPreference = RTCDegradationPreference.MAINTAIN_FRAMERATE;
+          params.degradationPreference =
+              RTCDegradationPreference.MAINTAIN_FRAMERATE;
           await sender.setParameters(params);
         } catch (_) {
           // Best-effort tuning मात्र — असफल भए पनि कल सामान्य गुणस्तरमा चल्छ।
@@ -300,11 +306,32 @@ class CallSession {
         status.value = CallStatus.connected;
       }
     };
+    // `disconnected` (कुनै transport ले क्षणिक रूपमा नेटवर्क गुमाउँदा, खास
+    // गरी यहाँ प्रयोग हुने free TURN relay बाट जाँदा सामान्य) प्रायः केही
+    // सेकेन्डमै आफैं फेरि `connected` मा फर्किन्छ — तर पहिले यहाँ यसलाई
+    // सिधै `failed`/`closed` सरह तुरुन्तै हang-up ट्रिगर मानिन्थ्यो, जसले
+    // गर्दा सामान्य ICE churn मै कल अचानक बीचैमा काटिएर अघिल्लो screen मा
+    // "pop back" हुन्थ्यो (ठ्याक्कै "video call... abruptly pops/backs
+    // out" गुनासोको साँचो जड)। अब `disconnected` मा तुरुन्तै नकाटी केही
+    // सेकेन्ड (grace period) पर्खने — त्यतिञ्जेलमा फेरि `connected` भए टाइमर
+    // रद्द, अझै `disconnected`/`failed`/`closed` नै रहे मात्र साँच्चै काट्ने।
     _pc!.onConnectionState = (s) {
-      if (s == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
-          s == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        _disconnectGraceTimer?.cancel();
+        _disconnectGraceTimer = null;
+        return;
+      }
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           s == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+        _disconnectGraceTimer?.cancel();
         if (!_closed) hangUp(remote: false);
+        return;
+      }
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+        _disconnectGraceTimer?.cancel();
+        _disconnectGraceTimer = Timer(const Duration(seconds: 8), () {
+          if (!_closed) hangUp(remote: false);
+        });
       }
     };
 
@@ -452,6 +479,7 @@ class CallSession {
     _closed = true;
     status.value = CallStatus.ended;
 
+    _disconnectGraceTimer?.cancel();
     for (final s in _subs) {
       await s.cancel();
     }
