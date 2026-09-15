@@ -43,6 +43,9 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
 
   // '__mine__' trade filter resolve गर्न — overlay कार्ड छान्दा पनि चाहिने।
   String _myService = '';
+  // Single Active Job Restriction — हाल कुनै अर्को साँच्चै-अझै-सक्रिय काम
+  // (accepted/confirmed/in_progress) भए त्यसको requestId, नत्र खाली।
+  String _myActiveJobId = '';
 
   // अहिले उपलब्ध सबैभन्दा नजिकको/उपयुक्त काम सधैँ live map माथि नै (top
   // overlay) देखिन्छ — bottom sheet को list मा लुकेर बस्दैन। नयाँ होस् वा
@@ -73,7 +76,13 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
     _userStream.listen((snap) {
       final s = (snap.data()?['service'] ?? snap.data()?['serviceType'] ?? '')
           .toString();
-      if (mounted) setState(() => _myService = s);
+      final activeId = (snap.data()?['activeJobId'] ?? '').toString();
+      if (mounted) {
+        setState(() {
+          _myService = s;
+          _myActiveJobId = activeId;
+        });
+      }
     });
   }
 
@@ -116,15 +125,15 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
         ? _myService
         : (_tradeFilter == '__all__' ? '' : _tradeFilter);
 
-    final candidates =
-        <({String id, Map<String, dynamic> data, double? km})>[];
+    final candidates = <({String id, Map<String, dynamic> data, double? km})>[];
     for (final d in docs) {
       if (_skippedIds.contains(d.id)) continue;
       final data = d.data();
       final rejected = (data['rejectedBy'] as List?) ?? const [];
       if (rejected.contains(_uid)) continue;
       final svc = (data['service'] ?? '').toString();
-      if (wantTrade.isNotEmpty && svc.toLowerCase() != wantTrade.toLowerCase()) {
+      if (wantTrade.isNotEmpty &&
+          svc.toLowerCase() != wantTrade.toLowerCase()) {
         continue;
       }
       double? km;
@@ -283,14 +292,14 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
       ),
       body: _uid == null
           ? const Center(
-              child: Text('Login गर्नुहोस्', style: TextStyle(color: Colors.white)))
+              child: Text('Login गर्नुहोस्',
+                  style: TextStyle(color: Colors.white)))
           : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
               stream: _userStream,
               builder: (context, userSnap) {
                 final uData = userSnap.data?.data() ?? {};
                 final myService =
-                    (uData['service'] ?? uData['serviceType'] ?? '')
-                        .toString();
+                    (uData['service'] ?? uData['serviceType'] ?? '').toString();
                 final online = uData['isOnline'] != false;
 
                 return Stack(
@@ -382,6 +391,8 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                           docId: _currentIncoming!.id,
                           data: _currentIncoming!.data,
                           myService: myService,
+                          blockedByOtherActiveJob: _myActiveJobId.isNotEmpty &&
+                              _myActiveJobId != _currentIncoming!.id,
                           distanceKm: (_lat != null &&
                                   _currentIncoming!.data['employerLat']
                                       is num &&
@@ -389,11 +400,9 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                               ? haversineKm(
                                   _lat!,
                                   _lng!,
-                                  (_currentIncoming!.data['employerLat']
-                                          as num)
+                                  (_currentIncoming!.data['employerLat'] as num)
                                       .toDouble(),
-                                  (_currentIncoming!.data['employerLng']
-                                          as num)
+                                  (_currentIncoming!.data['employerLng'] as num)
                                       .toDouble())
                               : null,
                           onSkip: () => _skipIncoming(_currentIncoming!.id),
@@ -415,8 +424,8 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
         if (!snap.hasData) {
           return const SliverFillRemaining(
             hasScrollBody: false,
-            child: Center(
-                child: CircularProgressIndicator(color: Colors.white)),
+            child:
+                Center(child: CircularProgressIndicator(color: Colors.white)),
           );
         }
 
@@ -473,6 +482,8 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
               data: rows[i].data,
               distanceKm: rows[i].km,
               myService: myService,
+              blockedByOtherActiveJob:
+                  _myActiveJobId.isNotEmpty && _myActiveJobId != rows[i].id,
             ),
           ),
         );
@@ -510,10 +521,17 @@ class _IncomingOfferOverlay extends StatelessWidget {
   final String docId;
   final Map<String, dynamic> data;
   final double? distanceKm;
+
   /// कामदारको दर्ता सीप — यो काम नमिले Accept/मूल्य प्रस्ताव बटन disable हुन्छ।
   final String myService;
+
+  /// Single Active Job Restriction — true भए worker सँग हाल पहिल्यै अर्को
+  /// साँच्चै सक्रिय काम छ, Accept/Offer दुवै बटन disable हुन्छन्।
+  final bool blockedByOtherActiveJob;
+
   /// "X" — कारबाही नगरी लुकाउने (session भर फेरि नदेखियोस्)।
   final VoidCallback onSkip;
+
   /// Accept/Decline/Counter पछि — Firestore बाट अर्को आफैं आउने भएकाले यहाँ
   /// overlay मात्र खाली गर्ने।
   final VoidCallback onAction;
@@ -524,6 +542,7 @@ class _IncomingOfferOverlay extends StatelessWidget {
     required this.data,
     required this.distanceKm,
     required this.myService,
+    this.blockedByOtherActiveJob = false,
     required this.onSkip,
     required this.onAction,
   });
@@ -534,8 +553,9 @@ class _IncomingOfferOverlay extends StatelessWidget {
     final desc = (data['details'] ?? '').toString();
     final address = (data['address'] ?? '').toString();
     final budget = data['proposedPrice'];
-    final skillMismatch =
-        myService.isNotEmpty && myService.toLowerCase() != service.toLowerCase();
+    final skillMismatch = myService.isNotEmpty &&
+        myService.toLowerCase() != service.toLowerCase();
+    final blocked = skillMismatch || blockedByOtherActiveJob;
 
     // नोट: यहाँ कुनै key दिनु पर्दैन — parent (`_IncomingOfferOverlay` आफैं,
     // job id ले keyed) बदलिँदा Flutter ले यो पूरै subtree नयाँ बनाउँछ, त्यसैले
@@ -605,8 +625,7 @@ class _IncomingOfferOverlay extends StatelessWidget {
                   child: Image.asset(
                     serviceImageFor(service),
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Icon(
-                        serviceIconFor(service),
+                    errorBuilder: (_, __, ___) => Icon(serviceIconFor(service),
                         color: AppColors.igViolet),
                   ),
                 ),
@@ -645,8 +664,7 @@ class _IncomingOfferOverlay extends StatelessWidget {
               Text(desc,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style:
-                      const TextStyle(fontSize: 13, color: Colors.black87)),
+                  style: const TextStyle(fontSize: 13, color: Colors.black87)),
             ],
             if (address.isNotEmpty) ...[
               const SizedBox(height: 6),
@@ -682,6 +700,22 @@ class _IncomingOfferOverlay extends StatelessWidget {
                   ),
                 ],
               ),
+            ] else if (blockedByOtherActiveJob) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const Icon(Icons.lock_clock_rounded,
+                      size: 14, color: AppColors.warning),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(S.finishCurrentJobFirst,
+                        style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.warning)),
+                  ),
+                ],
+              ),
             ],
             const SizedBox(height: 12),
             Row(
@@ -703,7 +737,7 @@ class _IncomingOfferOverlay extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: skillMismatch
+                    onPressed: blocked
                         ? null
                         : () {
                             onAction();
@@ -721,7 +755,7 @@ class _IncomingOfferOverlay extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: skillMismatch
+                    onPressed: blocked
                         ? null
                         : () {
                             onAction();
@@ -895,13 +929,19 @@ class _JobCard extends StatelessWidget {
   final String docId;
   final Map<String, dynamic> data;
   final double? distanceKm;
+
   /// कामदारको दर्ता सीप — यो काम नमिले Accept/मूल्य प्रस्ताव बटन disable हुन्छ।
   final String myService;
+
+  /// Single Active Job Restriction — true भए worker सँग हाल पहिल्यै अर्को
+  /// साँच्चै सक्रिय काम छ, Accept/Offer दुवै बटन disable हुन्छन्।
+  final bool blockedByOtherActiveJob;
   const _JobCard({
     required this.docId,
     required this.data,
     required this.distanceKm,
     required this.myService,
+    this.blockedByOtherActiveJob = false,
   });
 
   String _fmtDate(dynamic v) {
@@ -932,8 +972,9 @@ class _JobCard extends StatelessWidget {
     // सीप-आधारित प्रतिबन्ध: हेर्न सबैलाई खुला, तर Accept/मूल्य प्रस्ताव आफ्नै
     // दर्ता सीप-श्रेणीको काममा मात्र। प्रोफाइलमा सीप नै सेट नभए (myService
     // खाली) रोक्दैन।
-    final skillMismatch =
-        myService.isNotEmpty && myService.toLowerCase() != service.toLowerCase();
+    final skillMismatch = myService.isNotEmpty &&
+        myService.toLowerCase() != service.toLowerCase();
+    final blocked = skillMismatch || blockedByOtherActiveJob;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1036,6 +1077,22 @@ class _JobCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
+          ] else if (blockedByOtherActiveJob) ...[
+            Row(
+              children: [
+                const Icon(Icons.lock_clock_rounded,
+                    size: 14, color: AppColors.warning),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(S.finishCurrentJobFirst,
+                      style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.warning)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
           ],
           Row(
             children: [
@@ -1053,7 +1110,7 @@ class _JobCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton(
-                  onPressed: skillMismatch
+                  onPressed: blocked
                       ? null
                       : () => counterBroadcastJob(context, docId, data,
                           myService: myService),
@@ -1068,7 +1125,7 @@ class _JobCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: skillMismatch
+                  onPressed: blocked
                       ? null
                       : () => acceptBroadcastJob(context, docId, data,
                           myService: myService),

@@ -85,6 +85,99 @@ Future<String> myPhoneNumber(String? uid) async {
   return phone;
 }
 
+// ── Single Active Job Restriction ───────────────────────────────────────
+// worker ले एकैचोटि एउटा मात्र सक्रिय काम (accepted/confirmed/in_progress)
+// राख्न पाउँछ — अघिल्लो काम completed/cancelled/declined नभएसम्म नयाँ कुनै
+// पनि बाटोबाट (सिधा accept, counter-offer accept, employer ले worker कै
+// counter accept गर्दा) accept हुनै नपाओस्। यो नियम बाँकी सबैतिर प्रयोग हुने
+// उस्तै status set हो — `main_container.dart` कै `_activeJobStatuses` र
+// `worker_profile_screen.dart` कै `_kActiveRequestStatuses` सँगै मिल्ने।
+const kActiveJobStatuses = {'accepted', 'confirmed', 'in_progress'};
+
+/// worker आफैं व्यस्त भएकोले (अर्को सक्रिय काम भइरहेको) यो काम accept/confirm
+/// गर्न नमिल्ने भएको बेला throw हुने — caller ले पक्डेर स्पष्ट सन्देश देखाउनुहोस्।
+class WorkerBusyException implements Exception {
+  const WorkerBusyException();
+  @override
+  String toString() => 'worker_busy_with_active_job';
+}
+
+/// [workerUid] लाई हाल कुनै अर्को साँच्चै-अझै-सक्रिय काम (यो [excludeDocId]
+/// बाहेक) छ भने त्यसको requestId फर्काउँछ, नत्र null। `users/{uid}.
+/// activeJobId` (accept हुनेबित्तिकै [claimJobForWorker] ले लेख्ने पोइन्टर)
+/// बाट — UI ले Accept/Offer बटन देखाउनुअघि (disable/hide गर्न) प्रयोग गर्ने
+/// छिटो, non-transactional जाँच। स्टेल पोइन्टर (काम completed भइसकेको तर
+/// पोइन्टर clear हुन नपाएको दुर्लभ अवस्था) भेटिए त्यो job doc कै ताजा status
+/// पनि पक्का जाँचिन्छ, र स्टेल भेटिए null नै फर्कन्छ (block गर्दैन)।
+Future<String?> workerActiveJobId(String? workerUid,
+    {String? excludeDocId}) async {
+  if (workerUid == null || workerUid.isEmpty) return null;
+  try {
+    final u = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(workerUid)
+        .get();
+    final id = (u.data()?['activeJobId'] ?? '').toString();
+    if (id.isEmpty || id == excludeDocId) return null;
+    final job = await FirebaseFirestore.instance
+        .collection('serviceRequests')
+        .doc(id)
+        .get();
+    final status = (job.data()?['status'] ?? '').toString();
+    return kActiveJobStatuses.contains(status) ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// काम [docId] लाई [workerUid] का लागि atomic रूपमा "claim" गर्ने — [docId]
+/// को [updateFields] लेख्नुको साथसाथै `users/{workerUid}.activeJobId` पनि
+/// यही transaction भित्रै सेट हुन्छ, ताकि "दुई काम लगभग एकैचोटि accept" जस्तो
+/// race-condition सम्भवै नहोस्। worker लाई हाल अर्को साँच्चै-अझै-सक्रिय काम
+/// (transaction भित्रै ताजा पढेर पक्का गरिएको, केवल पोइन्टर हेरेर होइन)
+/// भेटिए [WorkerBusyException] throw हुन्छ, doc लेखिँदैन।
+Future<void> claimJobForWorker({
+  required String docId,
+  required String workerUid,
+  required Map<String, dynamic> updateFields,
+}) async {
+  final jobRef =
+      FirebaseFirestore.instance.collection('serviceRequests').doc(docId);
+  final userRef = FirebaseFirestore.instance.collection('users').doc(workerUid);
+  await FirebaseFirestore.instance.runTransaction((tx) async {
+    final userSnap = await tx.get(userRef);
+    final existingId = (userSnap.data()?['activeJobId'] ?? '').toString();
+    if (existingId.isNotEmpty && existingId != docId) {
+      final otherSnap = await tx.get(FirebaseFirestore.instance
+          .collection('serviceRequests')
+          .doc(existingId));
+      final otherStatus = (otherSnap.data()?['status'] ?? '').toString();
+      if (kActiveJobStatuses.contains(otherStatus)) {
+        throw const WorkerBusyException();
+      }
+    }
+    tx.update(jobRef, updateFields);
+    tx.set(userRef, {'activeJobId': docId}, SetOptions(merge: true));
+  });
+}
+
+/// काम active अवस्थाबाट बाहिरिँदा (completed/cancelled/declined) worker को
+/// `activeJobId` पोइन्टर खाली गर्ने — तर मात्र त्यो पोइन्टरले अझै यही
+/// [docId] लाई देखाइरहेको भए (नत्र बीचमा अर्को नयाँ काम claim भइसकेको भए
+/// त्यसैलाई गलतीले नहटाइयोस्)।
+Future<void> releaseWorkerActiveJob(String? workerUid, String docId) async {
+  if (workerUid == null || workerUid.isEmpty) return;
+  final userRef = FirebaseFirestore.instance.collection('users').doc(workerUid);
+  try {
+    await FirebaseFirestore.instance.runTransaction((tx) async {
+      final snap = await tx.get(userRef);
+      if ((snap.data()?['activeJobId'] ?? '').toString() == docId) {
+        tx.update(userRef, {'activeJobId': FieldValue.delete()});
+      }
+    });
+  } catch (_) {}
+}
+
 Future<bool> _stillOpen(String docId) async {
   final fresh = await FirebaseFirestore.instance
       .collection('serviceRequests')
@@ -132,27 +225,28 @@ Future<void> acceptBroadcastJob(
         .showSnackBar(SnackBar(content: Text(S.notAuthorizedForJobCategory)));
     return;
   }
-  final uid = FirebaseAuth.instance.currentUser?.uid;
+  final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
   try {
     if (!await _stillOpen(docId)) {
       messenger.showSnackBar(
           const SnackBar(content: Text('यो काम अर्को कामदारले लिइसक्नुभयो।')));
       return;
     }
-    await FirebaseFirestore.instance
-        .collection('serviceRequests')
-        .doc(docId)
-        .update({
-      'workerUid': uid,
-      'workerName': await myWorkerName(uid),
-      'workerPhone': await myPhoneNumber(uid),
-      'status': 'accepted',
-      'finalPrice': data['proposedPrice'],
-      'acceptedAt': FieldValue.serverTimestamp(),
-      // route-map तुरुन्तै काम गरोस् भनेर accept गर्ने क्षणमै worker को
-      // स्थान लेख्ने — JobRouteScreen खोलेपछि मात्र पर्खनुपर्दैन।
-      ...await workerLocationForWrite(uid),
-    });
+    await claimJobForWorker(
+      docId: docId,
+      workerUid: uid,
+      updateFields: {
+        'workerUid': uid,
+        'workerName': await myWorkerName(uid),
+        'workerPhone': await myPhoneNumber(uid),
+        'status': 'accepted',
+        'finalPrice': data['proposedPrice'],
+        'acceptedAt': FieldValue.serverTimestamp(),
+        // route-map तुरुन्तै काम गरोस् भनेर accept गर्ने क्षणमै worker को
+        // स्थान लेख्ने — JobRouteScreen खोलेपछि मात्र पर्खनुपर्दैन।
+        ...await workerLocationForWrite(uid),
+      },
+    );
     messenger.showSnackBar(SnackBar(content: Text(S.jobAccepted)));
     // यहाँबाट सिधै openJobRoute() नबोलाउने — MainContainer कै साझा
     // active-job watcher ले यो status बदलिएको Firestore बाटै (लगभग तुरुन्तै)
@@ -160,6 +254,8 @@ Future<void> acceptBroadcastJob(
     // party (employer) ले counter-offer approve गर्दा जस्तो अर्को device बाट
     // भएको acceptance मा भने कहिल्यै नखुल्ने असंगति हुन्थ्यो — एउटै बाटो
     // (watcher) ले सबै केस ह्यान्डल गरोस् भनेर।
+  } on WorkerBusyException {
+    messenger.showSnackBar(SnackBar(content: Text(S.workerBusyWithOtherJob)));
   } catch (e) {
     messenger.showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
   }
@@ -316,6 +412,26 @@ Future<void> acceptWorkerCounterOffer(
       if (data == null || data['status'] != 'pending_employer_approval') {
         throw StateError('stale_offer');
       }
+      final workerUid = (data['workerUid'] ?? '').toString();
+      // Single Active Job Restriction — employer ले worker कै counter-offer
+      // accept गर्ने बेलासम्ममा त्यही worker बीचमा अर्को काम accept गरिसकेको
+      // (साँच्चै अझै सक्रिय) भेटिए यहाँ पनि रोक्नुपर्छ, नत्र यो एउटा मात्र
+      // बाटो (employer-initiated confirm) हुन्थ्यो जुन single-active-job
+      // गेटबाट बाहिर रहन्थ्यो।
+      final userRef =
+          FirebaseFirestore.instance.collection('users').doc(workerUid);
+      final userSnap = await tx.get(userRef);
+      final existingActiveId =
+          (userSnap.data()?['activeJobId'] ?? '').toString();
+      if (existingActiveId.isNotEmpty && existingActiveId != docId) {
+        final otherSnap = await tx.get(FirebaseFirestore.instance
+            .collection('serviceRequests')
+            .doc(existingActiveId));
+        final otherStatus = (otherSnap.data()?['status'] ?? '').toString();
+        if (kActiveJobStatuses.contains(otherStatus)) {
+          throw const WorkerBusyException();
+        }
+      }
       final price = (data['workerCounterPrice'] as num?) ??
           (data['proposedPrice'] as num?) ??
           0;
@@ -340,10 +456,16 @@ Future<void> acceptWorkerCounterOffer(
         if (myPhone.isNotEmpty) update['employerPhone'] = myPhone;
       }
       tx.update(ref, update);
+      if (workerUid.isNotEmpty) {
+        tx.set(userRef, {'activeJobId': docId}, SetOptions(merge: true));
+      }
       finalData = {...data, ...update};
     });
   } on StateError {
     messenger.showSnackBar(SnackBar(content: Text(S.staleOfferError)));
+    return;
+  } on WorkerBusyException {
+    messenger.showSnackBar(SnackBar(content: Text(S.workerBusyWithOtherJob)));
     return;
   } catch (e) {
     messenger.showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));

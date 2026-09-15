@@ -14,7 +14,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/strings.dart';
 import '../screens/job_actions.dart'
-    show myWorkerName, purgeSensitiveDataOnCompletion;
+    show myWorkerName, purgeSensitiveDataOnCompletion, releaseWorkerActiveJob;
 import '../theme/app_theme.dart';
 import 'app_ui.dart';
 
@@ -79,8 +79,7 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
       final employerName = await myWorkerName(me?.uid);
 
       final batch = FirebaseFirestore.instance.batch();
-      final reviewRef =
-          FirebaseFirestore.instance.collection('reviews').doc();
+      final reviewRef = FirebaseFirestore.instance.collection('reviews').doc();
       batch.set(reviewRef, {
         'targetUid': widget.workerUid,
         'authorUid': me?.uid ?? '',
@@ -107,6 +106,9 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
       // काम completed भएपछि तुरुन्तै संवेदनशील chat/phone data सफा — यो
       // UI लाई कुनै हालतमा block नगरोस् (fire-and-forget)।
       unawaited(purgeSensitiveDataOnCompletion(widget.docId));
+      // Single Active Job Restriction — काम completed भएपछि worker फेरि
+      // अर्को नयाँ काम accept गर्न मिल्ने बनाउने (पोइन्टर खाली)।
+      unawaited(releaseWorkerActiveJob(widget.workerUid, widget.docId));
       if (!mounted) return;
       Navigator.pop(context);
       ScaffoldMessenger.of(context)
@@ -159,8 +161,8 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
       child: Container(
-        constraints:
-            BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.88),
+        constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.88),
         decoration: BoxDecoration(
           color: theme.colorScheme.surface,
           borderRadius:
@@ -208,7 +210,8 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  _methodChip(theme, 'cash', S.cashWord, Icons.payments_outlined),
+                  _methodChip(
+                      theme, 'cash', S.cashWord, Icons.payments_outlined),
                   const SizedBox(width: 10),
                   _methodChip(theme, 'digital', S.digitalWord,
                       Icons.account_balance_wallet),
@@ -229,7 +232,9 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 3),
                         child: Icon(
-                          filled ? Icons.star_rounded : Icons.star_outline_rounded,
+                          filled
+                              ? Icons.star_rounded
+                              : Icons.star_outline_rounded,
                           size: 38,
                           color: AppColors.igYellow,
                         ),

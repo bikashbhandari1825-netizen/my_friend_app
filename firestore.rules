@@ -20,12 +20,35 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    // ── Single Active Job Restriction ─────────────────────────
+    // worker ले एकैचोटि एउटा मात्र सक्रिय काम राख्न पाउँछ — client-side
+    // (job_actions.dart कै claimJobForWorker/transaction) ले नै मुख्य
+    // गरी लागू गर्छ, तर यहाँ पनि backend/rules-level defense-in-depth
+    // (client bypass गरेर सिधै Firestore लेख्न खोजे पनि रोकियोस्)।
+    function activeJobStatuses() {
+      return ['accepted', 'confirmed', 'in_progress'];
+    }
+
+    function workerFreeToClaim(workerUid, docId) {
+      let u = get(/databases/$(database)/documents/users/$(workerUid)).data;
+      return !('activeJobId' in u) || u.activeJobId == '' || u.activeJobId == docId;
+    }
+
     // ── users ────────────────────────────────────────────────
     // signed-in युजरले profile पढ्न सक्छन् (chat/booking नाम देखाउन);
     // आफ्नै doc मात्र लेख्न पाउँछन्; एडमिनले जुनसुकै।
     match /users/{uid} {
       allow read: if isSignedIn();
-      allow create, update: if isOwner(uid) || isAdmin();
+      allow create, update: if isOwner(uid) || isAdmin()
+        // Single Active Job Restriction — employer ले worker कै counter-
+        // offer accept गर्दा (acceptWorkerCounterOffer) त्यो worker को
+        // `activeJobId` pointer पनि employer कै transaction भित्रै लेख्नु
+        // पर्छ (worker त्यो क्षणमा अनलाइन नहुन सक्छ)। यहाँ त्यही एउटा
+        // field मात्र (अरू कुनै होइन) बदलिइरहेको भए जुनसुकै signed-in
+        // user लाई अनुमति — worst-case प्रभाव अर्को worker "व्यस्त"
+        // देखिनु मात्र हो, कुनै संवेदनशील डेटा लेखिँदैन।
+        || (isSignedIn() && request.resource.data.diff(resource.data)
+              .affectedKeys().hasOnly(['activeJobId']));
       allow delete: if isOwner(uid) || isAdmin();
     }
 
@@ -96,7 +119,21 @@ service cloud.firestore {
         // कुनै worker ले broadcast job claim गर्दा वा decline गर्दा
         || (resource.data.status == 'broadcasting' && (
               request.resource.data.workerUid == request.auth.uid
-              || request.resource.data.status == 'broadcasting')));
+              || request.resource.data.status == 'broadcasting')))
+        // Single Active Job Restriction (backend/rules-level defense-in-
+        // depth) — यो अनुरोध नयाँ-नयाँ सक्रिय (accepted/confirmed/
+        // in_progress) हुँदै छ भने मात्र (पहिल्यैदेखि सक्रिय भइसकेको काम,
+        // जस्तै worker को लगातार GPS position अपडेट वा completed/cancelled
+        // मा बाहिरिने बेला होइन), त्यो worker सँग हाल अर्को साँच्चै सक्रिय
+        // काम नभएको पक्का गर्ने।
+        && (
+          isAdmin()
+          || !(request.resource.data.status in activeJobStatuses())
+          || resource.data.status in activeJobStatuses()
+          || !('workerUid' in request.resource.data)
+          || request.resource.data.workerUid == ''
+          || workerFreeToClaim(request.resource.data.workerUid, doc)
+        );
       allow delete: if isAdmin();
     }
 

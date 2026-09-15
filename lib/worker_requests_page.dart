@@ -38,6 +38,14 @@ class _WorkerRequestsPageState extends State<WorkerRequestsPage> {
           .where('workerUid', isEqualTo: _uid)
           .snapshots();
 
+  // Single Active Job Restriction — Accept/Offer बटन देखाउनुअघि हाल कुनै
+  // अर्को काम accepted/confirmed/in_progress छ कि भनेर live जाँच्ने।
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _userStream =
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(_uid ?? '__none__')
+          .snapshots();
+
   @override
   Widget build(BuildContext context) {
     final uid = _uid;
@@ -80,47 +88,58 @@ class _WorkerRequestsPageState extends State<WorkerRequestsPage> {
                 child: Text('Login गर्नुहोस्',
                     style: TextStyle(color: Colors.white)))
             : SafeArea(
-                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: _stream,
-                  builder: (context, snap) {
-                    if (!snap.hasData) {
-                      return const Center(
-                          child:
-                              CircularProgressIndicator(color: Colors.white));
-                    }
-                    final docs = (snap.data?.docs ?? []).toList()
-                      ..sort((a, b) {
-                        // ग्राहकले पठाएको live counter-offer सधैँ सबैभन्दा माथि।
-                        final pa =
-                            a.data()['status'] == 'pending_worker_counter'
-                                ? 0
-                                : 1;
-                        final pb =
-                            b.data()['status'] == 'pending_worker_counter'
-                                ? 0
-                                : 1;
-                        if (pa != pb) return pa - pb;
-                        final ta = a.data()['createdAt'];
-                        final tb = b.data()['createdAt'];
-                        if (ta is Timestamp && tb is Timestamp) {
-                          return tb.compareTo(ta);
+                child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                  stream: _userStream,
+                  builder: (context, userSnap) {
+                    final myActiveJobId =
+                        (userSnap.data?.data()?['activeJobId'] ?? '')
+                            .toString();
+                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: _stream,
+                      builder: (context, snap) {
+                        if (!snap.hasData) {
+                          return const Center(
+                              child: CircularProgressIndicator(
+                                  color: Colors.white));
                         }
-                        return 0;
-                      });
+                        final docs = (snap.data?.docs ?? []).toList()
+                          ..sort((a, b) {
+                            // ग्राहकले पठाएको live counter-offer सधैँ सबैभन्दा माथि।
+                            final pa =
+                                a.data()['status'] == 'pending_worker_counter'
+                                    ? 0
+                                    : 1;
+                            final pb =
+                                b.data()['status'] == 'pending_worker_counter'
+                                    ? 0
+                                    : 1;
+                            if (pa != pb) return pa - pb;
+                            final ta = a.data()['createdAt'];
+                            final tb = b.data()['createdAt'];
+                            if (ta is Timestamp && tb is Timestamp) {
+                              return tb.compareTo(ta);
+                            }
+                            return 0;
+                          });
 
-                    if (docs.isEmpty) {
-                      return const _EmptyState();
-                    }
+                        if (docs.isEmpty) {
+                          return const _EmptyState();
+                        }
 
-                    return ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-                      itemCount: docs.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (context, i) => _RequestCard(
-                        key: ValueKey(docs[i].id),
-                        docId: docs[i].id,
-                        data: docs[i].data(),
-                      ),
+                        return ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                          itemCount: docs.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 12),
+                          itemBuilder: (context, i) => _RequestCard(
+                            key: ValueKey(docs[i].id),
+                            docId: docs[i].id,
+                            data: docs[i].data(),
+                            blockedByOtherActiveJob: myActiveJobId.isNotEmpty &&
+                                myActiveJobId != docs[i].id,
+                          ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -154,7 +173,16 @@ class _EmptyState extends StatelessWidget {
 class _RequestCard extends StatelessWidget {
   final String docId;
   final Map<String, dynamic> data;
-  const _RequestCard({super.key, required this.docId, required this.data});
+  // Single Active Job Restriction — true भए यो worker सँग हाल यो बाहेक अर्को
+  // साँच्चै सक्रिय (accepted/confirmed/in_progress) काम छ; Accept/Offer बटन
+  // देखाउनुको सट्टा "पहिले हालको काम सक्नुहोस्" भन्ने सूचना देखिन्छ।
+  final bool blockedByOtherActiveJob;
+  const _RequestCard({
+    super.key,
+    required this.docId,
+    required this.data,
+    this.blockedByOtherActiveJob = false,
+  });
 
   Future<void> _callEmployer(BuildContext context) async {
     final phone = (data['employerPhone'] ?? '').toString().trim();
@@ -169,27 +197,34 @@ class _RequestCard extends StatelessWidget {
   }
 
   Future<void> _acceptAtListedPrice(BuildContext context, num price) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    await FirebaseFirestore.instance
-        .collection('serviceRequests')
-        .doc(docId)
-        .update({
-      'status': 'accepted',
-      'finalPrice': price,
-      'acceptedAt': FieldValue.serverTimestamp(),
-      // employer ले Call थिच्दा नम्बर भेट्टाओस् भनेर — पहिले यहाँ कहिल्यै
-      // लेखिँदैनथ्यो, त्यसैले accepted भइसकेपछि पनि "no phone on file" देखिन्थ्यो।
-      'workerPhone': await myPhoneNumber(uid),
-      // route-map तुरुन्तै काम गरोस् भनेर accept गर्ने क्षणमै worker को
-      // स्थान लेख्ने — job_actions.dart कै साझा function (JobRouteScreen
-      // खोलेपछि मात्र पर्खनुपर्दैन)।
-      ...await workerLocationForWrite(uid),
-    });
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(S.jobAccepted)));
-    // MainContainer कै active-job watcher ले यो status बदलिएको देखेर आफैं
-    // route screen खोल्छ — यहाँबाट छुट्टै नखोल्ने (double-open नहोस् भनेर)।
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await claimJobForWorker(
+        docId: docId,
+        workerUid: uid,
+        updateFields: {
+          'status': 'accepted',
+          'finalPrice': price,
+          'acceptedAt': FieldValue.serverTimestamp(),
+          // employer ले Call थिच्दा नम्बर भेट्टाओस् भनेर — पहिले यहाँ
+          // कहिल्यै लेखिँदैनथ्यो, त्यसैले accepted भइसकेपछि पनि "no phone
+          // on file" देखिन्थ्यो।
+          'workerPhone': await myPhoneNumber(uid),
+          // route-map तुरुन्तै काम गरोस् भनेर accept गर्ने क्षणमै worker को
+          // स्थान लेख्ने — job_actions.dart कै साझा function (JobRouteScreen
+          // खोलेपछि मात्र पर्खनुपर्दैन)।
+          ...await workerLocationForWrite(uid),
+        },
+      );
+      messenger.showSnackBar(SnackBar(content: Text(S.jobAccepted)));
+      // MainContainer कै active-job watcher ले यो status बदलिएको देखेर आफैं
+      // route screen खोल्छ — यहाँबाट छुट्टै नखोल्ने (double-open नहोस् भनेर)।
+    } on WorkerBusyException {
+      messenger.showSnackBar(SnackBar(content: Text(S.workerBusyWithOtherJob)));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
+    }
   }
 
   Future<void> _startWork(BuildContext context) async {
@@ -252,22 +287,28 @@ class _RequestCard extends StatelessWidget {
 
   // ── ग्राहकको live counter-offer मा जवाफ ─────────────────────
   Future<void> _acceptEmployerCounter(BuildContext context, num price) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    await FirebaseFirestore.instance
-        .collection('serviceRequests')
-        .doc(docId)
-        .update({
-      'status': 'accepted',
-      'finalPrice': price,
-      'acceptedAt': FieldValue.serverTimestamp(),
-      'workerPhone': await myPhoneNumber(uid),
-      ...await workerLocationForWrite(uid),
-    });
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(S.jobAccepted)));
-    // MainContainer कै active-job watcher ले यो status बदलिएको देखेर आफैं
-    // route screen खोल्छ — यहाँबाट छुट्टै नखोल्ने (double-open नहोस् भनेर)।
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await claimJobForWorker(
+        docId: docId,
+        workerUid: uid,
+        updateFields: {
+          'status': 'accepted',
+          'finalPrice': price,
+          'acceptedAt': FieldValue.serverTimestamp(),
+          'workerPhone': await myPhoneNumber(uid),
+          ...await workerLocationForWrite(uid),
+        },
+      );
+      messenger.showSnackBar(SnackBar(content: Text(S.jobAccepted)));
+      // MainContainer कै active-job watcher ले यो status बदलिएको देखेर आफैं
+      // route screen खोल्छ — यहाँबाट छुट्टै नखोल्ने (double-open नहोस् भनेर)।
+    } on WorkerBusyException {
+      messenger.showSnackBar(SnackBar(content: Text(S.workerBusyWithOtherJob)));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
+    }
   }
 
   Future<void> _declineFromCounter(BuildContext context) async {
@@ -551,7 +592,32 @@ class _RequestCard extends StatelessWidget {
                     ],
                   ),
                 ),
-              if (status == 'pending_worker') ...[
+              // Single Active Job Restriction — worker सँग हाल अर्को साँच्चै
+              // सक्रिय काम भए Accept/Offer बटनको सट्टा स्पष्ट सूचना, ताकि
+              // व्यवहारमा कहिल्यै दुई सक्रिय काम एकैचोटि नहोस्।
+              if (status == 'pending_worker' && blockedByOtherActiveJob)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.warning.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(AppRadius.pill),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.lock_clock_rounded,
+                          size: 14, color: AppColors.warning),
+                      const SizedBox(width: 6),
+                      Text(S.finishCurrentJobFirst,
+                          style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.warning)),
+                    ],
+                  ),
+                )
+              else if (status == 'pending_worker') ...[
                 OutlinedButton(
                   onPressed: () => _counterDialog(context, price),
                   style: OutlinedButton.styleFrom(
@@ -575,4 +641,3 @@ class _RequestCard extends StatelessWidget {
     );
   }
 }
-

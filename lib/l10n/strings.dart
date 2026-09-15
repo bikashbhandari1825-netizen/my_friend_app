@@ -48,7 +48,8 @@ class S {
   static String get navBookings => _t('nav_bookings');
 
   // ── Active job bar (pinned above bottom nav) ────────────
-  static String get activeJobBarCancelTitle => _t('active_job_bar_cancel_title');
+  static String get activeJobBarCancelTitle =>
+      _t('active_job_bar_cancel_title');
   static String get activeJobBarCancelBody => _t('active_job_bar_cancel_body');
   static String get keepJob => _t('keep_job');
 
@@ -130,8 +131,7 @@ class S {
   static String get drivingLicenseLabel => _t('driving_license_label');
   static String get vehicleRegistrationLabel =>
       _t('vehicle_registration_label');
-  static String get vehicleDocsRequiredHint =>
-      _t('vehicle_docs_required_hint');
+  static String get vehicleDocsRequiredHint => _t('vehicle_docs_required_hint');
   static String get uploadDriverDocsError => _t('upload_driver_docs_error');
   static String get experienceLabel => _t('experience_label');
   static String get yearsWord => _t('years_word');
@@ -228,12 +228,10 @@ class S {
   static String get locationRowLabel => _t('location_row_label');
   static String get documentAvailable => _t('document_available');
   static String get callToBook => _t('call_to_book');
-  static String requestServiceFrom(String name) => isNepali
-      ? '$name लाई सेवा अनुरोध'
-      : 'Request service from $name';
+  static String requestServiceFrom(String name) =>
+      isNepali ? '$name लाई सेवा अनुरोध' : 'Request service from $name';
   static String get describeYourTask => _t('describe_your_task');
-  static String get serviceRequestSentTitle =>
-      _t('service_request_sent_title');
+  static String get serviceRequestSentTitle => _t('service_request_sent_title');
   static String get serviceRequestSentBody => _t('service_request_sent_body');
   static String get contactLockedCaption => _t('contact_locked_caption');
   static String get openChatLabel => _t('open_chat_label');
@@ -368,8 +366,7 @@ class S {
   static String rateWorkerTitle(String name) =>
       isNepali ? '$name लाई रेटिङ दिनुहोस्' : 'Rate $name\'s service';
   static String get addCommentOptional => _t('add_comment_optional');
-  static String get waitingEmployerComplete =>
-      _t('waiting_employer_complete');
+  static String get waitingEmployerComplete => _t('waiting_employer_complete');
   static String get last7Days => _t('last_7_days');
   static String get noEarningsYet => _t('no_earnings_yet');
   static String get perJobBreakdown => _t('per_job_breakdown');
@@ -493,8 +490,7 @@ class S {
   static String newCounterOfferNotifBody(num price) => S.isNepali
       ? 'नयाँ मूल्य प्रस्ताव: Rs. $price'
       : 'New counter-offer: Rs. $price';
-  static String get offerAcceptedNotifTitle =>
-      _t('offer_accepted_notif_title');
+  static String get offerAcceptedNotifTitle => _t('offer_accepted_notif_title');
   static String offerAcceptedNotifBody(String employerName, num amount) =>
       S.isNepali
           ? '$employerName ले Rs. $amount मा तपाईंको प्रस्ताव स्वीकार गर्नुभयो'
@@ -504,6 +500,10 @@ class S {
   static String get routeFallbackWarning => _t('route_fallback_warning');
   static String get noPhoneOnFile => _t('no_phone_on_file');
   static String get activeJobTitle => _t('active_job_title');
+  // Single Active Job Restriction — worker ले एकैचोटि एउटा मात्र सक्रिय काम
+  // राख्न पाउँछ; अर्को accept गर्न खोज्दा यी देखिन्छन्।
+  static String get workerBusyWithOtherJob => _t('worker_busy_with_other_job');
+  static String get finishCurrentJobFirst => _t('finish_current_job_first');
 
   // ── Canonical job status labels ────────────────────────
   static String get statusSearching => _t('status_searching');
@@ -792,8 +792,7 @@ class S {
     },
     'upload_driver_docs_error': {
       'en': 'Please upload your driving license and vehicle registration',
-      'ne':
-          'कृपया आफ्नो सवारी चालक अनुमतिपत्र र सवारी दर्ता अपलोड गर्नुहोस्',
+      'ne': 'कृपया आफ्नो सवारी चालक अनुमतिपत्र र सवारी दर्ता अपलोड गर्नुहोस्',
     },
     'experience_label': {'en': 'Experience', 'ne': 'अनुभव'},
     'years_word': {'en': 'yrs', 'ne': 'वर्ष'},
@@ -964,7 +963,10 @@ class S {
     },
     'location_row_label': {'en': 'Location', 'ne': 'स्थान'},
     'document_available': {'en': 'Available', 'ne': 'उपलब्ध'},
-    'call_to_book': {'en': 'Call to book directly', 'ne': 'सिधै बुक गर्न कल गर्नुहोस्'},
+    'call_to_book': {
+      'en': 'Call to book directly',
+      'ne': 'सिधै बुक गर्न कल गर्नुहोस्'
+    },
     'describe_your_task': {
       'en': 'Describe your problem / task',
       'ne': 'आफ्नो समस्या/काम बताउनुहोस्'
@@ -976,7 +978,8 @@ class S {
     'service_request_sent_body': {
       'en':
           'Your service request has been sent successfully. The worker will accept it soon!',
-      'ne': 'तपाईंको सेवा अनुरोध सफलतापूर्वक पठाइयो। कामदारले चाँडै स्वीकार गर्नेछन्!'
+      'ne':
+          'तपाईंको सेवा अनुरोध सफलतापूर्वक पठाइयो। कामदारले चाँडै स्वीकार गर्नेछन्!'
     },
     'contact_locked_caption': {
       'en': 'Call & Message unlock once your request is accepted',
@@ -1414,8 +1417,7 @@ class S {
       'ne': 'तपाईंको प्रस्ताव स्वीकृत भयो'
     },
     'stale_offer_error': {
-      'en':
-          'This offer is no longer available — the worker sent a new price.',
+      'en': 'This offer is no longer available — the worker sent a new price.',
       'ne': 'यो प्रस्ताव अब उपलब्ध छैन — कामदारले नयाँ मूल्य पठाइसक्नुभयो।'
     },
     'open_in_google_maps': {
@@ -1431,6 +1433,16 @@ class S {
       'ne': 'फोन नम्बर उपलब्ध छैन'
     },
     'active_job_title': {'en': 'Active job', 'ne': 'सक्रिय काम'},
+    'worker_busy_with_other_job': {
+      'en':
+          'You already have an active job. Finish or cancel it before accepting a new one.',
+      'ne':
+          'तपाईंसँग पहिल्यै एउटा सक्रिय काम छ। नयाँ काम स्वीकार गर्नुअघि त्यो सक्नुहोस् वा रद्द गर्नुहोस्।',
+    },
+    'finish_current_job_first': {
+      'en': 'Finish your current job first',
+      'ne': 'पहिले तपाईंको हालको काम सक्नुहोस्',
+    },
     'status_searching': {'en': 'Searching', 'ne': 'खोज्दै'},
     'status_new': {'en': 'New request', 'ne': 'नयाँ अनुरोध'},
     'status_counter': {'en': 'Counter-offer', 'ne': 'नयाँ मूल्य'},
@@ -1574,7 +1586,8 @@ class S {
     'forgot_password': {'en': 'Forgot password?', 'ne': 'पासवर्ड बिर्सनुभयो?'},
     'reset_email_enter_first': {
       'en': 'Enter your email above first, then tap "Forgot password?".',
-      'ne': 'पहिले माथि आफ्नो इमेल हाल्नुहोस्, अनि "पासवर्ड बिर्सनुभयो?" थिच्नुहोस्।'
+      'ne':
+          'पहिले माथि आफ्नो इमेल हाल्नुहोस्, अनि "पासवर्ड बिर्सनुभयो?" थिच्नुहोस्।'
     },
     'reset_email_sent': {
       'en':
@@ -1681,7 +1694,10 @@ class S {
       'en': 'You have arrived at the job location',
       'ne': 'तपाईं काम स्थलमा पुग्नुभयो'
     },
-    'start_work_now': {'en': 'Start work now', 'ne': 'अहिले काम सुरु गर्नुहोस्'},
+    'start_work_now': {
+      'en': 'Start work now',
+      'ne': 'अहिले काम सुरु गर्नुहोस्'
+    },
     'voice_call': {'en': 'Voice call', 'ne': 'भ्वाइस कल'},
     'video_call': {'en': 'Video call', 'ne': 'भिडियो कल'},
     'join_call': {'en': 'Join', 'ne': 'सामेल हुनुहोस्'},

@@ -8,6 +8,8 @@
 // हुनेबित्तिकै आफैं हराउँछ। दूरी/ETA worker को लाइभ GPS (workerLat/workerLng,
 // job_route_screen.dart र main_container.dart दुवैले लेख्छन्) बाट प्रत्येक
 // Firestore अपडेटमा पुनः गणना हुन्छ।
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -15,6 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../screens/chat_screen.dart';
+import '../screens/job_actions.dart' show releaseWorkerActiveJob;
 import '../screens/nearby_common.dart' show haversineKm, serviceIconFor;
 import 'status_badge.dart';
 
@@ -32,10 +35,8 @@ class ActiveJobBar extends StatelessWidget {
 
   static const _liveStatuses = {'accepted', 'confirmed', 'in_progress'};
 
-  DocumentReference<Map<String, dynamic>> get _ref => FirebaseFirestore
-      .instance
-      .collection('serviceRequests')
-      .doc(requestId);
+  DocumentReference<Map<String, dynamic>> get _ref =>
+      FirebaseFirestore.instance.collection('serviceRequests').doc(requestId);
 
   // सडक-मार्ग (Directions API) यहाँ बारम्बार नतान्ने — हरेक tab मा हरेक
   // सेकेन्ड देखिने bar ले API cost नबढाओस् भनेर सीधा-रेखा दूरी + अनुमानित
@@ -61,7 +62,8 @@ class ActiveJobBar extends StatelessWidget {
     } catch (_) {}
   }
 
-  Future<void> _confirmCancel(BuildContext context) async {
+  Future<void> _confirmCancel(
+      BuildContext context, Map<String, dynamic> data) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -75,8 +77,8 @@ class ActiveJobBar extends StatelessWidget {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child:
-                Text(S.cancelRequest, style: const TextStyle(color: Colors.white)),
+            child: Text(S.cancelRequest,
+                style: const TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -86,6 +88,10 @@ class ActiveJobBar extends StatelessWidget {
         'status': 'cancelled',
         'cancelledAt': FieldValue.serverTimestamp(),
       });
+      // Single Active Job Restriction — cancel भएपछि worker फेरि अर्को नयाँ
+      // काम accept गर्न मिल्ने बनाउने (पोइन्टर खाली)।
+      unawaited(releaseWorkerActiveJob(
+          (data['workerUid'] ?? '').toString(), requestId));
     }
   }
 
@@ -142,14 +148,14 @@ class ActiveJobBar extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               if (service.isNotEmpty)
-                _sheetRow(sheetContext, Icons.build_rounded, S.serviceName(service)),
+                _sheetRow(
+                    sheetContext, Icons.build_rounded, S.serviceName(service)),
               if (desc.isNotEmpty)
                 _sheetRow(sheetContext, Icons.notes_rounded, desc),
               if (address.isNotEmpty)
                 _sheetRow(sheetContext, Icons.place_rounded, address),
               if (price != null)
-                _sheetRow(
-                    sheetContext, Icons.payments_rounded, 'Rs. $price'),
+                _sheetRow(sheetContext, Icons.payments_rounded, 'Rs. $price'),
               const SizedBox(height: 18),
               if (empLat != null && empLng != null)
                 SizedBox(
@@ -169,7 +175,7 @@ class ActiveJobBar extends StatelessWidget {
                   child: OutlinedButton.icon(
                     onPressed: () {
                       Navigator.of(sheetContext).pop();
-                      _confirmCancel(context);
+                      _confirmCancel(context, data);
                     },
                     icon: const Icon(Icons.close_rounded),
                     label: Text(S.cancelRequest),
@@ -193,7 +199,9 @@ class ActiveJobBar extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, size: 17, color: Theme.of(context).colorScheme.onSurfaceVariant),
+            Icon(icon,
+                size: 17,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
             const SizedBox(width: 10),
             Expanded(child: Text(text, style: const TextStyle(fontSize: 13.5))),
           ],
