@@ -14,7 +14,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
@@ -25,35 +25,67 @@ import '../config/app_config.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 
+/// Release-notes body भित्र देखिने पाठ यति लामोसम्म मात्र — असीमित लामो/
+/// malformed string ले dialog को layout (Column/RenderFlex) लाई कहिल्यै
+/// bound-नभएको ठाउँमा धकेल्न नपाओस् भनेर (हेर्नुहोस् `_showUpdateDialog` कै
+/// `ConstrainedBox` + `SingleChildScrollView` पनि, यो त्यही सुरक्षाको
+/// अर्को तह मात्र हो)।
+const int _kMaxReleaseNotesChars = 600;
+
 class AppUpdateService {
   AppUpdateService._();
 
   /// app startup मा एकपटक बोलाउने (हेर्नुहोस् `main.dart`)। नेटवर्क/Firestore
-  /// असफल भए पनि चुपचाप फर्कन्छ — update-check ले कहिल्यै सामान्य app चलाइ
-  /// रोक्नु/तोड्नु हुँदैन।
+  /// असफल भए पनि, वा Firestore मा भएको metadata (`apkUrl`, version fields)
+  /// नमिलेको/खाली/malformed भए पनि — यहाँबाट कहिल्यै exception बाहिर
+  /// निस्कँदैन र कुनै हालतमा सामान्य app चलाइ रोक्दैन/तोड्दैन। यो function
+  /// आफैं `main.dart` बाट (auth/role resolve हुने अस्थिर सुरुवाती केही
+  /// सेकेन्ड बितिसकेपछि मात्र) बोलाइन्छ — त्यो अवधिमा नै dialog देखाउँदा
+  /// route/StreamBuilder transition सँग collide भएर black/खाली screen
+  /// देखिने गुनासोको मूल कारण देखिएको थियो।
   static Future<void> checkForUpdate(BuildContext context) async {
     if (kIsWeb || !Platform.isAndroid) return;
     try {
       final data = await AppUpdateConfig.readOnce();
       if (data == null) return;
+
       final latestCode = (data['latestVersionCode'] as num?)?.toInt() ?? 0;
-      final apkUrl = (data['apkUrl'] ?? '').toString().trim();
-      if (latestCode <= 0 || apkUrl.isEmpty) return;
+      final apkUrlRaw = (data['apkUrl'] ?? '').toString().trim();
+      // `http.get`/`open_filex` लाई पठाउनुअघि नै URL साँच्चै मान्य (scheme
+      // भएको) हो कि जाँच्ने — Firestore मा गलत/खाली/relative-path जस्तो
+      // string भेटिए dialog नै नदेखाउने, बरु बाँकी app सामान्य रूपमा चलोस्।
+      final apkUri = Uri.tryParse(apkUrlRaw);
+      if (latestCode <= 0 ||
+          apkUrlRaw.isEmpty ||
+          apkUri == null ||
+          !apkUri.hasScheme) {
+        return;
+      }
 
       final info = await PackageInfo.fromPlatform();
       final currentCode = int.tryParse(info.buildNumber) ?? 0;
       if (latestCode <= currentCode) return;
 
+      var releaseNotes = (data['releaseNotes'] ?? '').toString().trim();
+      if (releaseNotes.length > _kMaxReleaseNotesChars) {
+        releaseNotes = '${releaseNotes.substring(0, _kMaxReleaseNotesChars)}…';
+      }
+      final versionName = (data['versionName'] ?? '').toString().trim();
+      final forceUpdate = data['forceUpdate'] == true;
+
       if (!context.mounted) return;
       await _showUpdateDialog(
         context,
-        apkUrl: apkUrl,
-        versionName: (data['versionName'] ?? '').toString(),
-        releaseNotes: (data['releaseNotes'] ?? '').toString(),
-        forceUpdate: data['forceUpdate'] == true,
+        apkUrl: apkUrlRaw,
+        versionName: versionName,
+        releaseNotes: releaseNotes,
+        forceUpdate: forceUpdate,
       );
-    } catch (_) {
-      // silent — network/permission जे भए पनि app सामान्य रूपमै चलिरहोस्।
+    } catch (e, st) {
+      // silent to the user — network/permission/parse जे भए पनि app सामान्य
+      // रूपमै चलिरहोस्; debug console मा मात्र देखिने ताकि पूर्ण रूपमा
+      // silent (डिबग गर्नै नसकिने) नहोस्।
+      debugPrint('AppUpdateService.checkForUpdate failed: $e\n$st');
     }
   }
 
@@ -91,25 +123,35 @@ class AppUpdateService {
                       style: const TextStyle(fontSize: 17))),
             ],
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(S.updateAvailableBody(versionName)),
-              if (releaseNotes.trim().isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.igViolet.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                  ),
-                  child: Text(releaseNotes,
-                      style: const TextStyle(fontSize: 12.5, height: 1.4)),
-                ),
-              ],
-            ],
+          // असीमित लामो release notes (वा अन्य malformed पाठ) ले यो
+          // dialog लाई screen भन्दा अग्लो बनाई layout नै तोड्न नपाओस्
+          // भनेर — bounded height भित्रै, चाहिए scroll हुने गरी।
+          content: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(dialogContext).size.height * 0.6,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(S.updateAvailableBody(versionName)),
+                  if (releaseNotes.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.igViolet.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(AppRadius.md),
+                      ),
+                      child: Text(releaseNotes,
+                          style: const TextStyle(fontSize: 12.5, height: 1.4)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
           actions: [
             if (!forceUpdate)
@@ -136,6 +178,7 @@ class AppUpdateService {
 
   static Future<void> _downloadAndInstall(
       BuildContext context, String apkUrl) async {
+    if (!context.mounted) return;
     final progress = ValueNotifier<double?>(0);
     showDialog(
       context: context,
@@ -165,9 +208,13 @@ class AppUpdateService {
     );
 
     try {
+      final apkUri = Uri.tryParse(apkUrl);
+      if (apkUri == null || !apkUri.hasScheme) {
+        throw const FormatException('Invalid APK URL');
+      }
       final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/kaammitra_update.apk');
-      final req = http.Request('GET', Uri.parse(apkUrl));
+      final req = http.Request('GET', apkUri);
       final resp = await http.Client().send(req);
       if (resp.statusCode != 200) {
         throw HttpException('HTTP ${resp.statusCode}');
@@ -183,9 +230,14 @@ class AppUpdateService {
       await sink.close();
 
       if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
-      await OpenFilex.open(file.path,
+      final result = await OpenFilex.open(file.path,
           type: 'application/vnd.android.package-archive');
-    } catch (_) {
+      if (result.type != ResultType.done) {
+        debugPrint(
+            'AppUpdateService: install intent did not launch cleanly — ${result.type}: ${result.message}');
+      }
+    } catch (e, st) {
+      debugPrint('AppUpdateService.downloadAndInstall failed: $e\n$st');
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();
         ScaffoldMessenger.of(context).showSnackBar(

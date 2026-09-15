@@ -4,7 +4,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart' show kReleaseMode;
+import 'package:flutter/foundation.dart' show kReleaseMode, debugPrint;
 import 'package:flutter/material.dart';
 
 import 'app.dart';
@@ -43,27 +43,44 @@ void main() async {
   // गर्न सधैँका लागि रोकिन सक्थ्यो (त्यो id सँग कहिल्यै नमिल्ने भइदिए पनि)।
   visibleRouteScreenRequestId = null;
 
-  // कुनै पनि widget build त्रुटि आउँदा (debug मा) कालो/खाली स्क्रिनको सट्टा
-  // सधैँ देख्न मिल्ने रातो सन्देश देखियोस् — विशेष गरी framework-level
-  // assertion (जस्तै duplicate GlobalKey) ले Android release/profile
-  // रेन्डरिङमा प्रायः केही नदेखाई कालो छोड्छ, जुन debug गर्न असम्भव हुन्छ।
-  // Release build मा भने प्रयोगकर्तालाई internal stack trace नदेखियोस् भनेर
-  // Flutter को default grey "something went wrong" नै राखिएको छ।
-  if (!kReleaseMode) {
-    ErrorWidget.builder = (FlutterErrorDetails details) => Scaffold(
-          backgroundColor: Colors.red.shade900,
-          body: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Text(
-                details.exceptionAsString(),
-                style: const TextStyle(color: Colors.white, fontSize: 13),
-                textAlign: TextAlign.center,
-              ),
+  // कुनै पनि widget build त्रुटि आउँदा कालो/खाली स्क्रिनको सट्टा सधैँ देख्न
+  // मिल्ने सन्देश देखियोस् — विशेष गरी framework-level assertion (जस्तै
+  // duplicate GlobalKey, वा कुनै dialog/popup भित्रको layout त्रुटि) ले
+  // Android release/profile रेन्डरिङमा प्रायः केही नदेखाई कालो छोड्छ, जुन
+  // debug गर्न असम्भव हुन्छ। debug मा पूरा स्ट्याक ट्रेस (रातो पृष्ठभूमि);
+  // release मा प्रयोगकर्तालाई internal स्ट्याक ट्रेस नदेखियोस् भनेर छोटो,
+  // सामान्य सन्देश मात्र — तर दुवैमा कम्तिमा केही त देखिन्छ, खाली/कालो
+  // होइन।
+  ErrorWidget.builder = (FlutterErrorDetails details) => Scaffold(
+        backgroundColor: Colors.red.shade900,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Text(
+              kReleaseMode
+                  ? 'Something went wrong displaying this screen.'
+                  : details.exceptionAsString(),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              textAlign: TextAlign.center,
             ),
           ),
-        );
-  }
+        ),
+      );
+
+  // Flutter framework-level (widget build) त्रुटि — पहिल्यै माथिको
+  // `ErrorWidget.builder` ले render गर्छ, यहाँ थप debug-console log मात्र।
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    debugPrint('FlutterError: ${details.exceptionAsString()}');
+  };
+  // Widget build बाहिर (जस्तै कुनै async callback भित्र) uncaught भएको जुनसुकै
+  // error — यसले नरोकी, log मात्र गरेर app लाई जिउँदै राख्छ (नत्र कहिलेकाहीं
+  // पूरै isolate/render pipeline नै अड्किएर कालो स्क्रिन दिन्थ्यो)।
+  WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
+    debugPrint('Uncaught error: $error\n$stack');
+    return true;
+  };
+
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
@@ -88,12 +105,21 @@ void main() async {
   await Prefs.load(); // save गरेको theme/भाषा/notification setting फेरि लोड
   runApp(const KaamMitraApp());
 
-  // App startup मा एकपटक — पहिलो frame render भइसकेपछि (rootNavigatorKey
-  // को context तब मात्र उपलब्ध हुन्छ), auto-update जाँच्ने। Login भए/नभए
-  // दुवै अवस्थामा चल्छ (Firestore `config/*` सार्वजनिक-पढ्न मिल्ने), ताकि
-  // tester ले login गर्नुअघि नै नयाँ APK उपलब्ध छ भन्ने थाहा पाओस्।
+  // App startup मा एकपटक — auto-update जाँच्ने। Login भए/नभए दुवै अवस्थामा
+  // चल्छ (Firestore `config/*` सार्वजनिक-पढ्न मिल्ने), ताकि tester ले login
+  // गर्नुअघि नै नयाँ APK उपलब्ध छ भन्ने थाहा पाओस्।
+  //
+  // पहिलो frame पछि तुरुन्तै (postFrameCallback मात्र) नबोलाउने — `app.dart`
+  // कै auth/role StreamBuilder cascade (login state → role → verification
+  // status → आखिरमा MainContainer) यही समयमा लगातार छिटो-छिटो rebuild भइरहेको
+  // हुन्छ; त्यही अस्थिर अवधिमा dialog देखाउँदा त्यो transition सँग collide
+  // भएर "app खोल्नेबित्तिकै कालो/खाली स्क्रिन" देखिने गुनासोको मूल कारण
+  // देखिएको थियो। यहाँ केही सेकेन्ड पर्खेर (route/UI settle भइसकेपछि) मात्र,
+  // र त्यतिबेलाको ताजा context लिएर।
   WidgetsBinding.instance.addPostFrameCallback((_) {
-    final ctx = rootNavigatorKey.currentContext;
-    if (ctx != null) AppUpdateService.checkForUpdate(ctx);
+    Future.delayed(const Duration(seconds: 2), () {
+      final ctx = rootNavigatorKey.currentContext;
+      if (ctx != null) AppUpdateService.checkForUpdate(ctx);
+    });
   });
 }
