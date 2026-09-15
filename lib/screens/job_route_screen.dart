@@ -191,7 +191,8 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
   String? get _locationErrorMessage => switch (_locationStatus) {
         'service_disabled' => S.locationServiceOff,
         'error' => S.locationFetchFailed,
-        _ => null, // 'denied'/'pending' — default S.locationNeededForRoute नै ठीक
+        _ =>
+          null, // 'denied'/'pending' — default S.locationNeededForRoute नै ठीक
       };
 
   /// worker ले "On Arrival" बटन थिचेपछि (geofence भित्र भएमा मात्र सक्रिय
@@ -392,8 +393,7 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
                           icon: const Icon(Icons.call_rounded, size: 18),
                           label: Text(S.callWord),
                           style: OutlinedButton.styleFrom(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 12),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                         ),
                       ),
@@ -409,8 +409,7 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
                           icon: const Icon(Icons.videocam_rounded, size: 18),
                           label: Text(S.videoCall),
                           style: OutlinedButton.styleFrom(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 12),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                         ),
                       ),

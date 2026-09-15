@@ -633,7 +633,8 @@ class _ProviderTrackCard extends StatelessWidget {
                     Expanded(
                       child: Text(S.workerArrivedNotifTitle,
                           style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.w800)),
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800)),
                     ),
                   ],
                 ),
@@ -751,8 +752,8 @@ class _ProviderTrackCard extends StatelessWidget {
                       otherName: name,
                       video: true,
                     ),
-                    icon: const Icon(Icons.videocam_rounded,
-                        color: Colors.white),
+                    icon:
+                        const Icon(Icons.videocam_rounded, color: Colors.white),
                     label: Text(S.videoCall,
                         style: const TextStyle(color: Colors.white)),
                     style: OutlinedButton.styleFrom(

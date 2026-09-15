@@ -613,8 +613,7 @@ class S {
   static String get onArrivalButton => _t('on_arrival_button');
   static String get getCloserToArrive => _t('get_closer_to_arrive');
   static String get arrivedJobInProgress => _t('arrived_job_in_progress');
-  static String get workerArrivedNotifTitle =>
-      _t('worker_arrived_notif_title');
+  static String get workerArrivedNotifTitle => _t('worker_arrived_notif_title');
   static String get workerArrivedNotifBody => _t('worker_arrived_notif_body');
 
   // ── In-chat calls ──────────────────────────────────────
@@ -1782,8 +1781,10 @@ class S {
       'ne': 'कामदार पुग्नुभयो',
     },
     'worker_arrived_notif_body': {
-      'en': 'Worker has arrived at the location. You can now call, video call, or message them.',
-      'ne': 'कामदार स्थानमा पुग्नुभयो। अब तपाईं उहाँलाई कल, भिडियो कल, वा म्यासेज गर्न सक्नुहुन्छ।',
+      'en':
+          'Worker has arrived at the location. You can now call, video call, or message them.',
+      'ne':
+          'कामदार स्थानमा पुग्नुभयो। अब तपाईं उहाँलाई कल, भिडियो कल, वा म्यासेज गर्न सक्नुहुन्छ।',
     },
     'voice_call': {'en': 'Voice call', 'ne': 'भ्वाइस कल'},
     'video_call': {'en': 'Video call', 'ne': 'भिडियो कल'},

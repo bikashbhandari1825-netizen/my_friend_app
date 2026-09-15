@@ -240,8 +240,8 @@ class _RouteMapViewState extends State<RouteMapView>
       child: Stack(
         children: [
           GoogleMap(
-            initialCameraPosition:
-                CameraPosition(target: widget.destination, zoom: 18, bearing: 0),
+            initialCameraPosition: CameraPosition(
+                target: widget.destination, zoom: 18, bearing: 0),
             style: kCleanMapStyle,
             onMapCreated: (c) {
               _map = c;
@@ -285,23 +285,24 @@ class _RouteMapViewState extends State<RouteMapView>
                 ),
             },
             polylines: {
-              if (route != null && route.points.length >= 2) ...[
-                routePolyline('route', route),
-                // Google Maps-शैली "last-mile" डट्टेड connector — solid
-                // road route ठ्याक्कै marker सम्मै नपुगेको खाली ठाउँमा
-                // (गन्तव्य/लाइभ स्थान दुवैतिर हुन सक्छ)।
-                if (widget.origin != null)
+              if (route != null && route.points.length >= 2)
+                ...[
+                  routePolyline('route', route),
+                  // Google Maps-शैली "last-mile" डट्टेड connector — solid
+                  // road route ठ्याक्कै marker सम्मै नपुगेको खाली ठाउँमा
+                  // (गन्तव्य/लाइभ स्थान दुवैतिर हुन सक्छ)।
+                  if (widget.origin != null)
+                    walkConnectorPolyline(
+                      id: 'walk_origin',
+                      routeEnd: route.points.first,
+                      markerPos: widget.origin!,
+                    ),
                   walkConnectorPolyline(
-                    id: 'walk_origin',
-                    routeEnd: route.points.first,
-                    markerPos: widget.origin!,
+                    id: 'walk_destination',
+                    routeEnd: route.points.last,
+                    markerPos: widget.destination,
                   ),
-                walkConnectorPolyline(
-                  id: 'walk_destination',
-                  routeEnd: route.points.last,
-                  markerPos: widget.destination,
-                ),
-              ].whereType<Polyline>(),
+                ].whereType<Polyline>(),
             },
           ),
 

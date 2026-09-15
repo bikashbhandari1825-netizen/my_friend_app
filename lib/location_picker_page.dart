@@ -153,8 +153,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         children: [
           GoogleMap(
             // Close-up — street/house-level, ठ्याक्कै ठाउँ छान्न सजिलो होस्।
-            initialCameraPosition:
-                CameraPosition(target: _center, zoom: 18.5),
+            initialCameraPosition: CameraPosition(target: _center, zoom: 18.5),
             onMapCreated: (c) => _map = c,
             onCameraMove: (p) => _center = p.target,
             onCameraIdle: _onIdle,

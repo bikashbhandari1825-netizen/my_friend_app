@@ -192,8 +192,7 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Row(children: [
-          const Icon(Icons.check_circle_rounded,
-              color: Colors.white, size: 18),
+          const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
           const SizedBox(width: 8),
           Expanded(child: Text(S.jobMarkedComplete)),
         ]),
@@ -207,8 +206,7 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
     }
   }
 
-  Widget _typeCard(
-      ThemeData theme, String value, String label, IconData icon) {
+  Widget _typeCard(ThemeData theme, String value, String label, IconData icon) {
     final selected = _paymentType == value;
     return Expanded(
       child: GestureDetector(
@@ -461,8 +459,8 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
                   _typeCard(theme, 'online', S.onlinePaymentLabel,
                       Icons.account_balance_wallet_rounded),
                   const SizedBox(width: 10),
-                  _typeCard(
-                      theme, 'cash', S.cashPaymentLabel, Icons.payments_outlined),
+                  _typeCard(theme, 'cash', S.cashPaymentLabel,
+                      Icons.payments_outlined),
                 ],
               ),
               if (_paymentType == 'online') ...[
@@ -479,8 +477,7 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
                     _onlineMethodChip(
                         theme, 'khalti', S.payKhalti, const Color(0xFF5C2D91)),
                     const SizedBox(width: 8),
-                    _onlineMethodChip(
-                        theme, 'qr', S.payQr, AppColors.igViolet),
+                    _onlineMethodChip(theme, 'qr', S.payQr, AppColors.igViolet),
                   ],
                 ),
                 _onlinePaymentPanel(theme),

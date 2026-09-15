@@ -23,6 +23,7 @@ class JobsMapLayer extends StatefulWidget {
   final int? radiusKm;
   final String trade; // '__mine__' | '__all__' | service name
   final String myService;
+
   /// Map को तल्लो किनारमा कति ठाउँ छोप्ने (draggable sheet ले) — recentre
   /// FAB त्यसमाथि राख्न, र camera padding मिलाउन।
   final double bottomInset;
@@ -228,8 +229,8 @@ class _JobMapSheet extends StatelessWidget {
     final desc = (data['details'] ?? '').toString();
     final address = (data['address'] ?? '').toString();
     final budget = data['proposedPrice'];
-    final skillMismatch =
-        myService.isNotEmpty && myService.toLowerCase() != service.toLowerCase();
+    final skillMismatch = myService.isNotEmpty &&
+        myService.toLowerCase() != service.toLowerCase();
 
     return Padding(
       padding: const EdgeInsets.all(12),
@@ -262,8 +263,7 @@ class _JobMapSheet extends StatelessWidget {
                   child: Image.asset(
                     serviceImageFor(service),
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Icon(
-                        serviceIconFor(service),
+                    errorBuilder: (_, __, ___) => Icon(serviceIconFor(service),
                         color: AppColors.igViolet),
                   ),
                 ),
