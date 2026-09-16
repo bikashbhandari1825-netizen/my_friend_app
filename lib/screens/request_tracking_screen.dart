@@ -1,8 +1,10 @@
 // screens/request_tracking_screen.dart
 // अनुरोध पठाएपछि ग्राहकले यहाँ स्थिति हेर्छ।
 //  • status broadcasting/pending_worker → "नजिकका प्रदायक खोज्दै…" (radar animation)
-//  • status accepted/confirmed        → नक्सामा स्थिर सेवा-ठेगाना (route/tracking छैन)
-//                                        + काम गर्ने कामदार + Call/Message
+//  • status accepted/confirmed        → साझा RouteMapView (झन्डा = स्थिर सेवा-
+//                                        ठेगाना, दिशा-सूचक marker + कालो
+//                                        polyline = कामदारको लाइभ स्थान/बाटो)
+//                                        + Call/Message (Arrival-Gated)
 //  • status declined/cancelled        → समाप्त सन्देश
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -69,21 +71,27 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
       .collection('serviceRequests')
       .doc(widget.requestId);
 
+  /// worker ले JobRouteScreen मा छानेको यातायात मोड — यहीं उही route
+  /// (सोही मोडको) देखियोस् भनेर हरेक fetch मा साथै पठाइन्छ।
+  TravelMode _travelMode = TravelMode.driving;
+
   /// कामदार अलिकति चलेको वा केही सेकेन्ड भइसकेको भए मात्र OSRM route
   /// पुनः तान्ने — हरेक GPS अपडेटमा नहित्याउन।
-  void _maybeFetchLiveRoute(LatLng worker, LatLng site) {
+  void _maybeFetchLiveRoute(LatLng worker, LatLng site, TravelMode mode) {
     final now = DateTime.now();
     final last = _lastRoutedWorkerPos;
+    final modeChanged = mode != _travelMode;
     final moved = last == null ||
         haversineKm(last.latitude, last.longitude, worker.latitude,
                 worker.longitude) >
             0.03;
     final due = _lastRouteFetch == null ||
         now.difference(_lastRouteFetch!) > const Duration(seconds: 15);
-    if (!moved && !due) return;
+    if (!moved && !due && !modeChanged) return;
     _lastRoutedWorkerPos = worker;
     _lastRouteFetch = now;
-    fetchRoadRoute(worker, site).then((r) {
+    _travelMode = mode;
+    fetchRoadRoute(worker, site, mode: mode).then((r) {
       if (mounted) setState(() => _liveRoute = r);
     });
   }
@@ -291,8 +299,9 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
             _maybeLoadFallbackWorkerPos(workerUid);
           }
           final workerPos = liveWorkerPos ?? _fallbackWorkerPos;
+          final travelMode = TravelMode.fromValue(data['travelMode'] as String?);
           if (workerPos != null) {
-            _maybeFetchLiveRoute(workerPos, site);
+            _maybeFetchLiveRoute(workerPos, site, travelMode);
           } else {
             _liveRoute = null;
           }
@@ -308,6 +317,7 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
                 destinationLabel: S.jobLocationTitle,
                 destinationAddress: (data['address'] ?? '').toString(),
                 route: _liveRoute,
+                travelMode: travelMode,
                 // employer यहाँ आफैं कतै जाँदैन — worker कहाँ पुग्दैछ भनेर हेर्ने
                 // (Live Track on Map) मात्र हो, त्यसैले `navigateTarget`
                 // जानाजानी दिइएको छैन: worker-तर्फको JobRouteScreen जस्तो
@@ -595,6 +605,7 @@ class _ProviderTrackCard extends StatelessWidget {
     final address = (data['address'] ?? '').toString();
     final status = (data['status'] ?? 'accepted').toString();
     final arrived = data['arrivedAt'] != null;
+    final travelMode = TravelMode.fromValue(data['travelMode'] as String?);
 
     return Container(
       decoration: const BoxDecoration(
@@ -688,6 +699,18 @@ class _ProviderTrackCard extends StatelessWidget {
                       ),
                     ],
                   ),
+                  // Multi-modal यातायात — दुवैतिरबाट (worker वा employer)
+                  // छान्न मिल्ने एउटै interactive chip row, JobRouteScreen
+                  // मा भएकै जस्तै। जसले पनि tap गरे पनि उही Firestore
+                  // फिल्डमा लेखिन्छ र अर्को पक्षले पनि तुरुन्तै देख्छ।
+                  const SizedBox(height: 10),
+                  TravelModeChips(
+                    selected: travelMode,
+                    onChanged: (m) => FirebaseFirestore.instance
+                        .collection('serviceRequests')
+                        .doc(requestId)
+                        .set({'travelMode': m.value}, SetOptions(merge: true)),
+                  ),
                   if (address.isNotEmpty) ...[
                     const Divider(height: 16),
                     Row(
@@ -706,8 +729,9 @@ class _ProviderTrackCard extends StatelessWidget {
                   ],
                   // फोन नम्बर सिधै देखिने — Call बटन थिच्नुअघि नै थाहा
                   // होस्/कल गर्न सजिलो होस् भनेर, लुकेको Call बटनमा मात्र
-                  // सीमित नराखी।
-                  if (phone.isNotEmpty) ...[
+                  // सीमित नराखी। तर worker साँच्चै आइपुगेपछि मात्र — Arrival-
+                  // Gated Communication (job_actions.dart::isCommunicationUnlocked)।
+                  if (isCommunicationUnlocked(status) && phone.isNotEmpty) ...[
                     const Divider(height: 16),
                     GestureDetector(
                       onTap: () => _callWorker(context, phone),
@@ -729,64 +753,90 @@ class _ProviderTrackCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _callWorker(context, phone),
-                    icon: const Icon(Icons.call_rounded, color: Colors.white),
-                    label: Text(S.callWord,
-                        style: const TextStyle(color: Colors.white)),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.white70),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => startInAppCall(
-                      context,
-                      requestId: requestId,
-                      otherName: name,
-                      video: true,
-                    ),
-                    icon:
-                        const Icon(Icons.videocam_rounded, color: Colors.white),
-                    label: Text(S.videoCall,
-                        style: const TextStyle(color: Colors.white)),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.white70),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(
-                          requestId: requestId,
-                          workerName: name,
-                          initialStatus: status,
-                        ),
+            // Arrival-Gated Communication — worker साँच्चै आइपुगेर status
+            // `in_progress` नभएसम्म Call/Video/Message लुकेका रहन्छन्।
+            if (isCommunicationUnlocked(status))
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _callWorker(context, phone),
+                      icon:
+                          const Icon(Icons.call_rounded, color: Colors.white),
+                      label: Text(S.callWord,
+                          style: const TextStyle(color: Colors.white)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.white70),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                     ),
-                    icon: const Icon(Icons.chat_bubble_rounded),
-                    label: Text(S.messageWord,
-                        style: const TextStyle(fontWeight: FontWeight.w800)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: AppColors.igViolet,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => startInAppCall(
+                        context,
+                        requestId: requestId,
+                        otherName: name,
+                        video: true,
+                      ),
+                      icon: const Icon(Icons.videocam_rounded,
+                          color: Colors.white),
+                      label: Text(S.videoCall,
+                          style: const TextStyle(color: Colors.white)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.white70),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ChatScreen(
+                            requestId: requestId,
+                            workerName: name,
+                            initialStatus: status,
+                          ),
+                        ),
+                      ),
+                      icon: const Icon(Icons.chat_bubble_rounded),
+                      label: Text(S.messageWord,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: AppColors.igViolet,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            else
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
                 ),
-              ],
-            ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.lock_outline_rounded,
+                        size: 16, color: Colors.white),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(S.contactLockedAwaitingArrival,
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.white)),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),

@@ -46,6 +46,9 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   // Single Active Job Restriction — हाल कुनै अर्को साँच्चै-अझै-सक्रिय काम
   // (accepted/confirmed/in_progress) भए त्यसको requestId, नत्र खाली।
   String _myActiveJobId = '';
+  // Worker Cancellation Penalty — बारम्बार आफैं cancel गर्ने worker ले
+  // क्रमशः कम नयाँ job देख्ने (job_actions.dart::shouldShowJobToWorker)।
+  int _myCancelCount = 0;
 
   // अहिले उपलब्ध सबैभन्दा नजिकको/उपयुक्त काम सधैँ live map माथि नै (top
   // overlay) देखिन्छ — bottom sheet को list मा लुकेर बस्दैन। नयाँ होस् वा
@@ -77,10 +80,12 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
       final s = (snap.data()?['service'] ?? snap.data()?['serviceType'] ?? '')
           .toString();
       final activeId = (snap.data()?['activeJobId'] ?? '').toString();
+      final cancelCount = (snap.data()?['workerCancelCount'] as num?) ?? 0;
       if (mounted) {
         setState(() {
           _myService = s;
           _myActiveJobId = activeId;
+          _myCancelCount = cancelCount.toInt();
         });
       }
     });
@@ -97,7 +102,8 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
       final hasNewRelevant = snap.docs.any((d) {
         if (!newIds.contains(d.id)) return false;
         final rejected = (d.data()['rejectedBy'] as List?) ?? const [];
-        return !rejected.contains(_uid);
+        if (rejected.contains(_uid)) return false;
+        return shouldShowJobToWorker(d.id, _myCancelCount);
       });
       if (hasNewRelevant) playNewJobAlert();
     }
@@ -131,6 +137,7 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
       final data = d.data();
       final rejected = (data['rejectedBy'] as List?) ?? const [];
       if (rejected.contains(_uid)) continue;
+      if (!shouldShowJobToWorker(d.id, _myCancelCount)) continue;
       final svc = (data['service'] ?? '').toString();
       if (wantTrade.isNotEmpty &&
           svc.toLowerCase() != wantTrade.toLowerCase()) {
@@ -312,6 +319,7 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                       trade: _tradeFilter,
                       myService: myService,
                       bottomInset: screenH * _sheetInitial,
+                      cancelCount: _myCancelCount,
                     ),
                     // ── माथि तान्न मिल्ने (draggable) सूची — online banner +
                     // दूरी/सीप filter + job card हरू, सबै एउटै scroll मा
@@ -439,6 +447,7 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
           final svc = (data['service'] ?? '').toString();
           final rejected = (data['rejectedBy'] as List?) ?? const [];
           if (rejected.contains(_uid)) continue;
+          if (!shouldShowJobToWorker(d.id, _myCancelCount)) continue;
           if (wantTrade.isNotEmpty &&
               svc.toLowerCase() != wantTrade.toLowerCase()) {
             continue;

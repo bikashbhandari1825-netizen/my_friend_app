@@ -134,7 +134,15 @@ service cloud.firestore {
           || request.resource.data.workerUid == ''
           || workerFreeToClaim(request.resource.data.workerUid, doc)
         );
-      allow delete: if isAdmin();
+      // employer वा assigned worker ले आफ्नै request cancel गर्दा
+      // (deleteCancelledBooking, job_actions.dart) डिलिट गर्न पाउनुपर्छ —
+      // पहिले admin-मात्र थियो, जसले गर्दा real user (non-admin) को
+      // cancel ले चुपचाप (silent catch) असफल भई doc अनिश्चित कालसम्म
+      // "ghost booking" भएर बसिरहन्थ्यो, अनि history मा नराम्रो cancelled
+      // rows देखिन्थे।
+      allow delete: if isAdmin()
+        || (isSignedIn() && resource.data.employerUid == request.auth.uid)
+        || (isSignedIn() && resource.data.workerUid == request.auth.uid);
     }
 
     // ── chats ───────────────────────────────────────────────
@@ -143,6 +151,11 @@ service cloud.firestore {
     // प्रयोग हुन्छ; message हरू भने subcollection मै छन्।
     match /chats/{requestId} {
       allow read, create, update: if isSignedIn();
+      // deleteCancelledBooking (job_actions.dart) ले यो parent doc लाई
+      // messages/serviceRequests सँगै एउटै batch मा डिलिट गर्छ — delete
+      // यहाँ अनुमति नभए पूरै batch (serviceRequests समेत) atomically
+      // असफल हुन्थ्यो।
+      allow delete: if isSignedIn();
       match /messages/{msg} {
         allow read, create, update, delete: if isSignedIn();
       }

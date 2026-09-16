@@ -22,7 +22,6 @@
 // यो deploy गर्ने बेला थपिनेछ, deploy नगरेसम्म बाँकी app मा कुनै असर पर्दैन।)
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const {onCall, HttpsError} = require("firebase-functions/v2/https");
-const {onSchedule} = require("firebase-functions/v2/scheduler");
 const {defineSecret} = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
@@ -47,6 +46,13 @@ const MAPS_API_KEY = defineSecret("MAPS_API_KEY");
  * मात्र error फर्काउँछ — कहिल्यै सीधा रेखालाई "route" भनेर देखाउँदैन; त्यो
  * निर्णय अब client ले होइन, यहीँ लिन्छ।
  */
+// Google Directions को मोड नाम नै "साँचो" (canonical) — client/Firestore ले
+// यही तीन मध्ये एउटा मात्र पठाउन पाउँछ, नत्र अमान्य/जालसाजी input सिधै
+// third-party API मा नजाओस्। OSRM fallback मा यही keys बाट फरक profile
+// नाममा नक्सा गरिन्छ (OSRM ले "bicycling" चिन्दैन, "cycling" चाहिन्छ)।
+const VALID_MODES = new Set(["driving", "walking", "bicycling"]);
+const OSRM_PROFILE = {driving: "driving", walking: "foot", bicycling: "cycling"};
+
 exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
   const {originLat, originLng, destLat, destLng} = request.data || {};
   const nums = [originLat, originLng, destLat, destLng];
@@ -56,13 +62,15 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
         "originLat, originLng, destLat, destLng (numbers) चाहिन्छ।",
     );
   }
+  const modeInput = String(request.data?.mode || "driving");
+  const mode = VALID_MODES.has(modeInput) ? modeInput : "driving";
 
   // १) Google Directions
   try {
     const url = "https://maps.googleapis.com/maps/api/directions/json" +
         `?origin=${originLat},${originLng}` +
         `&destination=${destLat},${destLng}` +
-        `&mode=driving&key=${MAPS_API_KEY.value()}`;
+        `&mode=${mode}&key=${MAPS_API_KEY.value()}`;
     const res = await fetch(url);
     const body = await res.json();
     const route = body.status === "OK" ? body.routes?.[0] : null;
@@ -75,6 +83,7 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
         minutes: Math.round((leg.duration?.value || 0) / 60),
         real: true,
         source: "google",
+        mode,
       };
     }
     console.warn("Directions non-OK:", body.status);
@@ -84,8 +93,12 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
 
   // २) OSRM fallback — geometries=polyline ले Google कै Encoded Polyline
   // Algorithm Format दिन्छ, client ले उही decoder प्रयोग गर्न सकोस् भनेर।
+  // सार्वजनिक OSRM demo server ले profile-अनुसार फरक होस्ट चलाउँछ भन्ने
+  // ग्यारेन्टी छैन, तर driving/foot/cycling तीनै router.project-osrm.org
+  // मा नै उपलब्ध छन्।
   try {
-    const url = "https://router.project-osrm.org/route/v1/driving/" +
+    const profile = OSRM_PROFILE[mode] || "driving";
+    const url = `https://router.project-osrm.org/route/v1/${profile}/` +
         `${originLng},${originLat};${destLng},${destLat}` +
         "?overview=full&geometries=polyline";
     const res = await fetch(url, {
@@ -100,6 +113,7 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
         minutes: Math.round((route.duration || 0) / 60),
         real: true,
         source: "osrm",
+        mode,
       };
     }
   } catch (err) {
@@ -163,54 +177,13 @@ exports.sendPushForNotification = onDocumentCreated(
     },
 );
 
-/**
- * Completed Bookings Cleanup — काम "completed" भएको ठ्याक्कै ३ दिनपछि
- * त्यसको `serviceRequests` doc (+ associated `chats/{id}` doc/messages र
- * `calls/{id}` signaling doc) आफैं मेटिन्छ। `Cancelled` भएका booking त
- * client ले नै accept/cancel गर्नेबित्तिकै तुरुन्तै मेटिसक्छन्
- * (job_actions.dart::deleteCancelledBooking) — यो scheduled function ले
- * केवल "completed" (payment/rating सकिएको, history मा अस्थायी रूपमा
- * देखिनुपर्ने) booking हरू ३ दिनपछि सफा गर्छ।
- *
- * `reviews` collection (worker rating) कहिल्यै मेटिँदैन — त्यो worker कै
- * स्थायी history हो, यो booking record को जीवनकालसँग बाँधिएको छैन।
- */
-exports.cleanupCompletedBookings = onSchedule(
-    {schedule: "every 24 hours", timeZone: "UTC"},
-    async () => {
-      const cutoff = admin.firestore.Timestamp.fromMillis(
-          Date.now() - 3 * 24 * 60 * 60 * 1000,
-      );
-      const snap = await admin.firestore()
-          .collection("serviceRequests")
-          .where("status", "==", "completed")
-          .where("completedAt", "<=", cutoff)
-          .get();
-      if (snap.empty) {
-        console.log("cleanupCompletedBookings: nothing due.");
-        return;
-      }
-
-      for (const doc of snap.docs) {
-        const id = doc.id;
-        try {
-          const msgs = await admin.firestore()
-              .collection("chats").doc(id).collection("messages").get();
-          const batch = admin.firestore().batch();
-          msgs.docs.forEach((m) => batch.delete(m.ref));
-          batch.delete(admin.firestore().collection("chats").doc(id));
-          batch.delete(
-              admin.firestore().collection("serviceRequests").doc(id),
-          );
-          await batch.commit();
-          await admin.firestore().collection("calls").doc(id).delete()
-              .catch(() => {});
-        } catch (err) {
-          console.error(`cleanupCompletedBookings failed for ${id}:`, err);
-        }
-      }
-      console.log(
-          `cleanupCompletedBookings: removed ${snap.size} booking(s).`,
-      );
-    },
-);
+// NOTE: completed-booking auto-delete (previously `cleanupCompletedBookings`,
+// a 24-hourly scheduled function that hard-deleted any `serviceRequests` doc
+// 3 days after `status == 'completed'`) was removed — completed jobs must
+// now stay permanently, both in the worker's own history and the admin/owner
+// dashboard, for accounting. Sensitive chat/phone data is already purged
+// immediately at completion time (job_actions.dart::
+// purgeSensitiveDataOnCompletion), so nothing private lingers in the kept
+// doc — only transaction metadata (price, payment method, timestamps,
+// commission split) remains, which is exactly what accounting needs.
+// `reviews` docs were already permanent and are unaffected.

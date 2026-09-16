@@ -2,6 +2,21 @@
     <!-- Nearby workers / distance tracking (geolocator) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Worker ले काम स्वीकार गरिसकेपछि (accepted/confirmed/in_progress),
+         app minimize भए वा screen लक भए पनि employer ले live tracking
+         हेर्न सकून् भनेर — geolocator कै `foregroundNotificationConfig`
+         (main_container.dart::_startWorkerLocationTracking) ले persistent
+         notification सहितको foreground location service चलाउँछ। API 29+
+         (Android 10+) मा पृष्ठभूमिबाट location चाहिए यो छुट्टै permission
+         (runtime मा पनि छुट्टै/पछि माग्नुपर्ने) चाहिन्छ। FOREGROUND_SERVICE
+         जुनसुकै foreground service सुरु गर्न, र FOREGROUND_SERVICE_LOCATION
+         (API 34+ मा अनिवार्य) location-प्रकारको service विशेष गरी घोषणा
+         गर्न — यो नभई Android 14+ मा service सुरुै हुँदैन। geolocator_android
+         plugin आफैंले `foregroundServiceType="location"` सहितको <service>
+         घोषणा गरिसकेको छ (manifest merge हुन्छ), यहाँ ती permission मात्र थप्नुपर्छ। -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <!-- Android 13+ (API 33) मा runtime मा माग्नुपर्ने notification अनुमति —
          push/local notification देखाउन यो घोषणा चाहिन्छ (firebase_messaging
          + flutter_local_notifications ले runtime request गर्छ)। -->

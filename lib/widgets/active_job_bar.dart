@@ -17,7 +17,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../screens/chat_screen.dart';
-import '../screens/job_actions.dart' show deleteCancelledBooking;
+import '../screens/job_actions.dart'
+    show deleteCancelledBooking, isCommunicationUnlocked;
 import '../screens/nearby_common.dart' show haversineKm, serviceIconFor;
 import 'status_badge.dart';
 
@@ -89,6 +90,9 @@ class ActiveJobBar extends StatelessWidget {
       await deleteCancelledBooking(
         requestId,
         workerUid: (data['workerUid'] ?? '').toString(),
+        // worker आफैंले cancel गर्‍यो भने मात्र penalty — employer लाई
+        // कहिल्यै penalty छैन (job_actions.dart::deleteCancelledBooking हेर्नुहोस्)।
+        cancelledByWorker: isWorker,
       );
     }
   }
@@ -322,29 +326,38 @@ class ActiveJobBar extends StatelessWidget {
                           ],
                         ),
                       ),
-                      IconButton(
-                        onPressed: () => _call(context, otherPhone),
-                        icon: const Icon(Icons.call_rounded),
-                        color: AppColors.igViolet,
-                        tooltip: S.callWord,
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => ChatScreen(
-                              requestId: requestId,
-                              workerName: otherName,
-                              // यो bar सधैँ active job (accepted/confirmed/
-                              // in_progress) कै लागि मात्र देखिन्छ।
-                              initialStatus: 'accepted',
+                      // Arrival-Gated Communication — worker साँच्चै
+                      // आइपुगेर status `in_progress` नभएसम्म Call/Message
+                      // यहाँ देखिँदैनन्, स्वीकृति भइसकेको भए पनि।
+                      if (isCommunicationUnlocked(status)) ...[
+                        IconButton(
+                          onPressed: () => _call(context, otherPhone),
+                          icon: const Icon(Icons.call_rounded),
+                          color: AppColors.igViolet,
+                          tooltip: S.callWord,
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ChatScreen(
+                                requestId: requestId,
+                                workerName: otherName,
+                                initialStatus: status,
+                              ),
                             ),
                           ),
+                          icon: const Icon(Icons.chat_bubble_rounded),
+                          color: AppColors.igViolet,
+                          tooltip: S.messageWord,
                         ),
-                        icon: const Icon(Icons.chat_bubble_rounded),
-                        color: AppColors.igViolet,
-                        tooltip: S.messageWord,
-                      ),
+                      ] else
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Icon(Icons.lock_outline_rounded,
+                              size: 18,
+                              color: theme.colorScheme.onSurfaceVariant),
+                        ),
                     ],
                   ),
                 ],

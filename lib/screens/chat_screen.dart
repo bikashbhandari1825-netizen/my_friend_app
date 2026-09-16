@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -16,12 +17,15 @@ import 'package:image_picker/image_picker.dart';
 
 import '../app_globals.dart';
 import '../l10n/strings.dart';
+import '../services/chat_media_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/online_badge.dart';
 import '../widgets/spring_tap.dart';
 import '../widgets/voice_recorder_bar.dart';
 import 'call_screen.dart';
 import 'image_preview_screen.dart';
+import 'job_actions.dart' show isCommunicationUnlocked, kActiveJobStatuses;
+import 'video_preview_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String requestId;
@@ -46,24 +50,19 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-/// Call/Message दुवै यही set भित्रको status मा मात्र सक्रिय — Pre-Acceptance
-/// Security (worker ले Accept नगरेसम्म) र Post-Completion (काम सकिएपछि)
-/// दुवै नियम यही एउटा गेटले पूरा गर्छ। `main_container.dart` कै
-/// `_activeJobStatuses` सँगै मिल्ने convention।
-const _kChatActiveStatuses = {'accepted', 'confirmed', 'in_progress'};
-
 class _ChatScreenState extends State<ChatScreen> {
   final _controller = TextEditingController();
   final _scroll = ScrollController();
   bool _recordingVoice = false;
   bool _canSend = false;
-  // requestId कै live status — काम अझै accept नभएको (theoretically यहाँसम्म
-  // कहिल्यै आइपुग्नु हुँदैन, तर defence-in-depth) वा completed भइसकेको भए
-  // call/message दुवै लक हुन्छन्; पहिलो snapshot नआएसम्म पनि (सुरक्षित
-  // default) लक्ड नै मानिन्छ।
+  // requestId कै live status — worker साँच्चै employer को स्थानमा आइपुगेर
+  // "On Arrival" पुष्टि नगरेसम्म (status अझै `in_progress` नभएसम्म) —
+  // स्वीकृति भइसकेको भए पनि — call/message दुवै लक्ड रहन्छन्; काम completed
+  // भइसकेपछि पनि फेरि लक्ड। पहिलो snapshot नआएसम्म पनि (सुरक्षित default)
+  // लक्ड नै मानिन्छ। हेर्नुहोस् `isCommunicationUnlocked` (job_actions.dart)।
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statusSub;
   late String? _requestStatus = widget.initialStatus;
-  bool get _chatActive => _kChatActiveStatuses.contains(_requestStatus);
+  bool get _chatActive => isCommunicationUnlocked(_requestStatus);
   // कल बटन थिचेपछि CallScreen तुरुन्तै (उही frame मा) push हुन्छ — कुनै
   // network round-trip पर्खिनु पर्दैन, त्यसैले छुट्टै "busy" spinner
   // चाहिँदैन। `_inCall` ले मात्र double-tap (दुइटा CallScreen एकैचोटि
@@ -73,6 +72,10 @@ class _ChatScreenState extends State<ChatScreen> {
   String _myName = '';
   String? _lastMarkedReadDocId;
   String _otherUid = '';
+  // फोटो/भिडियो/भ्वाइस Firebase Storage मा अपलोड हुँदाको छोटो समय —
+  // पहिले base64 सिधै Firestore मा लेख्दा झट्ट हुन्थ्यो, अब उपलोड (नेटवर्क
+  // round-trip) लाग्ने भएकोले प्रयोगकर्तालाई प्रस्ट "पठाउँदै..." संकेत चाहियो।
+  bool _sendingMedia = false;
 
   DocumentReference<Map<String, dynamic>> get _chatDoc =>
       FirebaseFirestore.instance.collection('chats').doc(widget.requestId);
@@ -247,29 +250,85 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {}
   }
 
+  // Firestore को एउटै field मा व्यावहारिक रूपमा यति ठूलो text कहिल्यै
+  // पठाइनु पर्दैन (doc कै १MiB सीमा भन्दा धेरै तल) — कुनै गल्तिले (जस्तै
+  // ठूलो टेक्स्ट paste) यति नाघे client-side मै रोक्ने, सर्भरसम्म
+  // नपठाई। यसले नै "invalid-argument" जस्ता अस्पष्ट Firestore त्रुटि
+  // आउनुअघि नै प्रस्ट सन्देश दिन्छ।
+  static const int _maxTextLength = 4000;
+
   Future<void> _sendText() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
-    _controller.clear();
-    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    await _messages.add({
-      'senderUid': uid,
-      'type': 'text',
-      'text': text,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-    _stampLast(text);
+    if (text.length > _maxTextLength) {
+      _snack(S.messageTooLong);
+      return;
+    }
+    // सफल भएपछि मात्र field खाली — नत्र network/त्रुटि भएमा प्रयोगकर्ताले
+    // टाइप गरेको सन्देश नै हराउँथ्यो (पहिले सिधै पठाउनुअघि नै clear हुन्थ्यो)।
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      await _messages.add({
+        'senderUid': uid,
+        'type': 'text',
+        'text': text,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      _controller.clear();
+      unawaited(_stampLast(text));
+    } catch (e) {
+      _snack('${S.errorWord}: $e');
+    }
   }
 
   Future<void> _sendImage(Uint8List bytes) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    await _messages.add({
-      'senderUid': uid,
-      'type': 'image',
-      'imageBase64': base64Encode(bytes),
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-    _stampLast('📷 ${S.photo}');
+    setState(() => _sendingMedia = true);
+    try {
+      final url = await ChatMediaService.uploadChatImage(
+        requestId: widget.requestId,
+        bytes: bytes,
+      );
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      await _messages.add({
+        'senderUid': uid,
+        'type': 'image',
+        'imageUrl': url,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      _stampLast('📷 ${S.photo}');
+    } catch (e) {
+      _snack('${S.errorWord}: ${ChatMediaService.describeUploadError(e)}');
+    } finally {
+      if (mounted) setState(() => _sendingMedia = false);
+    }
+  }
+
+  /// भिडियो — pick/record गर्दा नै अवधि सीमित (Send-अघि आकार पनि दोहोर्‍याएर
+  /// जाँचिन्छ, `ChatMediaService.uploadChatVideo` भित्र)। Preview मा Send
+  /// थिचेपछि मात्र साँच्चै अपलोड।
+  Future<void> _sendVideo(Uint8List bytes, String ext) async {
+    setState(() => _sendingMedia = true);
+    try {
+      final url = await ChatMediaService.uploadChatVideo(
+        requestId: widget.requestId,
+        bytes: bytes,
+        ext: ext,
+      );
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      await _messages.add({
+        'senderUid': uid,
+        'type': 'video',
+        'videoUrl': url,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      _stampLast('🎥 ${S.video}');
+    } on VideoTooLargeException {
+      _snack(S.videoTooLarge);
+    } catch (e) {
+      _snack('${S.errorWord}: ${ChatMediaService.describeUploadError(e)}');
+    } finally {
+      if (mounted) setState(() => _sendingMedia = false);
+    }
   }
 
   /// Camera/gallery बाट छानेको तस्बिर — सिधै नपठाई पहिले preview देखाउने,
@@ -304,22 +363,119 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// भिडियो — preview गरेर मात्र (Send थिचेपछि) साँच्चै upload/पठाउने।
+  Future<void> _previewVideoThenSend(Uint8List bytes, String ext) async {
+    final confirmed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => VideoPreviewScreen(bytes: bytes),
+      ),
+    );
+    if (confirmed == true) await _sendVideo(bytes, ext);
+  }
+
+  String _extOf(String path) {
+    final i = path.lastIndexOf('.');
+    return i == -1 ? 'mp4' : path.substring(i + 1).toLowerCase();
+  }
+
+  Future<void> _recordVideoCamera() async {
+    try {
+      final XFile? v = await ImagePicker().pickVideo(
+        source: ImageSource.camera,
+        maxDuration: ChatMediaService.kMaxVideoDuration,
+      );
+      if (v != null) {
+        await _previewVideoThenSend(await v.readAsBytes(), _extOf(v.path));
+      }
+    } catch (e) {
+      _snack('${S.errorWord}: $e');
+    }
+  }
+
+  Future<void> _pickVideoGallery() async {
+    try {
+      final XFile? v = await ImagePicker().pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: ChatMediaService.kMaxVideoDuration,
+      );
+      if (v != null) {
+        await _previewVideoThenSend(await v.readAsBytes(), _extOf(v.path));
+      }
+    } catch (e) {
+      _snack('${S.errorWord}: $e');
+    }
+  }
+
+  /// क्यामेरा (mobile/desktop मात्र) वा gallery — छोटो choice sheet।
+  void _showVideoSourceSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(AppRadius.lg)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (ChatMediaService.videoRecordingSupported)
+                ListTile(
+                  leading: const Icon(Icons.videocam_rounded,
+                      color: AppColors.igViolet),
+                  title: Text(S.recordVideo),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _recordVideoCamera();
+                  },
+                ),
+              ListTile(
+                leading:
+                    const Icon(Icons.video_library_rounded, color: AppColors.igPink),
+                title: Text(S.chooseFromGallery),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickVideoGallery();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Voice-note recorder bar (widgets/voice_recorder_bar.dart) ले नै रेकर्ड
   /// + waveform + preview सबै सम्हाल्छ — यहाँ त प्रयोगकर्ताले Send थिचेपछि
   /// आएको bytes मात्र साँच्चै Firestore मा लेख्ने।
   Future<void> _sendVoiceBytes(Uint8List bytes) async {
-    setState(() => _recordingVoice = false);
+    setState(() {
+      _recordingVoice = false;
+      _sendingMedia = true;
+    });
     try {
+      final url = await ChatMediaService.uploadChatVoice(
+        requestId: widget.requestId,
+        bytes: bytes,
+      );
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
       await _messages.add({
         'senderUid': uid,
         'type': 'audio',
-        'audioBase64': base64Encode(bytes),
+        'audioUrl': url,
         'createdAt': FieldValue.serverTimestamp(),
       });
       _stampLast('🎤 ${S.voiceMessage}');
     } catch (e) {
-      _snack('${S.errorWord}: $e');
+      _snack('${S.errorWord}: ${ChatMediaService.describeUploadError(e)}');
+    } finally {
+      if (mounted) setState(() => _sendingMedia = false);
     }
   }
 
@@ -549,10 +705,17 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Request active नरहेको बेला (Accept हुनुअघि, वा काम completed भइसकेपछि)
-  /// इनपुट/कल दुवैको सट्टा देखिने read-only सूचना पट्टी।
+  /// Request active नरहेको बेला (Accept हुनुअघि, स्वीकृत भए पनि worker
+  /// अझै नआइपुगेको बेला, वा काम completed भइसकेपछि) इनपुट/कल दुवैको सट्टा
+  /// देखिने read-only सूचना पट्टी — तीन फरक कारणका लागि तीन फरक सन्देश।
   Widget _lockedBanner(ThemeData theme) {
     final completed = _requestStatus == 'completed';
+    final acceptedNotYetArrived = kActiveJobStatuses.contains(_requestStatus);
+    final caption = completed
+        ? S.chatLockedCompleted
+        : (acceptedNotYetArrived
+            ? S.contactLockedAwaitingArrival
+            : S.contactLockedCaption);
     return Container(
       padding: EdgeInsets.fromLTRB(
           16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
@@ -567,7 +730,7 @@ class _ChatScreenState extends State<ChatScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              completed ? S.chatLockedCompleted : S.contactLockedCaption,
+              caption,
               style: TextStyle(
                   fontSize: 12.5, color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -593,16 +756,76 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       );
     }
-    if (type == 'image' && data['imageBase64'] != null) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: Image.memory(base64Decode(data['imageBase64']),
-            width: 200, fit: BoxFit.cover),
+    if (type == 'image') {
+      // नयाँ म्यासेज Storage URL (हल्का) मा; base64 त पुरानो message
+      // history कै backward-compat fallback (नयाँ कहिल्यै यसरी लेखिँदैन)।
+      final url = (data['imageUrl'] ?? '').toString();
+      if (url.isNotEmpty) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: CachedNetworkImage(
+            imageUrl: url,
+            width: 200,
+            fit: BoxFit.cover,
+            placeholder: (_, __) => const SizedBox(
+              width: 200,
+              height: 150,
+              child: Center(
+                  child:
+                      CircularProgressIndicator(strokeWidth: 2.2)),
+            ),
+            errorWidget: (_, __, ___) => const SizedBox(
+              width: 200,
+              height: 150,
+              child: Center(
+                  child: Icon(Icons.broken_image_outlined, color: Colors.grey)),
+            ),
+          ),
+        );
+      }
+      if (data['imageBase64'] != null) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Image.memory(base64Decode(data['imageBase64']),
+              width: 200, fit: BoxFit.cover),
+        );
+      }
+    }
+    if (type == 'video') {
+      final url = (data['videoUrl'] ?? '').toString();
+      if (url.isEmpty) return const SizedBox.shrink();
+      return SpringTap(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            fullscreenDialog: true,
+            builder: (_) => VideoPreviewScreen(url: url),
+          ),
+        ),
+        pressedScale: 0.97,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            width: 200,
+            height: 140,
+            color: Colors.black87,
+            child: const Center(
+              child: Icon(Icons.play_circle_fill_rounded,
+                  color: Colors.white, size: 44),
+            ),
+          ),
+        ),
       );
     }
-    if (type == 'audio' && data['audioBase64'] != null) {
-      return _VoiceBubble(
-          audioBytes: base64Decode(data['audioBase64']), isMe: isMe);
+    if (type == 'audio') {
+      final url = (data['audioUrl'] ?? '').toString();
+      if (url.isNotEmpty) {
+        return _VoiceBubble(audioUrl: url, isMe: isMe);
+      }
+      if (data['audioBase64'] != null) {
+        return _VoiceBubble(
+            audioBytes: base64Decode(data['audioBase64']), isMe: isMe);
+      }
     }
     return Text(
       (data['text'] ?? '').toString(),
@@ -648,6 +871,29 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     }
+    if (_sendingMedia) {
+      return Container(
+        height: 52,
+        padding: EdgeInsets.fromLTRB(
+            16, 6, 16, 6 + MediaQuery.of(context).padding.bottom),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          border: Border(top: BorderSide(color: theme.dividerColor)),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2.2)),
+            const SizedBox(width: 12),
+            Text(S.sendingMedia,
+                style: TextStyle(
+                    fontSize: 13, color: theme.colorScheme.onSurfaceVariant)),
+          ],
+        ),
+      );
+    }
     return Container(
       padding: EdgeInsets.fromLTRB(
           8, 6, 8, 6 + MediaQuery.of(context).padding.bottom),
@@ -666,6 +912,10 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.image_rounded, color: AppColors.igPink),
             onPressed: _pickGallery,
+          ),
+          IconButton(
+            icon: const Icon(Icons.videocam_rounded, color: AppColors.igOrange),
+            onPressed: _showVideoSourceSheet,
           ),
           IconButton(
             icon: const Icon(Icons.mic_rounded, color: AppColors.igOrange),
@@ -835,9 +1085,15 @@ class _Bubble extends StatelessWidget {
 }
 
 class _VoiceBubble extends StatefulWidget {
-  final Uint8List audioBytes;
+  /// नयाँ म्यासेजका लागि — Storage बाट सिधै streamed play (पूरै फाइल
+  /// पहिले memory मा डाउनलोड गर्नु पर्दैन, tap गर्नेबित्तिकै तुरुन्तै सुरु)।
+  final String? audioUrl;
+
+  /// पुरानो base64 message (backward-compat fallback) का लागि मात्र।
+  final Uint8List? audioBytes;
   final bool isMe;
-  const _VoiceBubble({required this.audioBytes, required this.isMe});
+  const _VoiceBubble({this.audioUrl, this.audioBytes, required this.isMe})
+      : assert(audioUrl != null || audioBytes != null);
 
   @override
   State<_VoiceBubble> createState() => _VoiceBubbleState();
@@ -867,8 +1123,10 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
   Future<void> _toggle() async {
     if (_playing) {
       await _player.pause();
+    } else if (widget.audioUrl != null) {
+      await _player.play(UrlSource(widget.audioUrl!));
     } else {
-      await _player.play(BytesSource(widget.audioBytes));
+      await _player.play(BytesSource(widget.audioBytes!));
     }
   }
 

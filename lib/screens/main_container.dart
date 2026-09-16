@@ -5,11 +5,14 @@
 // भनेर एउटै persistent shell मा राखिएको (कुनै एक screen मात्र खुला हुँदा
 // होइन)।
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../app_globals.dart';
 import '../l10n/strings.dart';
@@ -199,20 +202,90 @@ class _MainContainerState extends State<MainContainer> {
     _inCall = false;
   }
 
+  // यो session मा background-location rationale पहिल्यै देखाइसकेको भए
+  // फेरि नदेखाउने (हरेक काम accept गर्दा पटक-पटक दोहोरिनु हुँदैन)।
+  bool _askedBackgroundLocationThisSession = false;
+
+  /// Android 10+ मा foreground service चलिरहँदा पनि, screen लक भएको धेरै
+  /// बेरपछि वा अर्को app मा गएपछि पनि निरन्तर location fix पाउन छुट्टै
+  /// "Allow all the time" अनुमति चाहिन्छ (foreground/"while using the app"
+  /// भन्दा फरक, र यो सँगै एकैचोटि माग्न मिल्दैन — Android आफैंले क्रमैसँग
+  /// मात्र दिन्छ)। यो नपाए पनि tracking रोकिँदैन — फेरि foreground-मात्र
+  /// (पहिलेकै व्यवहार) मा चल्छ, अनुमति नदिए पनि काम/भुक्तानी flow कहीं
+  /// नअड्किओस् भनेर।
+  Future<void> _ensureBackgroundLocationPermission() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    if (_askedBackgroundLocationThisSession) return;
+    _askedBackgroundLocationThisSession = true;
+    try {
+      final status = await Permission.locationAlways.status;
+      if (status.isGranted) return;
+      if (!mounted) return;
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(S.backgroundLocationRationaleTitle),
+          content: Text(S.backgroundLocationRationaleBody),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(S.notNow),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(S.allowWord),
+            ),
+          ],
+        ),
+      );
+      if (proceed == true) {
+        await Permission.locationAlways.request();
+      }
+    } catch (_) {
+      // अनुमति flow असफल भए पनि foreground tracking चलिरहन्छ।
+    }
+  }
+
   /// worker मात्र — सक्रिय काम भएसम्म आफ्नो GPS लगातार Firestore मा लेख्ने,
   /// चाहे JobRouteScreen खुला होस् वा नहोस् (त्यो स्क्रिनले पनि आफ्नै छुट्टै
   /// route-fetch/arrival-detection सहितको live tracking राख्छ — यहाँको भने
   /// स्थान मात्र लेख्ने हल्का संस्करण हो, दुवै एकैसाथ चले पनि हानि छैन)।
+  ///
+  /// Android मा persistent foreground-service notification सहित चल्छ —
+  /// worker ले app minimize गरे वा screen लक गरे पनि employer ले live
+  /// tracking हेर्न सकून् भनेर (नत्र Android ले केही समयमै background
+  /// isolate/location stream रोकिदिन्थ्यो, जुन "ट्र्याकिङ अड्किएको/frozen"
+  /// गुनासोको एउटा साँचो कारण थियो)। Web/अन्य platform मा साधारण
+  /// foreground-मात्र stream (Android-specific settings त्यहाँ लागू हुँदैन)।
   void _startWorkerLocationTracking(String jobId) {
     if (_workerTrackingForJobId == jobId && _workerPosSub != null) return;
     _workerPosSub?.cancel();
     _workerTrackingForJobId = jobId;
-    _workerPosSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 25,
-      ),
-    ).listen((p) async {
+    unawaited(_ensureBackgroundLocationPermission());
+
+    final LocationSettings settings = (!kIsWeb && Platform.isAndroid)
+        ? AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 25,
+            foregroundNotificationConfig: ForegroundNotificationConfig(
+              notificationTitle: S.locationTrackingNotifTitle,
+              notificationText: S.locationTrackingNotifBody,
+              notificationChannelName: 'KaamMitra Location',
+              // app कै आफ्नै launcher icon — कुनै तेस्रो-पक्षको branding/
+              // default Android icon होइन (white-label)।
+              notificationIcon:
+                  const AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+              color: AppColors.igViolet,
+              setOngoing: true,
+            ),
+          )
+        : const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 25,
+          );
+
+    _workerPosSub = Geolocator.getPositionStream(locationSettings: settings)
+        .listen((p) async {
       try {
         await FirebaseFirestore.instance
             .collection('serviceRequests')
@@ -260,9 +333,18 @@ class _MainContainerState extends State<MainContainer> {
   void _startActiveJobWatcher(String? uid, bool isWorker) {
     if (uid == null) return;
     final field = isWorker ? 'workerUid' : 'employerUid';
+    // status पनि सर्भर-साइडमै (whereIn) फिल्टर गर्ने — पहिले client-side
+    // मात्र फिल्टर गर्थ्यो, जसले गर्दा यो प्रत्येक user को *सम्पूर्ण*
+    // serviceRequests history (अब completed job हरू सधैँका लागि रहने
+    // भएकोले महिनौं-वर्षौंमा ठूलो हुँदै जाने) हरेकपटक डाउनलोड गर्थ्यो —
+    // जबकि यो watcher लाई active (accepted/confirmed/in_progress) बाहेक
+    // अरू कुनै doc कहिल्यै चाहिँदैन। धेरै हजार प्रयोगकर्ता एकैचोटि
+    // signed-in हुँदा (यो watcher app खुल्नेबित्तिकै सधैँ चलिरहन्छ) यही
+    // नै सबैभन्दा ठूलो बचत हो।
     _activeJobSub = FirebaseFirestore.instance
         .collection('serviceRequests')
         .where(field, isEqualTo: uid)
+        .where('status', whereIn: _activeJobStatuses.toList())
         .snapshots()
         .listen((snap) {
       final activeDocs = snap.docs
@@ -296,13 +378,27 @@ class _MainContainerState extends State<MainContainer> {
 
       // pinned ActiveJobBar + Bookings tab badge — सधैँ सबैभन्दा पछिल्लो
       // सक्रिय काम, cold start मा र नयाँ थपिँदा दुवैमा (माथि नै sort भइसकेको)।
-      if (mounted) {
+      //
+      // यो listener ले उही active job doc मा भएको JUनसुकै field-level
+      // update (जस्तै worker को हरेक ~25m GPS movement मा लेखिने
+      // workerLat/workerLng) मा पनि फेरि snapshot पाउँछ — तर pinned id/
+      // गन्ती/role साँच्चै फेरिएको बेला मात्र setState गर्ने, नत्र
+      // (position-मात्रको update मा) यो widget-tree (BottomBar/badge)
+      // अनावश्यक रूपमा फेरि नरिबिल्ड होस्।
+      final samePin = _pinnedActiveJobId == activeDocs.first.id &&
+          _activeJobCount == activeDocs.length &&
+          _pinnedIsWorker == isWorker;
+      if (mounted && !samePin) {
         setState(() {
           _pinnedActiveJobId = activeDocs.first.id;
           _pinnedActiveJobData = activeDocs.first.data();
           _activeJobCount = activeDocs.length;
           _pinnedIsWorker = isWorker;
         });
+      } else {
+        // pin अपरिवर्तित — तर cached data (badge/sheet ले पढ्ने) चाहिँ
+        // ताजै राख्ने, rebuild नगराई।
+        _pinnedActiveJobData = activeDocs.first.data();
       }
       if (isWorker) _startWorkerLocationTracking(activeDocs.first.id);
 

@@ -8,6 +8,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../l10n/strings.dart';
@@ -215,7 +216,7 @@ Future<BitmapDescriptor> pulseDotMarker(Color color) async {
 }
 
 /// दुई बिन्दुबीचको bearing — उत्तरबाट clockwise डिग्रीमा (0–360)। नयाँ GPS
-/// बिन्दु आउनेबित्तिकै [navigationArrowMarker] कुन दिशामा फर्किनुपर्छ भनेर
+/// बिन्दु आउनेबित्तिकै [travelModeMarker] कुन दिशामा फर्किनुपर्छ भनेर
 /// live-tracking नक्साले प्रयोग गर्छ (लगातार दुई थाहा भएका बिन्दुबाट)।
 double bearingBetween(LatLng from, LatLng to) {
   final lat1 = _deg2rad(from.latitude);
@@ -227,18 +228,24 @@ double bearingBetween(LatLng from, LatLng to) {
   return (deg + 360) % 360;
 }
 
-BitmapDescriptor? _navArrowCache;
+final Map<TravelMode, BitmapDescriptor> _travelMarkerCache = {};
 
-/// Navigation-app-शैलीको दिशा-सूचक तीर — accept भएको काममा worker/employer
-/// गन्तव्यतिर चलिरहँदा नक्सामा देखिने live-location marker। एपभरि नै अरू
-/// जुनसुकै accent जस्तै यो पनि ठ्याक्कै Instagram gradient (violet → red →
-/// yellow, `AppColors.igGradient` सँगै मिल्ने) मा कोरिन्छ — कुनै एउटै solid
-/// रङमा होइन। उत्तरतिर (माथि, rotation = 0) देखाउने गरी drawn हुन्छ; caller
-/// ले `Marker(rotation: bearingDeg, flat: true, ...)` राखेर हालको दिशामा
-/// घुमाउँछ — त्यसैले यहाँ rotation logic छैन, स्थिर आकार मात्र, एकपटक
-/// बनाएर cache हुन्छ।
-Future<BitmapDescriptor> navigationArrowMarker() async {
-  final hit = _navArrowCache;
+/// चयन गरिएको यात्रा-मोड अनुसार फरक-फरक, माथिबाट-हेर्दाको (top-down) साँच्चीकै
+/// सवारी-साधन/पैदल-यात्री आकृति — accept भएको काममा worker/employer
+/// गन्तव्यतिर चलिरहँदा नक्सामा देखिने live-location marker। पहिले यहाँ
+/// जुनसुकै मोडमा पनि एउटै जेनेरिक chevron/तीर (टाढाबाट "रातो V-आकार" जस्तो
+/// देखिने साधारण pointer) देखिन्थ्यो — अब Uber/InDrive/Pathao जस्ता
+/// आधुनिक navigation एपमा जस्तै कार (driving), बाइक (bicycling), वा
+/// पैदल-यात्री (walking) को छुट्टै-छुट्टै आकृति कोरिन्छ, र [TravelModeChips]
+/// बाट मोड बदलिनासाथ (Firestore मार्फत अर्को पक्षमा पनि) यही marker आइकन
+/// तुरुन्तै बदलिन्छ। एपभरि नै अरू जुनसुकै accent जस्तै ठ्याक्कै Instagram
+/// gradient (violet → red → yellow) मा नै रङ्गिन्छ — कुनै एउटै solid रङमा
+/// होइन। उत्तरतिर (माथि, rotation = 0) देखाउने गरी drawn हुन्छ; caller ले
+/// `Marker(rotation: bearingDeg, flat: true, ...)` राखेर हालको दिशामा
+/// घुमाउँछ — त्यसैले यहाँ rotation logic छैन, स्थिर आकार मात्र, मोड-अनुसार
+/// एकपटक मात्र बनाएर cache हुन्छ।
+Future<BitmapDescriptor> travelModeMarker(TravelMode mode) async {
+  final hit = _travelMarkerCache[mode];
   if (hit != null) return hit;
 
   const double s = 108;
@@ -249,11 +256,6 @@ Future<BitmapDescriptor> navigationArrowMarker() async {
     AppColors.igRed,
     AppColors.igYellow,
   ];
-  final fillShader = const LinearGradient(
-    begin: Alignment.bottomLeft,
-    end: Alignment.topRight, // ≈ 45deg, igGradient जस्तै
-    colors: gradientColors,
-  ).createShader(rect);
   final haloShader = LinearGradient(
     begin: Alignment.bottomLeft,
     end: Alignment.topRight,
@@ -264,32 +266,57 @@ Future<BitmapDescriptor> navigationArrowMarker() async {
   final canvas = Canvas(rec);
 
   // हल्का बाहिरी gradient halo + सेतो डिस्क — जुनसुकै नक्सा/tile रङमा पनि
-  // arrow छुट्टै र प्रस्ट देखियोस्।
+  // माथिको आकृति छुट्टै र प्रस्ट देखियोस्।
   canvas.drawCircle(const Offset(c, c), c - 4, Paint()..shader = haloShader);
   canvas.drawCircle(const Offset(c, c), c - 14, Paint()..color = Colors.white);
 
-  // उत्तरतिर (माथि) देखाउने chevron — Marker.rotation ले घुमाउँछ, त्यसैले
-  // यहाँ सधैँ "माथि" तिर मात्र कोरिन्छ।
-  final path = Path()
-    ..moveTo(c, 20)
-    ..lineTo(c + 15, c + 16)
-    ..lineTo(c, c + 6)
-    ..lineTo(c - 15, c + 16)
-    ..close();
-  canvas.drawPath(path, Paint()..shader = fillShader);
-  canvas.drawPath(
-    path,
-    Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..color = Colors.white,
-  );
+  switch (mode) {
+    case TravelMode.driving:
+      await _paintAssetImage(canvas, c, 'assets/images/car_top.png', 74);
+      break;
+    case TravelMode.bicycling:
+      await _paintAssetImage(canvas, c, 'assets/images/bike_top.png', 74);
+      break;
+    case TravelMode.walking:
+      await _paintAssetImage(canvas, c, 'assets/images/walking_top.png', 74);
+      break;
+  }
 
   final img = await rec.endRecording().toImage(s.toInt(), s.toInt());
   final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
   final bd = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
-  _navArrowCache = bd;
+  _travelMarkerCache[mode] = bd;
   return bd;
+}
+
+final Map<String, ui.Image> _assetImageCache = {};
+
+/// `assets/images/car_top.png`/`bike_top.png`/`walking_top.png`
+/// (माथिबाट-हेर्दाको साँच्चीकै आर्टवर्क/तस्बिर, owner ले दिएको फोटोबाट
+/// halo/checkerboard हटाई सवारी-साधन/व्यक्ति मात्र काटिएको) एकपटक मात्र
+/// decode गरेर cache हुन्छ — हरेक marker रिफ्रेसमा फेरि disk/asset बाट
+/// पढ्नु नपरोस्।
+Future<ui.Image> _loadAssetImage(String assetPath) async {
+  final hit = _assetImageCache[assetPath];
+  if (hit != null) return hit;
+  final data = await rootBundle.load(assetPath);
+  final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
+  final frame = await codec.getNextFrame();
+  _assetImageCache[assetPath] = frame.image;
+  return frame.image;
+}
+
+/// माथिबाट हेर्दाको साँच्चीकै सवारी-साधन तस्बिर (हातले कोरिएको आकृति होइन)
+/// — halo डिस्क भित्रै aspect-ratio कायम राखी केन्द्रित गरेर राखिन्छ,
+/// ठ्याक्कै worker/employer को लाइभ स्थानमा।
+Future<void> _paintAssetImage(
+    Canvas canvas, double c, String assetPath, double targetH) async {
+  final img = await _loadAssetImage(assetPath);
+  final double targetW = targetH * img.width / img.height;
+  final dst =
+      Rect.fromCenter(center: Offset(c, c), width: targetW, height: targetH);
+  final src = Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble());
+  canvas.drawImageRect(img, src, dst, Paint()..filterQuality = FilterQuality.high);
 }
 
 final Map<String, BitmapDescriptor> _catPinCache = {};
@@ -468,11 +495,102 @@ double haversineKm(double lat1, double lng1, double lat2, double lng2) {
 /// "route unavailable" भनेर देखाउनुपर्छ, कहिल्यै सीधा-रेखालाई साँचो route
 /// भनेर देखाउनु हुँदैन (त्यसैले यहाँ कुनै haversine/सीधा-रेखा fallback छैन)।
 /// Android/web दुवैले उही function, उही जवाफ पाउँछन् — दुई फरक बाटो होइन।
-typedef RoadRoute = ({List<LatLng> points, double km, int minutes, bool real});
+typedef RoadRoute = ({
+  List<LatLng> points,
+  double km,
+  int minutes,
+  bool real,
+  TravelMode mode,
+});
+
+/// Multi-modal यातायात — Google Directions/OSRM दुवैले चिन्ने canonical
+/// नाम (`getRoute` Cloud Function हेर्नुहोस्)। worker ले यीमध्ये छान्छ;
+/// employer ले सोही मोड (Firestore बाट, `RequestTrackingScreen`) अनुसार
+/// उही route देख्छ — दुवैतिर फरक-फरक route नदेखियोस् भनेर।
+enum TravelMode {
+  driving('driving', Icons.directions_car_rounded),
+  walking('walking', Icons.directions_walk_rounded),
+  bicycling('bicycling', Icons.pedal_bike_rounded);
+
+  const TravelMode(this.value, this.icon);
+  final String value;
+  final IconData icon;
+
+  static TravelMode fromValue(String? v) => TravelMode.values.firstWhere(
+        (m) => m.value == v,
+        orElse: () => TravelMode.driving,
+      );
+}
+
+/// Multi-modal यातायात छान्ने — Driving/Walking/Bike, ride-hailing app
+/// जस्तै गोलो chip row। worker/employer दुवैतिर उही एउटा widget (JobRouteScreen
+/// र RequestTrackingScreen दुवैले प्रयोग गर्छन्) — दुवै पक्षले नै छान्न/बदल्न
+/// पाउँछन् (जे बदलियो त्यही Firestore मार्फत अर्को पक्षलाई पनि तुरुन्तै देखिन्छ,
+/// छुट्टाछुट्टै UI डुप्लिकेट नभई)।
+class TravelModeChips extends StatelessWidget {
+  final TravelMode selected;
+  final ValueChanged<TravelMode> onChanged;
+  const TravelModeChips(
+      {super.key, required this.selected, required this.onChanged});
+
+  String _label(TravelMode m) => switch (m) {
+        TravelMode.driving => S.travelModeDriving,
+        TravelMode.walking => S.travelModeWalking,
+        TravelMode.bicycling => S.travelModeBicycling,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 34,
+      child: Row(
+        children: [
+          for (final m in TravelMode.values) ...[
+            _chip(m),
+            const SizedBox(width: 8),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _chip(TravelMode m) {
+    final isSelected = m == selected;
+    return GestureDetector(
+      onTap: () => onChanged(m),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        height: 34,
+        decoration: BoxDecoration(
+          gradient: isSelected ? AppColors.buttonGradient : null,
+          color:
+              isSelected ? null : AppColors.igViolet.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(m.icon,
+                size: 16,
+                color: isSelected ? Colors.white : AppColors.igViolet),
+            const SizedBox(width: 6),
+            Text(_label(m),
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: isSelected ? Colors.white : AppColors.igViolet)),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 final FirebaseFunctions _functions = FirebaseFunctions.instance;
 
-Future<RoadRoute?> fetchRoadRoute(LatLng a, LatLng b) async {
+Future<RoadRoute?> fetchRoadRoute(LatLng a, LatLng b,
+    {TravelMode mode = TravelMode.driving}) async {
   try {
     final callable = _functions.httpsCallable(
       'getRoute',
@@ -483,6 +601,7 @@ Future<RoadRoute?> fetchRoadRoute(LatLng a, LatLng b) async {
       'originLng': a.longitude,
       'destLat': b.latitude,
       'destLng': b.longitude,
+      'mode': mode.value,
     });
     final data = result.data;
     final encoded = (data['polyline'] as String?) ?? '';
@@ -496,11 +615,15 @@ Future<RoadRoute?> fetchRoadRoute(LatLng a, LatLng b) async {
     // दुई-बिन्दुको "route" ले पनि सीधा रेखा नै बनाउँछ — त्यो पनि साँचो
     // route जस्तै कहिल्यै नदेखियोस् भनेर कम्तिमा ३ बिन्दु अनिवार्य।
     if (points.length < 3) return null;
+    final echoedMode = data['mode'] as String?;
     return (
       points: points,
       km: (data['km'] as num?)?.toDouble() ?? 0,
       minutes: (data['minutes'] as num?)?.toInt() ?? 0,
       real: (data['real'] as bool?) ?? true,
+      // सर्भरले mode फर्काएको भए त्यही (साँचो प्रयोग भएको), नत्र (पुरानो
+      // deploy भन्दा अघिको जवाफ) हामीले नै अनुरोध गरेको मोड मान्ने।
+      mode: echoedMode != null ? TravelMode.fromValue(echoedMode) : mode,
     );
   } catch (_) {
     // Cloud Function नै असफल (network/quota/दुवै route स्रोत असफल) —
@@ -548,13 +671,33 @@ List<LatLng> _decodePolyline(String encoded) {
   return points;
 }
 
-/// InDrive-शैलीको route polyline — कालो, solid (OSRM बाट real road route
-/// भेटिएन भने dashed देखिन्छ ताकि "अनुमानित" हो भनेर छुट्टिओस्)।
+/// `routePolyline` भन्दा फराकिलो, सेतो casing — मानक Google Maps navigation
+/// जस्तै मुख्य रङको रेखामुनि सेतो border राखेर जुनसुकै नक्सा tile रङमा पनि
+/// route प्रस्ट/छुट्टै देखियोस् भनेर। सधैँ [routePolyline] भन्दा पहिले (तल,
+/// `zIndex` कम) थपिनुपर्छ।
+Polyline routePolylineCasing(String id, RoadRoute route) => Polyline(
+      polylineId: PolylineId('${id}_casing'),
+      points: route.points,
+      color: Colors.white,
+      width: 12,
+      jointType: JointType.round,
+      startCap: Cap.roundCap,
+      endCap: Cap.roundCap,
+      zIndex: 0,
+    );
+
+/// मुख्य route polyline — Instagram violet accent मा बाक्लो/प्रमुख रेखा,
+/// मानक Google Maps navigation जस्तै स्पष्ट देखिने (OSRM बाट real road
+/// route भेटिएन भने dashed देखिन्छ ताकि "अनुमानित" हो भनेर छुट्टिओस्)।
 Polyline routePolyline(String id, RoadRoute route) => Polyline(
       polylineId: PolylineId(id),
       points: route.points,
-      color: const Color(0xFF111111),
-      width: 5,
+      color: AppColors.igViolet,
+      width: 7,
+      jointType: JointType.round,
+      startCap: Cap.roundCap,
+      endCap: Cap.roundCap,
+      zIndex: 1,
       patterns:
           route.real ? const [] : [PatternItem.dash(24), PatternItem.gap(14)],
     );

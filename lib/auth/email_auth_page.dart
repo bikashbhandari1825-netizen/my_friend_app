@@ -42,6 +42,11 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
 
   static const _timeout = Duration(seconds: 20);
 
+  // सामान्य ठाउँमा भएका टाइपो (missing @, missing domain dot, आदि) ठम्याउने —
+  // 'contains(@) && contains(.)' भन्दा बढी भरपर्दो, तर धेरै कडा पनि होइन।
+  static final RegExp _emailPattern =
+      RegExp(r'^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$');
+
   @override
   void dispose() {
     _email.dispose();
@@ -85,6 +90,33 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
+  /// Sign-in/sign-up Future सफल भएपछि पनि, root (`app.dart`) कै
+  /// `StreamBuilder<User?>` ले `authStateChanges()` बाट नयाँ user event
+  /// नपाएसम्म अझै "signed-out" screen (PhoneLandingPage) नै देखाइरहेको हुन
+  /// सक्छ — विशेष गरी Flutter Web मा, जहाँ त्यो event JS interop भएर आउँदा
+  /// sign-in Future भन्दा एक tick पछि आइपुग्न सक्छ। त्यही बेला हामीले
+  /// `_goHome()` (pop) गरिहाल्यौं भने, EmailAuthPage हट्नेबित्तिकै मुनि
+  /// अझै पुरानो (signed-out) root देखिन्छ — ठ्याक्कै "इमेल हाल्नेबित्तिकै
+  /// फेरि welcome screen मा बाउन्स भयो / अगाडि बढेन" जस्तो देखिने बग।
+  ///
+  /// नोट: यहाँ `FirebaseAuth.instance.authStateChanges().firstWhere(...)`
+  /// जस्तो नयाँ subscription बनाएर पर्खनु काम गर्दैन — `app.dart` मै
+  /// (`_authStateStream` माथिको कमेन्ट हेर्नुहोस्) यो पहिल्यै documented छ:
+  /// यो stream ले भर्खरै भइसकेको auth event लाई ढिलो गरी subscribe हुने नयाँ
+  /// listener लाई replay गर्दैन (broadcast controller, event पहिल्यै निस्किसक्यो
+  /// भने त्यो निस्किसकेको event फेरि नआउने) — root को आफ्नै `_authStateStream`
+  /// भने app सुरु हुनेबित्तिकै subscribe भइसकेको हुन्छ त्यसैले त्यसले event
+  /// टिप्छ, तर यहाँबाट नयाँ `.firstWhere()` ले उही event भर्खरै टिप्न सक्दैन
+  /// र वास्तविक अर्को auth event (जुन कहिल्यै नआउन सक्छ) पर्खिरहन्छ —
+  /// अन्ततः पूरै timeout (पहिले ३ सेकेन्ड) बर्बाद गरेर मात्र अगाडि बढ्थ्यो,
+  /// जसले बग निको पार्नुको सट्टा झन् लामो समय landing screen मै अड्किएको
+  /// देखाउँथ्यो। बरु सानो, bounded delay दिएर root लाई आफ्नै गतिमा
+  /// rebuild हुन मौका दिने — real-world JS-interop ढिलाइ सामान्यतया केही
+  /// दर्जन ms मात्र हुन्छ, ३०० ms ले प्रशस्त मार्जिन दिन्छ।
+  Future<void> _waitForRootAuthSync(String uid) async {
+    await Future.delayed(const Duration(milliseconds: 300));
+  }
+
   /// सबै whitespace हटाएको, lowercase इमेल।
   String get _cleanEmail =>
       _email.text.replaceAll(RegExp(r'\s+'), '').toLowerCase();
@@ -107,8 +139,9 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
     final email = _cleanEmail;
     final pass = _password.text;
 
-    // client जाँच न्यूनतम — साँचो validation Firebase ले गर्छ।
-    if (email.isEmpty || !email.contains('@') || !email.contains('.')) {
+    // client जाँच — साँचो validation त Firebase ले नै गर्छ, तर स्पष्ट
+    // टाइपो (missing @, missing domain) सर्भरसम्म नपठाई यहीं समात्ने।
+    if (email.isEmpty || !_emailPattern.hasMatch(email)) {
       setState(() => _emailError = S.enterValidEmail);
       return;
     }
@@ -174,6 +207,8 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
           rethrow;
         }
       }
+      final uid = auth.currentUser?.uid;
+      if (uid != null) await _waitForRootAuthSync(uid);
       _goHome();
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
@@ -230,7 +265,7 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
   Future<void> _forgotPassword() async {
     if (_busy) return;
     final email = _cleanEmail;
-    if (email.isEmpty || !email.contains('@') || !email.contains('.')) {
+    if (email.isEmpty || !_emailPattern.hasMatch(email)) {
       setState(() => _emailError = S.enterValidEmail);
       return;
     }
@@ -305,6 +340,8 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
           ),
         );
       }
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) await _waitForRootAuthSync(uid);
       _goHome();
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
@@ -363,7 +400,8 @@ class _EmailAuthPageState extends State<EmailAuthPage> {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: IconButton(
-                    onPressed: () => Navigator.maybePop(context),
+                    onPressed:
+                        _busy ? null : () => Navigator.maybePop(context),
                     icon: const Icon(Icons.arrow_back_rounded,
                         color: Colors.white),
                   ),

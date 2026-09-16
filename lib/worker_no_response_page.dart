@@ -88,12 +88,11 @@ class _WorkerNoResponsePageState extends State<WorkerNoResponsePage> {
                 border: Border.all(
                     color: AppColors.igViolet.withValues(alpha: 0.3)),
               ),
-              child: Row(
+              child: const Row(
                 children: [
-                  const Icon(Icons.message,
-                      color: AppColors.igViolet, size: 28),
-                  const SizedBox(width: 10),
-                  const Text(
+                  Icon(Icons.message, color: AppColors.igViolet, size: 28),
+                  SizedBox(width: 10),
+                  Text(
                     'Write a support',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),

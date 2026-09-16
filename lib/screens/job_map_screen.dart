@@ -28,6 +28,10 @@ class JobsMapLayer extends StatefulWidget {
   /// FAB त्यसमाथि राख्न, र camera padding मिलाउन।
   final double bottomInset;
 
+  /// Worker Cancellation Penalty — बारम्बार cancel गर्ने worker ले नक्सामा
+  /// पनि कम job pin देख्ने (job_actions.dart::shouldShowJobToWorker)।
+  final int cancelCount;
+
   const JobsMapLayer({
     super.key,
     required this.lat,
@@ -36,6 +40,7 @@ class JobsMapLayer extends StatefulWidget {
     required this.trade,
     required this.myService,
     this.bottomInset = 0,
+    this.cancelCount = 0,
   });
 
   @override
@@ -89,9 +94,10 @@ class _JobsMapLayerState extends State<JobsMapLayer> {
     _centeredOnce = true;
   }
 
-  bool _passesFilters(Map<String, dynamic> data) {
+  bool _passesFilters(String jobId, Map<String, dynamic> data) {
     final rejected = (data['rejectedBy'] as List?) ?? const [];
     if (rejected.contains(_uid)) return false;
+    if (!shouldShowJobToWorker(jobId, widget.cancelCount)) return false;
     final svc = (data['service'] ?? '').toString();
     final wantTrade = widget.trade == '__mine__'
         ? widget.myService
@@ -117,7 +123,7 @@ class _JobsMapLayerState extends State<JobsMapLayer> {
 
     for (final d in docs) {
       final data = d.data();
-      if (!_passesFilters(data)) continue;
+      if (!_passesFilters(d.id, data)) continue;
       final jLat = (data['employerLat'] as num?)?.toDouble();
       final jLng = (data['employerLng'] as num?)?.toDouble();
       if (jLat == null || jLng == null) continue;

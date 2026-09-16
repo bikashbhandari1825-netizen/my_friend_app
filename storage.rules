@@ -1,11 +1,10 @@
 rules_version = '2';
 
-// KaamMitra Firebase Storage rules
-// documents/{uid}/license.jpg , documents/{uid}/selfie.jpg , ...
-// - आफ्नो uid फोल्डरमा मात्र लेख्न/मेट्न पाउने
-// - filename allowlist भएको मात्र (path-traversal र मनपरी नाम रोक्न)
-// - image (jpeg/png/webp) वा PDF मात्र, खाली नभएको, < 5MB
-// - signed-in जो कोहीले पढ्न पाउने (एडमिनले verify गर्न, app मा देखाउन)
+// KaamMitra Firebase Storage rules.
+// नोट: यो repo मा पहिले यो फाइल नै थिएन (firebase.json ले "storage.rules"
+// रेफर गरे पनि) — deploy नभएसम्म Firebase ले डिफल्ट (सधैँ deny) rules
+// लगाउँछ, वा Console बाट म्यानुअली सेट गरिएको जुनसुकै rule चलिरहेको हुन्छ,
+// जुन यो repo बाट ट्र्याक हुँदैन। यो फाइलले नै अब स्रोत-अफ-ट्रुथ हो।
 
 service firebase.storage {
   match /b/{bucket}/o {
@@ -19,47 +18,45 @@ service firebase.storage {
         && request.auth.token.email == 'bikashbhandari1825@gmail.com';
     }
 
-    function isValidDoc() {
-      return request.resource.size > 0
-        && request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches(
-             'image/jpeg|image/png|image/webp|application/pdf');
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
     }
 
+    // ── documents/{uid}/... ─────────────────────────────────
+    // Worker KYC कागजात (citizenship/selfie/license/certificate) —
+    // services/document_service.dart::uploadDocument। लेख्ने आफ्नै मात्र;
+    // पढ्ने कुनै पनि signed-in (worker आफैं + admin verification tab ले
+    // हेर्न पाउनुपर्छ — owner_dashboard_screen.dart)।
     match /documents/{uid}/{fileName} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn()
-        && request.auth.uid == uid
-        && fileName.matches(
-             '(license|selfie|certificate|citizenship_front|citizenship_back|document|id|driving_license|vehicle_registration)(_[0-9]+)?[.](jpg|jpeg|png|webp|pdf)')
-        && isValidDoc();
-      allow delete: if isSignedIn() && request.auth.uid == uid;
+      allow write: if isOwner(uid) || isAdmin();
     }
 
-    // कामको पोर्टफोलियो तस्बिरहरू — आफ्नै uid फोल्डरमा image मात्र
+    // ── portfolio/{uid}/... ─────────────────────────────────
+    // Worker ले देखाउने कामको तस्बिर — employer हरूले worker profile मा
+    // हेर्ने भएकोले सार्वजनिक-पढ्न (signed-in जो कोहीलाई) मिल्ने, लेख्ने
+    // आफ्नै मात्र।
     match /portfolio/{uid}/{fileName} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn()
-        && request.auth.uid == uid
-        && request.resource.size > 0
-        && request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches('image/jpeg|image/png|image/webp');
-      allow delete: if isSignedIn() && request.auth.uid == uid;
+      allow write: if isOwner(uid) || isAdmin();
     }
 
-    // In-app auto-update — release APK हरू। `open_filex`/`http` ले plain
-    // (unauthenticated) GET बाट सिधै download गर्ने भएकोले public read;
-    // upload भने owner-मात्र (Admin Dashboard को "App update" बटन, वा
-    // Firebase Console बाट सिधै)।
-    match /releases/{fileName} {
-      allow read: if true;
-      allow write: if isAdmin()
-        && request.resource.size > 0
-        && request.resource.size < 300 * 1024 * 1024
-        && fileName.matches('[a-zA-Z0-9_.-]+[.]apk');
+    // ── chats/{requestId}/media/... ─────────────────────────
+    // Chat भित्रको फोटो/भिडियो/भ्वाइस — services/chat_media_service.dart।
+    // Firestore कै `chats/{requestId}` rule (firestore.rules) सँगै मिल्ने
+    // उस्तै permissive स्तर (isSignedIn() मात्र, दुई पक्षको membership
+    // यहाँ पनि जाँचिँदैन) — त्यो collection मा पहिल्यै दर्ज गरिएको सोही
+    // डिजाइन निर्णय, यहाँ अलग्गै कडा नबनाई consistent राख्ने।
+    match /chats/{requestId}/media/{fileName} {
+      allow read, write: if isSignedIn();
+    }
+    // माथिकै फोल्डर list गर्न (job_actions.dart::_deleteChatMedia — completion/
+    // cancellation मा सबै media file सफा गर्न) छुट्टै `list` अनुमति चाहिन्छ।
+    match /chats/{requestId}/media {
+      allow list: if isSignedIn();
     }
 
-    // बाँकी सबै बन्द
+    // बाँकी सबै बन्द।
     match /{allPaths=**} {
       allow read, write: if false;
     }

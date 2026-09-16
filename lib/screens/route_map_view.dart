@@ -19,15 +19,18 @@ import '../location_util.dart';
 import '../theme/app_theme.dart';
 import 'nearby_common.dart'
     show
+        bearingBetween,
         destinationFlagPin,
         haversineKm,
         kCleanMapStyle,
-        pulseDotMarker,
+        travelModeMarker,
         routePolyline,
+        routePolylineCasing,
         walkConnectorPolyline,
         RoadRoute,
         FlagPinGeometry,
-        PulseRings;
+        PulseRings,
+        TravelMode;
 
 class RouteMapView extends StatefulWidget {
   /// चलिरहेको पक्ष (worker वा employer) को हालको स्थान — थाहा नभए null
@@ -61,6 +64,10 @@ class RouteMapView extends StatefulWidget {
 
   final EdgeInsets mapPadding;
 
+  /// हालको छानिएको यात्रा-मोड — live-location marker आइकन (कार/बाइक/पैदल-
+  /// यात्री, माथिबाट-हेर्दाको आकृति) यसैअनुसार तुरुन्तै बदलिन्छ।
+  final TravelMode travelMode;
+
   const RouteMapView({
     super.key,
     required this.origin,
@@ -75,6 +82,7 @@ class RouteMapView extends StatefulWidget {
     this.originMissingMessage,
     this.onRetryOrigin,
     this.mapPadding = const EdgeInsets.only(top: 64, bottom: 16),
+    this.travelMode = TravelMode.driving,
   });
 
   @override
@@ -93,40 +101,142 @@ class _RouteMapViewState extends State<RouteMapView>
   BitmapDescriptor? _originIcon;
   Offset? _pulseAt;
 
+  // Direction-facing live marker — पहिले यहाँ हरेक GPS बिन्दुबीच सहज
+  // गरी सर्ने/घुम्ने animated navigation-arrow थियो, जुन प्रत्येक movement
+  // मा ~900ms सम्म frame-by-frame GoogleMap rebuild गराउँथ्यो — तर त्यो
+  // ढिलाइको साँचो कारण animation आफैं होइन, हरेक frame मा marker आइकन
+  // (bitmap) नै पुनः-निर्माण हुनु र/वा route/camera जस्ता महँगो काम पनि
+  // सँगसँगै दोहोरिनु थियो। अब त्यही गल्ती नदोहोर्‍याई — bitmap एकपटक मात्र
+  // बन्छ, हरेक tick मा त्यही `AnimationController` ले केवल [_displayedOrigin]
+  // (position) र [_bearing] (rotation, GPU-side/native — Flutter बाट कुनै
+  // पुनः-रेन्डर नचाहिने) मात्र अपडेट गर्छ — `setState` यही सानो widget
+  // (route_map_view.dart) भित्रै सीमित, न route पुनः-तान्ने न camera
+  // पुनः-fit गर्ने। यसैले Uber/Pathao जस्तै सहज ग्लाइड दिन्छ, तर हल्का।
+  double _bearing = 0;
+  LatLng? _bearingFrom;
+  LatLng? _displayedOrigin;
+  late final AnimationController _moveCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..addListener(_onMoveTick);
+  LatLng? _animFrom;
+  LatLng? _animTo;
+
+  // GPS jitter (उभिइरहँदा पनि १-३मी यताउता हुने) ले bearing लाई हरेक
+  // पटक अनियमित दिशामा घुमाइरहनबाट जोगाउन — यो भन्दा कम चलेको बेला
+  // अघिल्लै दिशा नै कायम राख्ने।
+  static const double _minMoveForBearingKm = 0.004; // ~4m
+
   @override
   void initState() {
     super.initState();
     destinationFlagPin().then((b) {
       if (mounted) setState(() => _flagIcon = b);
     });
-    // स्थिर "तपाईं यहाँ हुनुहुन्छ" dot — पहिले यहाँ हरेक GPS बिन्दुबीच सहज
-    // गरी सर्ने/घुम्ने animated navigation-arrow थियो, जुन नक्सामा एउटा
-    // सानो icon "आफैं हिँडिरहेको" जस्तो देखिन्थ्यो र प्रत्येक movement मा
-    // ~900ms सम्म frame-by-frame GoogleMap rebuild पनि गराउँथ्यो। अब मार्कर
-    // सिधै नयाँ स्थानमा (कुनै interpolation/animation बिना) देखिन्छ —
-    // हल्का पनि, अनावश्यक चलायमान UI पनि हट्यो।
-    pulseDotMarker(AppColors.igViolet).then((b) {
+    // छानिएको यात्रा-मोड अनुसारको top-down कार/बाइक/पैदल-यात्री आकृति —
+    // यसैको `rotation` field (माथिको `_bearing`) ले हिँडिरहेको दिशा देखाउँछ।
+    _loadOriginIcon(widget.travelMode);
+    _bearingFrom = widget.origin;
+    // पहिलोपटक सिधै (कुनै glide बिना) देखिने — animation त बरु दोस्रो
+    // बिन्दुदेखि मात्र (साँच्चै "अघिल्लो ठाउँबाट सरेको" देखियोस्)।
+    _displayedOrigin = widget.origin;
+  }
+
+  void _loadOriginIcon(TravelMode mode) {
+    travelModeMarker(mode).then((b) {
       if (mounted) setState(() => _originIcon = b);
     });
   }
 
+  void _onMoveTick() {
+    final from = _animFrom;
+    final to = _animTo;
+    if (from == null || to == null || !mounted) return;
+    setState(() {
+      _displayedOrigin = _lerpLatLng(from, to, _moveCtrl.value);
+    });
+  }
+
+  static LatLng _lerpLatLng(LatLng a, LatLng b, double t) => LatLng(
+        a.latitude + (b.latitude - a.latitude) * t,
+        a.longitude + (b.longitude - a.longitude) * t,
+      );
+
+  /// नयाँ GPS बिन्दु आउनेबित्तिकै — हालको (देखिइरहेको, नयाँ आउनुअघिकै)
+  /// स्थानबाट यो नयाँ स्थानसम्म सहज गरी सार्ने (glide), सिधै "jump" होइन।
+  void _startGlideTo(LatLng newOrigin) {
+    _animFrom = _displayedOrigin ?? newOrigin;
+    _animTo = newOrigin;
+    _moveCtrl
+      ..stop()
+      ..reset()
+      ..forward();
+  }
+
+  void _maybeUpdateBearing(LatLng newOrigin) {
+    final from = _bearingFrom;
+    if (from == null) {
+      _bearingFrom = newOrigin;
+      return;
+    }
+    final movedKm = haversineKm(
+        from.latitude, from.longitude, newOrigin.latitude, newOrigin.longitude);
+    if (movedKm < _minMoveForBearingKm) return;
+    _bearing = bearingBetween(from, newOrigin);
+    _bearingFrom = newOrigin;
+  }
+
+  // Camera-follow — यो भन्दा टाढा सरेपछि मात्र फेरि दुवै पिन (origin +
+  // destination) देखिने गरी camera पुनः-fit गर्ने। पहिले यहाँ कहिल्यै
+  // दोस्रोपटक fit हुँदैनथ्यो (सुरुमै एकपटक मात्र) — worker टाढा हिँड्दै
+  // जाँदा marker स्क्रिनबाटै बाहिर गएर हराउँथ्यो, "ट्र्याकिङ अड्किएको/
+  // halted" जस्तो देखिने। धेरै सानो movement मा भने re-fit नगरी (त्यो
+  // भने साँच्चै jerk दिन्थ्यो) — `animateCamera` (smooth pan/zoom, कुनै
+  // अचानक jump होइन) ले नै "follow" अनुभव दिन्छ।
+  static const double _minMoveForRefitKm = 0.05; // ~50m
+  LatLng? _lastFitOrigin;
+
   @override
   void didUpdateWidget(covariant RouteMapView old) {
     super.didUpdateWidget(old);
+    if (widget.travelMode != old.travelMode) {
+      _loadOriginIcon(widget.travelMode);
+    }
+    final newOrigin = widget.origin;
+    if (newOrigin != null && newOrigin != old.origin) {
+      _maybeUpdateBearing(newOrigin);
+      if (old.origin == null) {
+        // पहिलोपटक (null बाट) — सिधै देखिने, कुनै टाढाबाट glide होइन।
+        _displayedOrigin = newOrigin;
+      } else {
+        _startGlideTo(newOrigin);
+      }
+    }
     final destChanged = old.destination != widget.destination;
     final originAppeared = old.origin == null && widget.origin != null;
     if (destChanged || originAppeared) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _fitBounds());
-    } else if (old.origin != widget.origin) {
-      // हरेक GPS movement मा पूरै camera फेरि fit नगरी — halo मात्र refresh
-      // (नत्र worker आफैं चल्दा नक्सा बारम्बार jerk हुन्छ)।
-      _refreshPulse();
+      _lastFitOrigin = newOrigin;
+    } else if (newOrigin != null && newOrigin != old.origin) {
+      final lastFit = _lastFitOrigin;
+      final movedKm = lastFit == null
+          ? double.infinity
+          : haversineKm(lastFit.latitude, lastFit.longitude,
+              newOrigin.latitude, newOrigin.longitude);
+      if (movedKm >= _minMoveForRefitKm) {
+        _lastFitOrigin = newOrigin;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _fitBounds());
+      } else {
+        // सानो movement — पूरै camera फेरि fit नगरी, halo मात्र refresh।
+        _refreshPulse();
+      }
     }
   }
 
   @override
   void dispose() {
     _pulse.dispose();
+    _moveCtrl.dispose();
     _map?.dispose();
     super.dispose();
   }
@@ -251,7 +361,12 @@ class _RouteMapViewState extends State<RouteMapView>
             onCameraIdle: _refreshPulse,
             zoomControlsEnabled: false,
             mapToolbarEnabled: false,
-            myLocationEnabled: true,
+            // Google को native "blue dot" + accuracy circle कहिल्यै नदेखियोस्
+            // भनेर सधैँ false — माथि `_originIcon` (pulseDotMarker,
+            // igViolet) ले नै "तपाईं यहाँ हुनुहुन्छ" देखाइसकेको छ; दुवै
+            // एकैचोटि देखिँदा (native + custom dot) एउटै स्थानमा दुई
+            // फरक-फरक थोप्ला देखिने बग हुन्थ्यो।
+            myLocationEnabled: false,
             myLocationButtonEnabled: false,
             // नक्सा सधैँ उत्तर-माथि (upright) रहोस् — compass/gyroscope वा
             // दुई-औँला gesture ले घुमाएर "उल्टो/घुमेको" देखिने बग नआओस्।
@@ -278,15 +393,28 @@ class _RouteMapViewState extends State<RouteMapView>
               if (widget.origin != null && _originIcon != null)
                 Marker(
                   markerId: const MarkerId('origin'),
-                  position: widget.origin!,
+                  // `_displayedOrigin` (animated glide-in-progress position)
+                  // — साँचो `widget.origin` (नयाँ GPS fix) होइन, जबसम्म
+                  // glide पूरा नभएको। यसैले marker सिधै "jump" नगरी सहज
+                  // गरी सर्छ।
+                  position: _displayedOrigin ?? widget.origin!,
                   anchor: const Offset(0.5, 0.5),
                   icon: _originIcon!,
+                  // `flat: true` नभई rotation ले 3D tilt/perspective दिन्छ
+                  // (उत्तर-माथि 2D नक्सामा अनावश्यक) — यसले सीधै नक्साकै
+                  // सतहमा (native, GPU-side) घुमाउँछ, कुनै Flutter rebuild
+                  // नचाहिने।
+                  flat: true,
+                  rotation: _bearing,
                   infoWindow: InfoWindow(title: widget.originLabel),
                 ),
             },
             polylines: {
               if (route != null && route.points.length >= 2)
                 ...[
+                  // सेतो casing सधैँ मुख्य रेखामुनि — मानक Google Maps
+                  // navigation जस्तै बाक्लो/छुट्टै देखियोस् भनेर।
+                  routePolylineCasing('route', route),
                   routePolyline('route', route),
                   // Google Maps-शैली "last-mile" डट्टेड connector — solid
                   // road route ठ्याक्कै marker सम्मै नपुगेको खाली ठाउँमा
@@ -406,11 +534,11 @@ class _RouteMapViewState extends State<RouteMapView>
       content = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            route.real ? Icons.route_rounded : Icons.timeline_rounded,
-            size: 16,
-            color: const Color(0xFF111111),
-          ),
+          // यातायात मोड (driving/walking/bike) कै आइकन — generic route/
+          // timeline icon भन्दा प्रस्ट, ride-hailing app जस्तै तुरुन्तै
+          // चिनिने। `!route.real` (fallback source) भए मात्र त्यो जनाउने
+          // छुट्टै icon तल थपिन्छ।
+          Icon(route.mode.icon, size: 16, color: const Color(0xFF111111)),
           const SizedBox(width: 8),
           Text(
             '${route.km.toStringAsFixed(route.km < 10 ? 1 : 0)} km  ·  ${S.minutesShort(route.minutes)}',

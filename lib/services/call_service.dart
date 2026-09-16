@@ -15,6 +15,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../config/app_config.dart' show WebRtcConfig;
+
 /// थ्रो हुने custom exception — UI ले यसलाई पक्डेर "अनुमति चाहियो" जस्तो
 /// स्पष्ट सन्देश देखाउन सकोस्, कालो/अड्किएको स्क्रिनको सट्टा।
 class CallPermissionDenied implements Exception {
@@ -25,23 +27,6 @@ class CallPermissionDenied implements Exception {
       ? 'Camera/microphone permission is required for video calls.'
       : 'Microphone permission is required for calls.';
 }
-
-const _iceServers = {
-  'iceServers': [
-    {'urls': 'stun:stun.l.google.com:19302'},
-    {'urls': 'stun:stun1.l.google.com:19302'},
-    {
-      'urls': 'turn:openrelay.metered.ca:80',
-      'username': 'openrelayproject',
-      'credential': 'openrelayproject',
-    },
-    {
-      'urls': 'turn:openrelay.metered.ca:443',
-      'username': 'openrelayproject',
-      'credential': 'openrelayproject',
-    },
-  ],
-};
 
 enum CallStatus { idle, ringing, connecting, connected, ended }
 
@@ -131,6 +116,51 @@ class CallSession {
 
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
+  /// आफ्नो ICE candidate Firestore मा लेख्ने — पहिले यो सिधै (कुनै
+  /// try/catch/null-check बिना) fire-and-forget `.add()` थियो। दुई
+  /// समस्या हुन सक्थे: (१) ICE gathering सकिएको संकेत गर्ने अन्तिम
+  /// candidate प्रायः खाली/null `candidate` सहित आउँछ — लेख्नु आवश्यकै
+  /// छैन, र केही अवस्थामा त्यस्तो malformed map ले Firestore बाट
+  /// `invalid-argument` सम्म फर्काउन सक्छ। (२) `.add()` कहिल्यै awaited
+  /// नभएकोले, त्यो Future असफल भए (permission/network/invalid-argument
+  /// जे भए पनि) कसैले नसमातेको (unhandled) exception बन्थ्यो — जुन बीचैमा
+  /// चलिरहेको कल (यो सधैँ ICE negotiation भइरहेकै बेला चल्ने callback
+  /// भएकोले) अस्थिर देखिने/अचानक disconnect हुने गुनासोसँग मिल्दो हो। अब
+  /// दुवै ठाउँमा सुरक्षित।
+  void _writeLocalCandidate(
+      CollectionReference<Map<String, dynamic>> col, RTCIceCandidate c) {
+    final candidate = c.candidate;
+    if (candidate == null || candidate.isEmpty) return;
+    unawaited(_safeAddCandidate(col, candidate, c.sdpMid, c.sdpMLineIndex));
+  }
+
+  Future<void> _safeAddCandidate(
+      CollectionReference<Map<String, dynamic>> col,
+      String candidate,
+      String? sdpMid,
+      int? sdpMLineIndex) async {
+    try {
+      await col.add({
+        'candidate': candidate,
+        'sdpMid': sdpMid,
+        'sdpMLineIndex': sdpMLineIndex,
+      });
+    } catch (_) {
+      // यो candidate मात्र हराउँछ (धेरैमध्ये एक हो, ICE ले बाँकीले पनि
+      // जोड्न सक्छ) — पूरै कल यसैले तोडिनु हुँदैन।
+    }
+  }
+
+  /// Offer/answer SDP लेख्नुअघि — खाली/null भए (दुर्लभ platform/codec
+  /// edge-case) त्यही bad payload Firestore मा लेखेर अर्को पक्षलाई पनि
+  /// पर्खाइरहनुको सट्टा, यहीं प्रस्ट exception (caller ले पक्डेर "कल
+  /// सुरु गर्न सकिएन" जस्तो सन्देश देखाउँछ, बीचमै अचानक pop होइन)।
+  void _assertValidDescription(RTCSessionDescription d, String what) {
+    if (d.sdp == null || d.sdp!.isEmpty || d.type == null) {
+      throw StateError('$what generation failed — empty description');
+    }
+  }
+
   Future<void> start() async {
     // getUserMedia अघि नै स्पष्ट रूपमा अनुमति माग्ने — नत्र अनुमति अस्वीकृत
     // भएमा getUserMedia चुपचाप असफल हुन्छ र UI ले remote/local video कतै
@@ -157,7 +187,10 @@ class CallSession {
       await CallService.resetSignal(requestId);
     }
 
-    _pc = await createPeerConnection(_iceServers);
+    // owner ले Firestore (config/webrtc) बाट कहिलेपनि नयाँ/paid TURN
+    // provider मा नयाँ app release बिनै अपग्रेड गर्न सकून् भनेर — नभए
+    // हालको (free relay) default।
+    _pc = await createPeerConnection(await WebRtcConfig.iceServersOnce());
 
     _local = await navigator.mediaDevices.getUserMedia({
       // AEC/NS/AGC + fixed 48kHz mono — बिना यसको आवाज तन्किएको/कम्पन
@@ -352,11 +385,11 @@ class CallSession {
 
   Future<void> _createOffer() async {
     final me = _uid;
-    _pc!.onIceCandidate = (c) {
-      _doc.collection('offerCandidates').add(c.toMap());
-    };
+    _pc!.onIceCandidate = (c) =>
+        _writeLocalCandidate(_doc.collection('offerCandidates'), c);
 
     final offer = await _pc!.createOffer();
+    _assertValidDescription(offer, 'Offer');
     await _pc!.setLocalDescription(offer);
 
     await _doc.set({
@@ -396,18 +429,22 @@ class CallSession {
 
   Future<void> _answerOffer() async {
     final me = _uid;
-    _pc!.onIceCandidate = (c) {
-      _doc.collection('answerCandidates').add(c.toMap());
-    };
+    _pc!.onIceCandidate = (c) =>
+        _writeLocalCandidate(_doc.collection('answerCandidates'), c);
 
     final snap = await _doc.get();
     final offer = snap.data()?['offer'];
-    if (offer == null) {
+    final offerSdp = offer?['sdp'];
+    final offerType = offer?['type'];
+    if (offer == null || offerSdp == null || offerType == null) {
+      // साथीको offer नै अझै पुगेको छैन वा malformed छ — साँचो कल कहिल्यै
+      // सुरु नहुनु राम्रो हो, malformed remote description सेट गर्न
+      // खोजेर mid-negotiation crash हुनुभन्दा।
       await hangUp(remote: false);
       return;
     }
     await _pc!.setRemoteDescription(
-        RTCSessionDescription(offer['sdp'], offer['type']));
+        RTCSessionDescription(offerSdp, offerType));
     // offer subcollection सुन्नुअघि नै remote description सेट भइसकेको
     // ग्यारेन्टी गर्ने — यहाँबाट पछि आउने candidate सबै तुरुन्तै थपिन्छन्,
     // तर subcollection ले पहिल्यै भएका पुराना doc पनि "added" भनेर फर्काउने
@@ -415,6 +452,7 @@ class CallSession {
     await _markRemoteDescSet();
 
     final answer = await _pc!.createAnswer();
+    _assertValidDescription(answer, 'Answer');
     await _pc!.setLocalDescription(answer);
 
     await _doc.set({

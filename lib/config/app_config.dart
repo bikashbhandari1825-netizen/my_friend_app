@@ -64,6 +64,63 @@ class SupportConfig {
       );
 }
 
+/// WebRTC कल (audio/video) का STUN/TURN server — Firestore:
+/// config/webrtc { iceServers: [ { urls, username?, credential? }, ... ] }
+///
+/// किन Firestore मा (हार्डकोड होइन): TURN relay प्रोडक्सन-स्तरको (जस्तै
+/// Twilio/Cloudflare Calls, महिनैपिच्छे GB-अनुसार शुल्क लाग्ने) मा
+/// अपग्रेड गर्दा owner ले नयाँ app release/build बिनै, यहीँ Firestore
+/// doc अपडेट गरेर तुरुन्तै लागू गर्न सकून् भनेर। doc नभए वा खाली भए
+/// [defaultIceServers] (हाल free/public relay) प्रयोग हुन्छ — पहिलोपटक
+/// कहिल्यै नसेट गरे पनि कल चल्न रोकिँदैन।
+class WebRtcConfig {
+  WebRtcConfig._();
+
+  static final _doc =
+      FirebaseFirestore.instance.collection('config').doc('webrtc');
+
+  static const Map<String, dynamic> defaultIceServers = {
+    'iceServers': [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {'urls': 'stun:stun1.l.google.com:19302'},
+      {
+        'urls': 'turn:openrelay.metered.ca:80',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': 'turn:openrelay.metered.ca:443',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+    ],
+  };
+
+  /// [CallSession.start()] ले हरेक कल सुरु हुँदा एकपटक पढ्छ।
+  static Future<Map<String, dynamic>> iceServersOnce() async {
+    try {
+      final s = await _doc.get();
+      final list = s.data()?['iceServers'];
+      if (list is List && list.isNotEmpty) {
+        return {'iceServers': list};
+      }
+    } catch (_) {
+      // पढ्न नसके पनि कल अड्किनु हुँदैन — default मै अगाडि बढ्ने।
+    }
+    return defaultIceServers;
+  }
+
+  /// Admin ले नयाँ TURN provider (जस्तै Twilio/Cloudflare Calls) मा
+  /// अपग्रेड गर्दा — प्रत्येक [entries] item मा `urls` (required) र
+  /// ऐच्छिक `username`/`credential`।
+  static Future<void> setIceServers(
+          List<Map<String, dynamic>> entries) =>
+      _doc.set({
+        'iceServers': entries,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+}
+
 /// In-app auto-update checker (Android APK) — Firestore: config/appUpdate
 /// { latestVersionCode: int, versionName: string, apkUrl: string,
 ///   releaseNotes: string, forceUpdate: bool }

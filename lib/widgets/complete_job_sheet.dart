@@ -26,6 +26,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../config/app_config.dart' show kCommissionRate;
 import '../l10n/strings.dart';
 import '../screens/job_actions.dart'
     show myWorkerName, purgeSensitiveDataOnCompletion, releaseWorkerActiveJob;
@@ -140,11 +141,20 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
     setState(() => _processingOnlinePayment = true);
     await Future.delayed(const Duration(milliseconds: 900));
     if (!mounted) return;
-    setState(() {
-      _processingOnlinePayment = false;
-      _onlinePaymentConfirmed = true;
-    });
+    setState(() => _processingOnlinePayment = false);
+    await _markOnlinePaymentConfirmed();
+  }
+
+  /// Online भुक्तानी पुष्टि भएको एकै ठाउँ — QR "Confirm Payment Received"
+  /// र eSewa/Khalti sandbox simulate दुवैले यही बोलाउँछन्। पुष्टि हुनेबित्तिकै
+  /// काम आफैं तुरुन्तै complete हुन्छ — employer ले छुट्टै "Complete Job"
+  /// फेरि थिच्नु पर्दैन (Cash मा भने अझै छुट्टै/मत्तनुतक थिच्नुपर्छ, किनकि
+  /// त्यो employer आफैंले "मैले नगद दिएँ" भनेर स्वयं-पुष्टि गर्ने कदम हो)।
+  Future<void> _markOnlinePaymentConfirmed() async {
+    if (!mounted) return;
+    setState(() => _onlinePaymentConfirmed = true);
     playSuccessFeedback();
+    await _confirm();
   }
 
   Future<void> _confirm() async {
@@ -155,6 +165,19 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
       final employerName = await myWorkerName(me?.uid);
       final paymentMethod =
           _paymentType == 'cash' ? 'cash' : (_onlineMethod ?? 'online');
+
+      // Automatic Commission Split — Online भुक्तानी (eSewa/Khalti/QR) मा
+      // मात्र, किनकि त्यो पैसा प्रणाली/company कै खाता हुँदै (वा त्यसैको
+      // हिसाबमा) आउँछ — त्यसैबाट कम्पनीको १०% commission र worker को ९०%
+      // payout स्वचालित रूपमा गणना गरी doc मा नै लेखिन्छ (real gateway
+      // जोडिँदा यही field हरूले नै actual payout/settlement लाई खुवाउने)।
+      // Cash मा भने पैसा सिधै worker को हातमा जान्छ, प्रणालीले छुनै पाउँदैन
+      // — त्यसैले त्यहाँ automatic split हुँदैन (commission शून्य, पूरै
+      // रकम worker कै, हिसाब/history मा स्पष्ट देखियोस् भनेर explicit रूपमा)।
+      final isOnline = _paymentType == 'online';
+      final commissionAmount =
+          isOnline ? (widget.amount * kCommissionRate) : 0;
+      final workerPayoutAmount = widget.amount - commissionAmount;
 
       final batch = FirebaseFirestore.instance.batch();
       final reviewRef = FirebaseFirestore.instance.collection('reviews').doc();
@@ -178,6 +201,9 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
           'paymentConfirmed': true,
           'paymentMethod': paymentMethod,
           'paidAmount': widget.amount,
+          'commissionAmount': commissionAmount,
+          'workerPayoutAmount': workerPayoutAmount,
+          'commissionRate': isOnline ? kCommissionRate : 0,
         },
       );
       await batch.commit();
@@ -324,10 +350,7 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
                         SecondaryButton(
                           label: S.confirmPaymentReceived,
                           icon: Icons.check_circle_outline_rounded,
-                          onPressed: () {
-                            setState(() => _onlinePaymentConfirmed = true);
-                            playSuccessFeedback();
-                          },
+                          onPressed: _markOnlinePaymentConfirmed,
                         )
                       else
                         _onlineConfirmedBadge(theme),

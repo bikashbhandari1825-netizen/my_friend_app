@@ -24,7 +24,8 @@ import '../widgets/app_ui.dart';
 import '../widgets/success_feedback.dart';
 import 'chat_screen.dart';
 import 'job_actions.dart' show otherPartyUid, startInAppCall;
-import 'nearby_common.dart' show haversineKm, fetchRoadRoute, RoadRoute;
+import 'nearby_common.dart'
+    show haversineKm, fetchRoadRoute, RoadRoute, TravelMode, TravelModeChips;
 import 'route_map_view.dart';
 
 class JobRouteScreen extends StatefulWidget {
@@ -61,6 +62,37 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
 
   RoadRoute? _route;
   bool _loading = true;
+
+  // Multi-modal यातायात — worker ले छान्छ, Firestore मा लेखिन्छ ताकि
+  // employer (RequestTrackingScreen) ले पनि उही मोड/route देखोस्।
+  TravelMode _mode = TravelMode.driving;
+  bool _modeLoadedFromDoc = false;
+
+  Future<void> _loadInitialMode() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('serviceRequests')
+          .doc(widget.requestId)
+          .get();
+      final saved = snap.data()?['travelMode'] as String?;
+      if (saved != null && mounted) {
+        setState(() => _mode = TravelMode.fromValue(saved));
+      }
+    } catch (_) {
+    } finally {
+      _modeLoadedFromDoc = true;
+    }
+  }
+
+  Future<void> _setMode(TravelMode m) async {
+    if (m == _mode) return;
+    setState(() => _mode = m);
+    unawaited(FirebaseFirestore.instance
+        .collection('serviceRequests')
+        .doc(widget.requestId)
+        .set({'travelMode': m.value}, SetOptions(merge: true)));
+    if (_me != null) await _loadRoute();
+  }
 
   // आफ्नो लाइभ स्थान — ग्राहकको स्क्रिनमा लाइभ track होस् भनेर Firestore मा
   // लगातार पठाउने। हरेक अपडेटमा OSRM नहित्याउन time-throttle गरिएको।
@@ -160,6 +192,7 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
   /// सुरक्षित गरेर banner मा देखाउने।
   Future<void> _fetchAndApplyLocation() async {
     if (mounted) setState(() => _loading = true);
+    if (!_modeLoadedFromDoc) await _loadInitialMode();
     final r = await getCurrentLocation();
     if (!mounted) return;
     setState(() {
@@ -178,7 +211,7 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
 
   Future<void> _loadRoute() async {
     final me = _me!;
-    final result = await fetchRoadRoute(me, _employer);
+    final result = await fetchRoadRoute(me, _employer, mode: _mode);
     if (!mounted) return;
     setState(() {
       _route = result;
@@ -280,6 +313,7 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
             destinationAddress: widget.address,
             route: _route,
             routeLoading: _loading,
+            travelMode: _mode,
             navigateTarget: _employer,
             locationPermanentlyDenied: _locationDeniedForever,
             originMissingMessage: _locationErrorMessage,
@@ -367,6 +401,9 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
                         ),
                       ],
                     ),
+                  ] else ...[
+                    const SizedBox(height: 10),
+                    TravelModeChips(selected: _mode, onChanged: _setMode),
                   ],
                   const SizedBox(height: 12),
                   // "On Arrival" — गन्तव्यको ठ्याक्कै geofence भित्र नआएसम्म
@@ -385,56 +422,86 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
                             _withinArrivalRadius ? _confirmArrival : null,
                       ),
                     ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _callEmployer,
-                          icon: const Icon(Icons.call_rounded, size: 18),
-                          label: Text(S.callWord),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
+                  // Arrival-Gated Communication — काम गर्ने ठाउँमा साँच्चै
+                  // नआइपुगेसम्म (arrival confirm नभएसम्म) Call/Video/Message
+                  // तीनैवटा लुकेका रहन्छन् — स्वीकृति भइसकेको भए पनि।
+                  if (_arrivalConfirmed)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _callEmployer,
+                            icon: const Icon(Icons.call_rounded, size: 18),
+                            label: Text(S.callWord),
+                            style: OutlinedButton.styleFrom(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 12),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => startInAppCall(
-                            context,
-                            requestId: widget.requestId,
-                            otherName: widget.employerName,
-                            video: true,
-                          ),
-                          icon: const Icon(Icons.videocam_rounded, size: 18),
-                          label: Text(S.videoCall),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => startInAppCall(
+                              context,
+                              requestId: widget.requestId,
+                              otherName: widget.employerName,
+                              video: true,
+                            ),
+                            icon: const Icon(Icons.videocam_rounded, size: 18),
+                            label: Text(S.videoCall),
+                            style: OutlinedButton.styleFrom(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 12),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: GradientActionButton(
-                          icon: Icons.chat_bubble_rounded,
-                          label: S.messageWord,
-                          expand: true,
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ChatScreen(
-                                requestId: widget.requestId,
-                                workerName: widget.employerName,
-                                // यो screen सधैँ accept भइसकेको काम (worker
-                                // route मा) कै लागि मात्र खुल्छ।
-                                initialStatus: 'accepted',
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: GradientActionButton(
+                            icon: Icons.chat_bubble_rounded,
+                            label: S.messageWord,
+                            expand: true,
+                            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ChatScreen(
+                                  requestId: widget.requestId,
+                                  workerName: widget.employerName,
+                                  // यहाँसम्म आइपुग्ने बेला (arrival भइसकेको)
+                                  // status सधैँ in_progress नै हुन्छ।
+                                  initialStatus: 'in_progress',
+                                ),
                               ),
                             ),
                           ),
                         ),
+                      ],
+                    )
+                  else
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
                       ),
-                    ],
-                  ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.lock_outline_rounded,
+                              size: 16,
+                              color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(S.contactLockedAwaitingArrival,
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: theme.colorScheme.onSurfaceVariant)),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -443,4 +510,5 @@ class _JobRouteScreenState extends State<JobRouteScreen> {
       ),
     );
   }
+
 }

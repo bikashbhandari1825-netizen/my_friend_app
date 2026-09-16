@@ -34,13 +34,39 @@ class _AuthPageState extends State<AuthPage> {
   // "welcome screen मा बाउन्स भएको" जस्तो देखिन्थ्यो — साँचो कारण यही थियो।
   bool _busy = false;
 
+  // 'contains(@) && contains(.)' भन्दा बढी भरपर्दो — तर धेरै कडा पनि होइन।
+  static final RegExp _emailPattern =
+      RegExp(r'^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$');
+
+  /// Sign-in/sign-up Future सफल भएपछि पनि, root (`app.dart`) कै
+  /// `StreamBuilder<User?>` ले `authStateChanges()` बाट नयाँ user event
+  /// नपाएसम्म अझै "signed-out" screen नै देखाइरहेको हुन सक्छ — विशेष गरी
+  /// Flutter Web मा, जहाँ त्यो event JS interop भएर sign-in Future भन्दा
+  /// एक tick पछि आइपुग्न सक्छ। त्यही बेला `popUntil` गरिहाल्यौं भने, यो पेज
+  /// हट्नेबित्तिकै मुनि अझै पुरानो (signed-out) root देखिन्छ — "इमेल
+  /// हाल्नेबित्तिकै फेरि welcome/login screen मा बाउन्स भयो" जस्तो देखिने
+  /// बग।
+  ///
+  /// नोट: यहाँ `authStateChanges().firstWhere(...)` जस्तो नयाँ subscription
+  /// बनाएर पर्खनु काम गर्दैन — `app.dart` मै (`_authStateStream` माथिको
+  /// कमेन्ट) यो पहिल्यै documented छ: यो stream ले भर्खरै भइसकेको auth
+  /// event लाई ढिलो गरी subscribe हुने नयाँ listener लाई replay गर्दैन।
+  /// root को आफ्नै `_authStateStream` app सुरु हुनेबित्तिकै subscribe
+  /// भइसकेको हुन्छ त्यसैले त्यसले event टिप्छ, तर यहाँबाट नयाँ subscription
+  /// ले त्यही event भर्खरै टिप्न सक्दैन र अर्को event (कहिल्यै नआउन सक्छ)
+  /// पर्खिरहन्छ — अन्ततः पूरै timeout बर्बाद गर्थ्यो। बरु सानो, bounded
+  /// delay दिएर root लाई आफ्नै गतिमा rebuild हुन मौका दिने।
+  Future<void> _waitForRootAuthSync(String uid) async {
+    await Future.delayed(const Duration(milliseconds: 300));
+  }
+
   Future<void> _submit() async {
     if (_busy) return;
     // इमेल मात्र trim/lowercase — पासवर्ड जस्ताको तस्तै (trim गर्दा mismatch हुन्छ)।
     final email =
         _emailController.text.replaceAll(RegExp(r'\s+'), '').toLowerCase();
     final pass = _passwordController.text;
-    if (!email.contains('@') || !email.contains('.') || pass.length < 6) {
+    if (!_emailPattern.hasMatch(email) || pass.length < 6) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(S.enterValidEmail)),
       );
@@ -57,6 +83,9 @@ class _AuthPageState extends State<AuthPage> {
             .createUserWithEmailAndPassword(email: email, password: pass);
       }
 
+      if (!mounted) return;
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) await _waitForRootAuthSync(uid);
       if (!mounted) return;
       // नयाँ KaamMitraApp() कहिल्यै नबनाउने — root कै authStateChanges()
       // StreamBuilder ले नै sign-in भएपछि सही screen देखाइसक्छ। यहाँबाट
@@ -102,7 +131,7 @@ class _AuthPageState extends State<AuthPage> {
     if (_busy) return;
     final email =
         _emailController.text.replaceAll(RegExp(r'\s+'), '').toLowerCase();
-    if (!email.contains('@') || !email.contains('.')) {
+    if (!_emailPattern.hasMatch(email)) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(S.resetEmailEnterFirst)),
       );
@@ -166,6 +195,9 @@ class _AuthPageState extends State<AuthPage> {
         await FirebaseAuth.instance.signInWithCredential(credential);
       }
 
+      if (!mounted) return;
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) await _waitForRootAuthSync(uid);
       if (!mounted) return;
       Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {

@@ -8,6 +8,7 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 
 import '../app_globals.dart';
@@ -171,6 +172,16 @@ Future<String> myPhoneNumber(String? uid) async {
 // उस्तै status set हो — `main_container.dart` कै `_activeJobStatuses` र
 // `worker_profile_screen.dart` कै `_kActiveRequestStatuses` सँगै मिल्ने।
 const kActiveJobStatuses = {'accepted', 'confirmed', 'in_progress'};
+
+// ── Arrival-Gated Communication ──────────────────────────────────────────
+// Call/Video/Chat अब स्वीकृति (accepted/confirmed) मै होइन, worker साँच्चै
+// ठ्याक्कै employer को स्थानमा आइपुगेर "On Arrival" पुष्टि गरेपछि मात्र
+// खुल्नुपर्छ — जुन ठ्याक्कै status `in_progress` (job_route_screen.dart::
+// _confirmArrival ले arrivedAt सेट गर्दा एकैसाथ सेट गर्ने) हो। अघिको
+// स्वीकृति-देखि-नै-खुल्ने व्यवहार भन्दा साँच्चैको फरक — त्यसैले यो एउटै
+// साझा ठाउँबाट जाँच्ने, हरेक call/video/chat button ले आफ्नै छुट्टै
+// status-set नबनाओस्।
+bool isCommunicationUnlocked(String? status) => status == 'in_progress';
 
 /// worker आफैं व्यस्त भएकोले (अर्को सक्रिय काम भइरहेको) यो काम accept/confirm
 /// गर्न नमिल्ने भएको बेला throw हुने — caller ले पक्डेर स्पष्ट सन्देश देखाउनुहोस्।
@@ -423,6 +434,20 @@ Future<void> declineBroadcastJob(String docId) async {
   } catch (_) {}
 }
 
+/// Chat media (photo/video/voice, chat_media_service.dart ले
+/// `chats/{docId}/media/*` मा अपलोड गरेको) सबै Storage बाट मेटाउने —
+/// Firestore कै message doc मेटाउँदा मात्र यी असली फाइल आफैं मेटिँदैनन्,
+/// यो नगरे Storage मा सधैँका लागि "अनाथ" भई बसिरहन्थे (privacy purge को
+/// उद्देश्य नै अधुरो रहन्थ्यो)। कुनै फाइल नभए वा असफल भए पनि caller को
+/// बाँकी काम नरोकियोस् भनेर चुपचाप।
+Future<void> _deleteChatMedia(String docId) async {
+  try {
+    final folder = FirebaseStorage.instance.ref('chats/$docId/media');
+    final list = await folder.listAll();
+    await Future.wait(list.items.map((r) => r.delete().catchError((_) {})));
+  } catch (_) {}
+}
+
 /// Post-Completion Data Clearance — काम "completed" भइसकेपछि chat भित्रका
 /// सबै सन्देश (फोन नम्बर/ठेगाना जस्ता संवेदनशील कुरा आदान-प्रदान भएको हुन
 /// सक्ने) र request doc मा cache भएका फोन नम्बर (workerPhone/employerPhone)
@@ -455,6 +480,7 @@ Future<void> purgeSensitiveDataOnCompletion(String docId) async {
     );
     await batch.commit();
     await FirebaseFirestore.instance.collection('calls').doc(docId).delete();
+    unawaited(_deleteChatMedia(docId));
   } catch (_) {
     // सफाइ असफल भए पनि काम "completed" भइसकेको छ — payment flow यसले रोक्दैन।
   }
@@ -468,6 +494,11 @@ Future<void> purgeSensitiveDataOnCompletion(String docId) async {
 Future<void> deleteCancelledBooking(
   String docId, {
   String? workerUid,
+  // worker आफैंले cancel गर्‍यो कि employer ले — worker ले cancel गर्दा
+  // मात्र त्यसको प्रोफाइलमा strike थपिन्छ (हेर्नुहोस्
+  // `recordWorkerCancellation` तल)। Employer ले cancel गर्दा कुनै penalty
+  // छैन (Employer लाई जहिले पनि cancel गर्ने अधिकार छ)।
+  bool cancelledByWorker = false,
 }) async {
   try {
     final msgs = await FirebaseFirestore.instance
@@ -484,13 +515,56 @@ Future<void> deleteCancelledBooking(
         FirebaseFirestore.instance.collection('serviceRequests').doc(docId));
     await batch.commit();
     await FirebaseFirestore.instance.collection('calls').doc(docId).delete();
+    unawaited(_deleteChatMedia(docId));
   } catch (_) {
     // safety-net मात्र — मुख्य serviceRequests delete माथिकै batch भित्रै
     // भइसकेको हुन्छ, यहाँको असफलताले "cancelled" अनुभव नरोकोस्।
   }
   if (workerUid != null && workerUid.isNotEmpty) {
     unawaited(releaseWorkerActiveJob(workerUid, docId));
+    if (cancelledByWorker) {
+      unawaited(recordWorkerCancellation(workerUid));
+    }
   }
+}
+
+/// Worker Cancellation Penalty — worker ले (काम स्वीकार गरिसकेपछि) आफैं
+/// cancel गर्दा हरेकपटक `users/{uid}.workerCancelCount` एक-एक बढ्दै जान्छ।
+/// यो गन्ती नै भविष्यमा नयाँ broadcast job हरू कतिवटा देखिने भन्ने
+/// throttle (हेर्नुहोस् `workerJobVisibilityRate` / `shouldShowJobToWorker`)
+/// लाई खुवाउँछ — बारम्बार cancel गर्ने worker ले क्रमशः कम अवसर पाउँदै जान्छ।
+/// Employer ले cancel गर्दा यो कहिल्यै बोलाइँदैन (employer लाई कुनै penalty छैन)।
+Future<void> recordWorkerCancellation(String workerUid) async {
+  try {
+    await FirebaseFirestore.instance.collection('users').doc(workerUid).set(
+      {'workerCancelCount': FieldValue.increment(1)},
+      SetOptions(merge: true),
+    );
+  } catch (_) {
+    // penalty tracking असफल भए पनि cancellation आफैं रोकिनु हुँदैन।
+  }
+}
+
+/// [cancelCount] अनुसार worker ले नयाँ broadcast job हरू मध्ये कति % देख्ने
+/// भन्ने throttle दर — बारम्बार cancel गर्ने worker लाई क्रमशः कम अवसर।
+/// उदाहरण: १०-मध्ये सामान्यतया सबै देख्ने, धेरै cancel गरिसकेको worker ले
+/// १०-मध्ये ३-४ वटा जति मात्र देख्ने।
+double workerJobVisibilityRate(int cancelCount) {
+  if (cancelCount <= 2) return 1.0; // सुरुको केही cancel — अझै पूरै पहुँच
+  if (cancelCount <= 5) return 0.6; // बारम्बार हुन थाल्यो — ६०%
+  if (cancelCount <= 9) return 0.4; // धेरैपटक — ४०% (लगभग "१०-मा ४")
+  return 0.3; // निरन्तर cancel गर्ने — ३०% (लगभग "१०-मा ३")
+}
+
+/// [jobId] यो [cancelCount] भएको worker लाई देखाउने कि नदेखाउने — स्थिर
+/// (deterministic) निर्णय, हरेक rebuild/frame मा फरक-फरक नआओस् भनेर (कुनै
+/// `Random()` होइन) — उही job doc id ले उही worker लाई सधैँ उही नतिजा दिन्छ,
+/// तर फरक-फरक worker/job combination बीच समान रूपमा छरिएको (hash-based)।
+bool shouldShowJobToWorker(String jobId, int cancelCount) {
+  final rate = workerJobVisibilityRate(cancelCount);
+  if (rate >= 1.0) return true;
+  final bucket = jobId.hashCode.abs() % 100;
+  return bucket < (rate * 100).round();
 }
 
 /// Employer ले कामदारको counter-offer (workerCounterPrice) Accept गर्दा —

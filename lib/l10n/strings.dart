@@ -234,6 +234,8 @@ class S {
   static String get serviceRequestSentTitle => _t('service_request_sent_title');
   static String get serviceRequestSentBody => _t('service_request_sent_body');
   static String get contactLockedCaption => _t('contact_locked_caption');
+  static String get contactLockedAwaitingArrival =>
+      _t('contact_locked_awaiting_arrival');
   static String get openChatLabel => _t('open_chat_label');
   static String get chatLockedCompleted => _t('chat_locked_completed');
 
@@ -581,6 +583,27 @@ class S {
   static String get deleteChat => _t('delete_chat');
   static String get voiceMessage => _t('voice_message');
   static String get photo => _t('photo');
+  static String get video => _t('video_word');
+  static String get videoTooLarge => _t('video_too_large');
+  static String get recordVideo => _t('record_video');
+  static String get chooseFromGallery => _t('choose_from_gallery');
+  static String get sendingMedia => _t('sending_media');
+  static String get messageTooLong => _t('message_too_long');
+  static String get locationTrackingNotifTitle =>
+      _t('location_tracking_notif_title');
+  static String get locationTrackingNotifBody =>
+      _t('location_tracking_notif_body');
+  static String get backgroundLocationRationaleTitle =>
+      _t('background_location_rationale_title');
+  static String get backgroundLocationRationaleBody =>
+      _t('background_location_rationale_body');
+  static String get allowWord => _t('allow_word');
+  static String get travelModeDriving => _t('travel_mode_driving');
+  static String get travelModeWalking => _t('travel_mode_walking');
+  static String get travelModeBicycling => _t('travel_mode_bicycling');
+  static String workerTravelingBy(String modeLabel) => S.isNepali
+      ? 'कामदार $modeLabel आउँदैछन्'
+      : 'Worker is coming by $modeLabel';
 
   // ── Home ↔ Workplace route ─────────────────────────────
   static String get homeToWorkRoute => _t('home_to_work_route');
@@ -1014,6 +1037,11 @@ class S {
     'contact_locked_caption': {
       'en': 'Call & Message unlock once your request is accepted',
       'ne': 'तपाईंको अनुरोध स्वीकार भएपछि मात्र कल र म्यासेज उपलब्ध हुन्छ'
+    },
+    'contact_locked_awaiting_arrival': {
+      'en': 'Call, video & message unlock once the worker arrives at the job location',
+      'ne':
+          'कामदार काम गर्ने ठाउँमा आइपुगेपछि मात्र कल, भिडियो र म्यासेज उपलब्ध हुन्छ'
     },
     'open_chat_label': {
       'en': 'Tap to chat',
@@ -1712,6 +1740,43 @@ class S {
     'delete_chat': {'en': 'Delete conversation?', 'ne': 'कुराकानी मेटाउने?'},
     'voice_message': {'en': 'Voice message', 'ne': 'भ्वाइस सन्देश'},
     'photo': {'en': 'Photo', 'ne': 'फोटो'},
+    'video_word': {'en': 'Video', 'ne': 'भिडियो'},
+    'video_too_large': {
+      'en': 'Video is too large (max 25 MB / 60 sec) — try a shorter clip',
+      'ne': 'भिडियो धेरै ठूलो छ (बढीमा 25 MB / 60 सेकेन्ड) — छोटो क्लिप प्रयास गर्नुहोस्'
+    },
+    'record_video': {'en': 'Record video', 'ne': 'भिडियो रेकर्ड गर्नुहोस्'},
+    'choose_from_gallery': {
+      'en': 'Choose from gallery',
+      'ne': 'ग्यालरीबाट छान्नुहोस्'
+    },
+    'sending_media': {'en': 'Sending…', 'ne': 'पठाउँदै...'},
+    'message_too_long': {
+      'en': 'Message is too long — please shorten it',
+      'ne': 'सन्देश धेरै लामो छ — छोटो पार्नुहोस्'
+    },
+    'location_tracking_notif_title': {
+      'en': 'KaamMitra — job in progress',
+      'ne': 'KaamMitra — काम जारी छ'
+    },
+    'location_tracking_notif_body': {
+      'en': 'Sharing your live location with the employer for this job',
+      'ne': 'यो कामको लागि तपाईंको लाइभ स्थान employer लाई देखाइँदैछ'
+    },
+    'background_location_rationale_title': {
+      'en': 'Keep sharing location in the background?',
+      'ne': 'पृष्ठभूमिमा पनि स्थान देखाउने?'
+    },
+    'background_location_rationale_body': {
+      'en':
+          'So the employer can keep tracking you even if you lock your screen or switch apps during a job, KaamMitra needs "Allow all the time" location access. You can still change this later in Settings.',
+      'ne':
+          'काम गर्दा स्क्रिन लक गरे वा अर्को app मा गए पनि employer ले तपाईंलाई ट्र्याक गर्न सकून् भनेर KaamMitra लाई "सधैँ अनुमति दिनुहोस्" location चाहिन्छ। यो पछि Settings बाट पनि बदल्न सकिन्छ।'
+    },
+    'allow_word': {'en': 'Allow', 'ne': 'अनुमति दिनुहोस्'},
+    'travel_mode_driving': {'en': 'Driving', 'ne': 'गाडी'},
+    'travel_mode_walking': {'en': 'Walking', 'ne': 'हिँडेर'},
+    'travel_mode_bicycling': {'en': 'Bike', 'ne': 'बाइक'},
     'home_to_work_route': {
       'en': 'Home → Workplace route',
       'ne': 'घर → कार्यस्थल मार्ग'
