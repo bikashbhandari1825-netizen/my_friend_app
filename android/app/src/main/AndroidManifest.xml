@@ -1,0 +1,105 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Nearby workers / distance tracking (geolocator) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Worker ले काम स्वीकार गरिसकेपछि (accepted/confirmed/in_progress),
+         app minimize भए वा screen लक भए पनि employer ले live tracking
+         हेर्न सकून् भनेर — geolocator कै `foregroundNotificationConfig`
+         (main_container.dart::_startWorkerLocationTracking) ले persistent
+         notification सहितको foreground location service चलाउँछ। API 29+
+         (Android 10+) मा पृष्ठभूमिबाट location चाहिए यो छुट्टै permission
+         (runtime मा पनि छुट्टै/पछि माग्नुपर्ने) चाहिन्छ। FOREGROUND_SERVICE
+         जुनसुकै foreground service सुरु गर्न, र FOREGROUND_SERVICE_LOCATION
+         (API 34+ मा अनिवार्य) location-प्रकारको service विशेष गरी घोषणा
+         गर्न — यो नभई Android 14+ मा service सुरुै हुँदैन। geolocator_android
+         plugin आफैंले `foregroundServiceType="location"` सहितको <service>
+         घोषणा गरिसकेको छ (manifest merge हुन्छ), यहाँ ती permission मात्र थप्नुपर्छ। -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <!-- Android 13+ (API 33) मा runtime मा माग्नुपर्ने notification अनुमति —
+         push/local notification देखाउन यो घोषणा चाहिन्छ (firebase_messaging
+         + flutter_local_notifications ले runtime request गर्छ)। -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- In-app voice/video call (flutter_webrtc) — यी बिना getUserMedia ले
+         सधैँ अनुमति अस्वीकृत भएझैँ व्यवहार गर्छ (कल कहिल्यै नजोडिने/कालो
+         स्क्रिन देखिने), किनभने Android मा manifest मा नै घोषणा नभएको
+         permission runtime मा माग्नै मिल्दैन। -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <!-- In-app auto-update checker — testers लाई नयाँ APK आफैं download गरेर
+         Android को system package installer मार्फत install गर्न दिन यो
+         permission Android 8+ मा manifest मै घोषणा गर्नुपर्छ, नत्र
+         install intent चुपचाप असफल/अस्वीकृत हुन्छ। -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
+    <application
+        android:label="my_friend_app"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+        <!-- Google Maps (location picker) -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyDkbnRYfqKo8khNvgrFj26z2WX2Ao9xsiU"/>
+        <!-- FCM default notification icon/channel — flutter_local_notifications
+             ले पनि यही channel id प्रयोग गर्छ ताकि foreground/background दुवैको
+             notification एउटै group मा देखियोस्। -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="kaammitra_job_updates"/>
+        <!-- Flutter को नयाँ Impeller renderer (OpenGLES) ले यो डिभाइस जस्ता
+             केही MediaTek/OEM camera HAL+GPU combo मा WebRTC/camera-preview
+             कै platform texture लाई बाँध्न (bind) असफल हुन्छ — camera hardware
+             वास्तवमा चलिरहेको (logcat मा लगातार frame capture देखिन्छ) तर
+             preview सधैँ कालै (black box) देखिने बग यही थियो, कुनै Dart/WebRTC
+             कोडको समस्या होइन। यहाँ Impeller निष्क्रिय गरेर पुरानो, यस्तो
+             external texture sharing मा बढी परिपक्व Skia/OpenGL backend मा
+             फर्काउँदा camera/video preview भरपर्दो देखिन्छ। -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false"/>
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility?hl=en and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>

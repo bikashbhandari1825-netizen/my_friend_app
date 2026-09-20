@@ -1,0 +1,598 @@
+// services/call_service.dart
+// पूर्ण in-app WebRTC कल — media flutter_webrtc ले, signaling (offer/answer/ICE)
+// Firebase Firestore ले सम्हाल्छ। कुनै external browser / Jitsi छैन।
+//
+// Firestore:
+//   calls/{requestId}            { offer, answer, mode, callerUid, callerName,
+//                                  calleeUid, status: ringing|connected|ended }
+//   calls/{requestId}/offerCandidates/*   (caller ले लेख्ने)
+//   calls/{requestId}/answerCandidates/*  (callee ले लेख्ने)
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import '../config/app_config.dart' show WebRtcConfig;
+
+/// थ्रो हुने custom exception — UI ले यसलाई पक्डेर "अनुमति चाहियो" जस्तो
+/// स्पष्ट सन्देश देखाउन सकोस्, कालो/अड्किएको स्क्रिनको सट्टा।
+class CallPermissionDenied implements Exception {
+  final bool video;
+  const CallPermissionDenied(this.video);
+  @override
+  String toString() => video
+      ? 'Camera/microphone permission is required for video calls.'
+      : 'Microphone permission is required for calls.';
+}
+
+enum CallStatus { idle, ringing, connecting, connected, ended }
+
+/// एउटा live कल — CallScreen ले बनाउँछ र नियन्त्रण गर्छ।
+class CallSession {
+  final String requestId;
+  final bool video;
+
+  /// true = यो user ले कल गर्‍यो; false = अर्को पक्षको कल स्वीकार गर्दै।
+  final bool isCaller;
+  final String myName;
+
+  CallSession({
+    required this.requestId,
+    required this.video,
+    required this.isCaller,
+    required this.myName,
+  });
+
+  final localRenderer = RTCVideoRenderer();
+  final remoteRenderer = RTCVideoRenderer();
+
+  final status = ValueNotifier<CallStatus>(CallStatus.idle);
+  final micOn = ValueNotifier<bool>(true);
+  final camOn = ValueNotifier<bool>(true);
+  final remoteJoined = ValueNotifier<bool>(false);
+  // Video कलमा default speaker-on (Messenger जस्तै — screen हेर्दै हुँदा
+  // कान नजिक लैजानु अस्वाभाविक हुन्छ); voice कलमा default earpiece।
+  // `start()` भित्र वास्तविक routing सेट हुन्छ।
+  final speakerOn = ValueNotifier<bool>(false);
+  // Local PiP mirror गर्ने कि नगर्ने — front camera मा mirror सही देखिन्छ,
+  // back camera मा मिरर गरे उल्टो/गलत देखिन्छ (यो अघिल्लो एउटा वास्तविक बग थियो)।
+  final isFrontCamera = ValueNotifier<bool>(true);
+
+  RTCPeerConnection? _pc;
+  MediaStream? _local;
+  final _subs = <StreamSubscription>[];
+  bool _closed = false;
+
+  // `disconnected` state पछि कल तुरुन्तै नकाटी केही समय पर्खने grace-period
+  // टाइमर — तल `onConnectionState` मा हेर्नुहोस्।
+  Timer? _disconnectGraceTimer;
+
+  // ── ICE candidate race-condition fix ──────────────────────────────────
+  // अर्को पक्षको ICE candidate, हाम्रो remote description सेट हुनुअघि नै
+  // आइपुग्न सक्छ (Firestore का दुई छुट्टाछुट्टै listener — parent doc को
+  // 'answer'/'offer' field र candidates subcollection — कुन पहिले फायर
+  // हुन्छ भन्ने कुनै ग्यारेन्टी छैन)। remote description नभई `addCandidate`
+  // कल गर्दा silently असफल/exception हुन्छ र त्यो candidate सधैंलाई हराउँछ —
+  // ठ्याक्कै यही थियो "कल कहिलेकाहीं नजोडिने/बीचैमा कट्ने" bug को साँचो जड।
+  // यहाँ त्यस्ता candidate लाई पर्खाएर राख्ने (buffer), remote description
+  // सेट भएपछि मात्र एकैचोटि थप्ने।
+  bool _remoteDescSet = false;
+  final List<RTCIceCandidate> _pendingRemoteCandidates = [];
+
+  Future<void> _addRemoteCandidate(RTCIceCandidate c) async {
+    if (!_remoteDescSet) {
+      _pendingRemoteCandidates.add(c);
+      return;
+    }
+    try {
+      await _pc!.addCandidate(c);
+    } catch (_) {
+      // कहिलेकाहीं ढिलो/duplicate candidate आउँछ — कल तोड्नु भन्दा बेवास्ता गर्ने।
+    }
+  }
+
+  /// पहिलो video track को id — नभए null। `setSrcObject`लाई trackId दिन
+  /// चाहिन्छ (Flutter Web को renderer ले exact match नभई कुनै track
+  /// देखाउँदैन); voice-only कलमा video track नै हुँदैन, त्यसबेला null नै सही।
+  static String? _firstTrackId(List<MediaStreamTrack>? tracks) =>
+      (tracks != null && tracks.isNotEmpty) ? tracks.first.id : null;
+
+  Future<void> _markRemoteDescSet() async {
+    _remoteDescSet = true;
+    final pending = List<RTCIceCandidate>.from(_pendingRemoteCandidates);
+    _pendingRemoteCandidates.clear();
+    for (final c in pending) {
+      try {
+        await _pc!.addCandidate(c);
+      } catch (_) {}
+    }
+  }
+
+  DocumentReference<Map<String, dynamic>> get _doc =>
+      FirebaseFirestore.instance.collection('calls').doc(requestId);
+
+  String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
+
+  /// आफ्नो ICE candidate Firestore मा लेख्ने — पहिले यो सिधै (कुनै
+  /// try/catch/null-check बिना) fire-and-forget `.add()` थियो। दुई
+  /// समस्या हुन सक्थे: (१) ICE gathering सकिएको संकेत गर्ने अन्तिम
+  /// candidate प्रायः खाली/null `candidate` सहित आउँछ — लेख्नु आवश्यकै
+  /// छैन, र केही अवस्थामा त्यस्तो malformed map ले Firestore बाट
+  /// `invalid-argument` सम्म फर्काउन सक्छ। (२) `.add()` कहिल्यै awaited
+  /// नभएकोले, त्यो Future असफल भए (permission/network/invalid-argument
+  /// जे भए पनि) कसैले नसमातेको (unhandled) exception बन्थ्यो — जुन बीचैमा
+  /// चलिरहेको कल (यो सधैँ ICE negotiation भइरहेकै बेला चल्ने callback
+  /// भएकोले) अस्थिर देखिने/अचानक disconnect हुने गुनासोसँग मिल्दो हो। अब
+  /// दुवै ठाउँमा सुरक्षित।
+  void _writeLocalCandidate(
+      CollectionReference<Map<String, dynamic>> col, RTCIceCandidate c) {
+    final candidate = c.candidate;
+    if (candidate == null || candidate.isEmpty) return;
+    unawaited(_safeAddCandidate(col, candidate, c.sdpMid, c.sdpMLineIndex));
+  }
+
+  Future<void> _safeAddCandidate(
+      CollectionReference<Map<String, dynamic>> col,
+      String candidate,
+      String? sdpMid,
+      int? sdpMLineIndex) async {
+    try {
+      await col.add({
+        'candidate': candidate,
+        'sdpMid': sdpMid,
+        'sdpMLineIndex': sdpMLineIndex,
+      });
+    } catch (_) {
+      // यो candidate मात्र हराउँछ (धेरैमध्ये एक हो, ICE ले बाँकीले पनि
+      // जोड्न सक्छ) — पूरै कल यसैले तोडिनु हुँदैन।
+    }
+  }
+
+  /// Offer/answer SDP लेख्नुअघि — खाली/null भए (दुर्लभ platform/codec
+  /// edge-case) त्यही bad payload Firestore मा लेखेर अर्को पक्षलाई पनि
+  /// पर्खाइरहनुको सट्टा, यहीं प्रस्ट exception (caller ले पक्डेर "कल
+  /// सुरु गर्न सकिएन" जस्तो सन्देश देखाउँछ, बीचमै अचानक pop होइन)।
+  void _assertValidDescription(RTCSessionDescription d, String what) {
+    if (d.sdp == null || d.sdp!.isEmpty || d.type == null) {
+      throw StateError('$what generation failed — empty description');
+    }
+  }
+
+  Future<void> start() async {
+    // getUserMedia अघि नै स्पष्ट रूपमा अनुमति माग्ने — नत्र अनुमति अस्वीकृत
+    // भएमा getUserMedia चुपचाप असफल हुन्छ र UI ले remote/local video कतै
+    // नआएको कालो/खाली स्क्रिन मात्र देखाउँछ, प्रयोगकर्तालाई किन थाहै हुँदैन।
+    final mic = await Permission.microphone.request();
+    final cam =
+        video ? await Permission.camera.request() : PermissionStatus.granted;
+    if (!mic.isGranted || !cam.isGranted) {
+      throw CallPermissionDenied(video);
+    }
+
+    await localRenderer.initialize();
+    await remoteRenderer.initialize();
+    status.value = isCaller ? CallStatus.ringing : CallStatus.connecting;
+
+    // Caller मात्र — अघिल्लो कल (उही requestId) बाट बाँकी रहन सक्ने stale
+    // signaling doc/candidates नयाँ offer लेख्नुअघि हटाउने (नत्र पुराना
+    // candidate हरू नयाँ listener मा "added" भनेर फेरि आउन सक्छन्)। यो
+    // पहिले chat_screen.dart बाट CallScreen नै push गर्नुअघि await हुन्थ्यो
+    // — नेटवर्क round-trip सकिउन्जेल call बटन थिचेको केही सेकेन्ड
+    // प्रतिक्रियाविहीन देखिन्थ्यो। अहिले CallScreen पहिल्यै (instant)
+    // push भइसकेपछि, यहाँ background मै चलेको यो await ले UI लाई छुँदैन।
+    if (isCaller) {
+      await CallService.resetSignal(requestId);
+    }
+
+    // owner ले Firestore (config/webrtc) बाट कहिलेपनि नयाँ/paid TURN
+    // provider मा नयाँ app release बिनै अपग्रेड गर्न सकून् भनेर — नभए
+    // हालको (free relay) default।
+    _pc = await createPeerConnection(await WebRtcConfig.iceServersOnce());
+
+    _local = await navigator.mediaDevices.getUserMedia({
+      // AEC/NS/AGC + fixed 48kHz mono — बिना यसको आवाज तन्किएको/कम्पन
+      // भएको/echo जस्तो सुनिन्थ्यो (speaker बाट फेरि आफ्नै mic मा फर्केको
+      // आवाज echo-cancel नभई थपिँदा हुने classic distortion)।
+      //
+      // यो `optional` (array-of-single-key-map) ढाँचा नै दुवैतिर सही काम
+      // गर्ने एकमात्र formatहो — फ्ल्याट map (`{'echoCancellation': true}`)
+      // दिए Android native plugin (GetUserMediaImpl.parseMediaConstraints)
+      // ले mandatory/optional नभेटेर खाली constraints नै मान्छ (कुनै पनि
+      // audio processing लागू नहुने!), जबकि यो array ढाँचालाई भने Android
+      // ले सीधै KeyValuePair मा पार्स गर्छ र Flutter Web (dart_webrtc) ले
+      // पनि यही ढाँचालाई विशेष रूपमा चिनेर flat W3C constraints मा उल्काउँछ।
+      // स्पष्ट रूपमा `<String, dynamic>` type — यो एकमात्र key
+      // (`optional`) भएको map literal लाई type inference ले आफैं
+      // `Map<String, List<Map<String, dynamic>>>` (साँघुरो, यही एउटा
+      // key कै value-type अनुसार) मान्थ्यो, `Map<String, dynamic>`
+      // होइन। Android मा त्यसले कहिल्यै असर गर्दैन (त्यो पूरै अलग,
+      // platform-channel बाटो प्रयोग गर्छ), तर Flutter Web
+      // (dart_webrtc) कै flattening logic ले पछि यही map माथि
+      // `.addAll(audioMap)` (bool/double मान भएको फरक-type map)
+      // गर्दा त्यही साँघुरो runtime-type सँग नमिली silently असफल
+      // हुन्थ्यो (आफ्नै try/catch ले निल्थ्यो, print मात्र) — अनि
+      // `optional` array कहिल्यै flatten नभई browser कै साँचो
+      // getUserMedia call मा त्यही अनमान्य ढाँचामै पुग्थ्यो, जुन
+      // "web मा कल accept गर्दा getUserMedia असफल" गुनासोको साँचो
+      // जड थियो।
+      'audio': <String, dynamic>{
+        'optional': <Map<String, dynamic>>[
+          {'echoCancellation': true},
+          {'noiseSuppression': true},
+          {'autoGainControl': true},
+          {'googEchoCancellation': true},
+          {'googEchoCancellation2': true},
+          {'googAutoGainControl': true},
+          {'googAutoGainControl2': true},
+          {'googNoiseSuppression': true},
+          {'googNoiseSuppression2': true},
+          {'googHighpassFilter': true},
+          {'googTypingNoiseDetection': true},
+          {'googAudioMirroring': false},
+          // Android native plugin (ConstraintsMap.getDouble) crashes with a
+          // ClassCastException if a numeric constraint value serializes as
+          // a Java Integer instead of Double — त्यसैले int होइन, double नै
+          // (48000 होइन 48000.0) दिनुपर्छ।
+          {'sampleRate': 48000.0},
+          {'channelCount': 1.0},
+        ],
+      },
+      // Frame-rate cap + CPU-overuse detection — low/mid-range Android चिप
+      // (जस्तै यो प्रोजेक्टको test device, MediaTek Helio G35) ले 640x480 लाई
+      // पूरा 30fps मा software-encode गर्दा CPU/heat थेग्न नसकेर frame drop/
+      // stutter ("lag") हुन्थ्यो। माथिको audio सँग मिल्दो `optional`
+      // array-of-single-key-map ढाँचा भने Android-मात्र सुरक्षित हो — यो
+      // छुट्टै (`video`) क्षेत्रलाई dart_webrtc को Flutter Web layer
+      // (mediadevices_impl.dart) ले audio जस्तै flatten गर्दैन, त्यसैले
+      // browser (Chrome/`flutter run -d chrome`) मा यो `optional` array
+      // ज्यूँकात्यूँ, unrecognized/मान्य-नभएको shape मै पुग्थ्यो —
+      // ठ्याक्कै त्यही थियो "getUserMedia मा malformed constraints" गुनासोको
+      // साँचो जड। यहाँ platform अनुसार छुट्टाछुट्टै: Android/iOS मा अघिकै
+      // (प्रमाणित काम गर्ने) `optional` shorthand, Web मा भने प्रत्यक्ष
+      // W3C `MediaTrackConstraints` (bare `frameRate` field, कुनै
+      // optional/mandatory wrapper छैन)।
+      'video': !video
+          ? false
+          : kIsWeb
+              ? {
+                  'facingMode': 'user',
+                  'width': {'ideal': 640},
+                  'height': {'ideal': 480},
+                  'frameRate': {'ideal': 24, 'max': 24},
+                }
+              : {
+                  'facingMode': 'user',
+                  'width': 640,
+                  'height': 480,
+                  'optional': <Map<String, dynamic>>[
+                    {'minFrameRate': 15.0},
+                    {'maxFrameRate': 24.0},
+                    {'googCpuOveruseDetection': true},
+                  ],
+                },
+    });
+    // `renderer.srcObject = stream` (synchronous setter) ले native side
+    // confirm गर्नुअघि नै फर्किन्छ — त्यही race ले कहिलेकाहीं local/remote
+    // preview कालो/खाली नै रहिरहने बग दिन्थ्यो। `setSrcObject()` (awaited)
+    // ले टेक्स्चर साँच्चै bind नभएसम्म पर्खन्छ। trackId पनि स्पष्ट पठाउनुपर्छ
+    // — Flutter Web को renderer implementation ले trackId नदिए (null) कहिल्यै
+    // कुनै video track नमिलाई खाली/कालो स्क्रिन दिन्छ (audio भने trackId
+    // फिल्टर बिनै सबै track थप्ने भएकोले चलिरहन्थ्यो — mobile↔web कलमा "audio
+    // चल्छ तर video कालो" बग ठ्याक्कै यही थियो)।
+    await localRenderer.setSrcObject(
+      stream: _local,
+      trackId: _firstTrackId(_local?.getVideoTracks()),
+    );
+    for (final track in _local!.getTracks()) {
+      final sender = await _pc!.addTrack(track, _local!);
+      // Video track मात्र — bitrate cap + "maintain-framerate" degradation।
+      // WebRTC को default (balanced/maintain-resolution) ले नेटवर्क/CPU
+      // दबाबमा resolution नै जोगाउन खोज्दा frame नै छाड्छ (देखिने
+      // "stutter"/lag)। यहाँ स्पष्ट रूपमा frame-rate जोगाउने (आवश्यक परे
+      // resolution स्वतः घट्ने) प्राथमिकता दिँदा Messenger/WhatsApp जस्तै
+      // सहज (कम रिजोल्युसन भए पनि नरुकिने) देखिन्छ। साथै अनलिमिटेड bandwidth
+      // estimation (विशेष गरी free TURN relay बाट जाँदा) ले congestion/jitter
+      // ल्याउनबाट जोगाउन एउटा उचित maximum bitrate पनि तोकिएको।
+      if (video && track.kind == 'video') {
+        try {
+          final params = sender.parameters;
+          final encodings = params.encodings;
+          if (encodings != null && encodings.isNotEmpty) {
+            for (final e in encodings) {
+              e.maxBitrate = 500000; // ~500kbps — 640x480 का लागि पर्याप्त
+              e.maxFramerate = 24;
+            }
+          } else {
+            params.encodings = [
+              RTCRtpEncoding(
+                  active: true, maxBitrate: 500000, maxFramerate: 24),
+            ];
+          }
+          params.degradationPreference =
+              RTCDegradationPreference.MAINTAIN_FRAMERATE;
+          await sender.setParameters(params);
+        } catch (_) {
+          // Best-effort tuning मात्र — असफल भए पनि कल सामान्य गुणस्तरमा चल्छ।
+        }
+      }
+    }
+
+    // कल-प्रकार अनुसार सुरुवाती audio routing — video कलमा speaker (screen
+    // हेर्दै कान नजिक लैजानु अस्वाभाविक), voice कलमा earpiece। कहिलेकाहीं
+    // device/OEM defaults नमिल्न सक्ने भएकोले स्पष्ट रूपमा सेट गर्ने।
+    speakerOn.value = video;
+    try {
+      await Helper.setSpeakerphoneOn(video);
+    } catch (_) {}
+
+    _pc!.onTrack = (RTCTrackEvent e) async {
+      if (e.streams.isNotEmpty) {
+        final stream = e.streams.first;
+        await remoteRenderer.setSrcObject(
+          stream: stream,
+          trackId: _firstTrackId(stream.getVideoTracks()),
+        );
+        remoteJoined.value = true;
+        status.value = CallStatus.connected;
+      }
+    };
+    // `disconnected` (कुनै transport ले क्षणिक रूपमा नेटवर्क गुमाउँदा, खास
+    // गरी यहाँ प्रयोग हुने free TURN relay बाट जाँदा सामान्य) प्रायः केही
+    // सेकेन्डमै आफैं फेरि `connected` मा फर्किन्छ — तर पहिले यहाँ यसलाई
+    // सिधै `failed`/`closed` सरह तुरुन्तै हang-up ट्रिगर मानिन्थ्यो, जसले
+    // गर्दा सामान्य ICE churn मै कल अचानक बीचैमा काटिएर अघिल्लो screen मा
+    // "pop back" हुन्थ्यो (ठ्याक्कै "video call... abruptly pops/backs
+    // out" गुनासोको साँचो जड)। अब `disconnected` मा तुरुन्तै नकाटी केही
+    // सेकेन्ड (grace period) पर्खने — त्यतिञ्जेलमा फेरि `connected` भए टाइमर
+    // रद्द, अझै `disconnected`/`failed`/`closed` नै रहे मात्र साँच्चै काट्ने।
+    _pc!.onConnectionState = (s) {
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        _disconnectGraceTimer?.cancel();
+        _disconnectGraceTimer = null;
+        return;
+      }
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
+          s == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+        _disconnectGraceTimer?.cancel();
+        if (!_closed) hangUp(remote: false);
+        return;
+      }
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+        _disconnectGraceTimer?.cancel();
+        _disconnectGraceTimer = Timer(const Duration(seconds: 8), () {
+          if (!_closed) hangUp(remote: false);
+        });
+      }
+    };
+
+    if (isCaller) {
+      await _createOffer();
+    } else {
+      await _answerOffer();
+    }
+
+    // दुवै पक्षले कल end भयो कि सुन्ने
+    _subs.add(_doc.snapshots().listen((snap) {
+      final data = snap.data();
+      if (data == null || data['status'] == 'ended') {
+        if (!_closed) hangUp(remote: true);
+      }
+    }));
+  }
+
+  Future<void> _createOffer() async {
+    final me = _uid;
+    _pc!.onIceCandidate = (c) =>
+        _writeLocalCandidate(_doc.collection('offerCandidates'), c);
+
+    final offer = await _pc!.createOffer();
+    _assertValidDescription(offer, 'Offer');
+    await _pc!.setLocalDescription(offer);
+
+    await _doc.set({
+      'offer': {'type': offer.type, 'sdp': offer.sdp},
+      'mode': video ? 'video' : 'audio',
+      'callerUid': me,
+      'callerName': myName,
+      'status': 'ringing',
+      'createdAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    // answer आउने बित्तिकै set गर्ने
+    _subs.add(_doc.snapshots().listen((snap) async {
+      if (_remoteDescSet) return;
+      final data = snap.data();
+      final ans = data?['answer'];
+      if (ans == null) return;
+      try {
+        await _pc!.setRemoteDescription(
+            RTCSessionDescription(ans['sdp'], ans['type']));
+        status.value = CallStatus.connecting;
+        await _markRemoteDescSet();
+      } catch (_) {}
+    }));
+
+    // callee का ICE candidate सुन्ने — remote description नआएसम्म buffer मै।
+    _subs.add(_doc.collection('answerCandidates').snapshots().listen((s) {
+      for (final ch in s.docChanges) {
+        if (ch.type == DocumentChangeType.added) {
+          final m = ch.doc.data()!;
+          _addRemoteCandidate(
+              RTCIceCandidate(m['candidate'], m['sdpMid'], m['sdpMLineIndex']));
+        }
+      }
+    }));
+  }
+
+  Future<void> _answerOffer() async {
+    final me = _uid;
+    _pc!.onIceCandidate = (c) =>
+        _writeLocalCandidate(_doc.collection('answerCandidates'), c);
+
+    final snap = await _doc.get();
+    final offer = snap.data()?['offer'];
+    final offerSdp = offer?['sdp'];
+    final offerType = offer?['type'];
+    if (offer == null || offerSdp == null || offerType == null) {
+      // साथीको offer नै अझै पुगेको छैन वा malformed छ — साँचो कल कहिल्यै
+      // सुरु नहुनु राम्रो हो, malformed remote description सेट गर्न
+      // खोजेर mid-negotiation crash हुनुभन्दा।
+      await hangUp(remote: false);
+      return;
+    }
+    await _pc!.setRemoteDescription(
+        RTCSessionDescription(offerSdp, offerType));
+    // offer subcollection सुन्नुअघि नै remote description सेट भइसकेको
+    // ग्यारेन्टी गर्ने — यहाँबाट पछि आउने candidate सबै तुरुन्तै थपिन्छन्,
+    // तर subcollection ले पहिल्यै भएका पुराना doc पनि "added" भनेर फर्काउने
+    // भएकोले buffering (caller-side कै उस्तै) यहाँ पनि सुरक्षाको लागि राखिएको।
+    await _markRemoteDescSet();
+
+    final answer = await _pc!.createAnswer();
+    _assertValidDescription(answer, 'Answer');
+    await _pc!.setLocalDescription(answer);
+
+    await _doc.set({
+      'answer': {'type': answer.type, 'sdp': answer.sdp},
+      'calleeUid': me,
+      // "connected" भन्नु साँचो होइन — signaling मात्र पूरा भएको हो, ICE
+      // अझै जोडिँदै छ। साँचो जोडिएको त माथि नै `onTrack`/`onConnectionState`
+      // ले `status` (local ValueNotifier) मार्फत managed छ। Firestore कै यो
+      // doc-level status चाहिं अरूले (incoming-call watcher) "अब ringing
+      // होइन" भनेर छुट्याउन प्रयोग गर्छन् — त्यसैले 'connecting' नै सही।
+      'status': 'connecting',
+    }, SetOptions(merge: true));
+
+    // caller का ICE candidate सुन्ने
+    _subs.add(_doc.collection('offerCandidates').snapshots().listen((s) {
+      for (final ch in s.docChanges) {
+        if (ch.type == DocumentChangeType.added) {
+          final m = ch.doc.data()!;
+          _addRemoteCandidate(
+              RTCIceCandidate(m['candidate'], m['sdpMid'], m['sdpMLineIndex']));
+        }
+      }
+    }));
+  }
+
+  void toggleMic() {
+    micOn.value = !micOn.value;
+    for (final t in _local?.getAudioTracks() ?? []) {
+      t.enabled = micOn.value;
+    }
+  }
+
+  void toggleCam() {
+    camOn.value = !camOn.value;
+    for (final t in _local?.getVideoTracks() ?? []) {
+      t.enabled = camOn.value;
+    }
+  }
+
+  Future<void> switchCamera() async {
+    try {
+      final t = _local?.getVideoTracks();
+      if (t != null && t.isNotEmpty) {
+        await Helper.switchCamera(t.first);
+        isFrontCamera.value = !isFrontCamera.value;
+      }
+    } catch (_) {}
+  }
+
+  /// Speaker (loudspeaker/hands-free) ⇄ earpiece — flutter_webrtc कै native
+  /// audio-routing (कुनै अतिरिक्त package नचाहिने), त्यसैले तुरुन्तै र भरपर्दो।
+  Future<void> toggleSpeaker() async {
+    speakerOn.value = !speakerOn.value;
+    try {
+      await Helper.setSpeakerphoneOn(speakerOn.value);
+    } catch (_) {}
+  }
+
+  /// कल समाप्त। [remote] = अर्को पक्षले काटेको (त्यसो भए हामी signal नलेख्ने)।
+  Future<void> hangUp({bool remote = false}) async {
+    if (_closed) return;
+    _closed = true;
+    status.value = CallStatus.ended;
+
+    _disconnectGraceTimer?.cancel();
+    for (final s in _subs) {
+      await s.cancel();
+    }
+    try {
+      for (final t in _local?.getTracks() ?? []) {
+        await t.stop();
+      }
+      await _local?.dispose();
+      await _pc?.close();
+    } catch (_) {}
+
+    if (!remote) {
+      // यो पूरै UI pop भइसकेपछि (background मा, CallScreen.dispose() बाट
+      // fire-and-forget) चल्छ — त्यसैले ढिलो भए पनि केही touch नगर्ने। तैपनि
+      // छिटो र हल्का राख्न सबै candidate delete एउटै batched write मा
+      // (parallel read + एक commit), पहिले जस्तो हरेक doc लाई छुट्टाछुट्टै
+      // await गर्दै (candidate जति धेरै, त्यति धेरै sequential round-trip —
+      // ठ्याक्कै यही थियो "hang-up पछि केही सेकेन्ड
+      // अड्किने"/ढिलो हुनुको साँचो जड)।
+      try {
+        final results = await Future.wait([
+          _doc.collection('offerCandidates').get(),
+          _doc.collection('answerCandidates').get(),
+        ]);
+        final batch = FirebaseFirestore.instance.batch();
+        batch.set(
+            _doc,
+            {'status': 'ended', 'endedAt': FieldValue.serverTimestamp()},
+            SetOptions(merge: true));
+        for (final q in results) {
+          for (final d in q.docs) {
+            batch.delete(d.reference);
+          }
+        }
+        await batch.commit();
+      } catch (_) {}
+    }
+
+    try {
+      await localRenderer.dispose();
+      await remoteRenderer.dispose();
+    } catch (_) {}
+  }
+}
+
+/// Chat header बाट कल सुरु गर्दा signal doc reset गर्ने helper।
+class CallService {
+  CallService._();
+
+  static Future<void> resetSignal(String requestId) async {
+    final doc = FirebaseFirestore.instance.collection('calls').doc(requestId);
+    try {
+      // दुई subcollection parallel मा पढ्ने, अनि सबै delete एउटै batch मा
+      // commit गर्ने — candidate जति भए पनि नेटवर्क round-trip एउटै (धेरै
+      // sequential awaited delete भन्दा धेरै छिटो)।
+      final results = await Future.wait([
+        doc.collection('offerCandidates').get(),
+        doc.collection('answerCandidates').get(),
+      ]);
+      final batch = FirebaseFirestore.instance.batch();
+      for (final q in results) {
+        for (final d in q.docs) {
+          batch.delete(d.reference);
+        }
+      }
+      batch.delete(doc);
+      await batch.commit();
+    } catch (_) {}
+  }
+
+  /// यो request मा अहिले ringing/connected कल छ? (callee लाई देखाउन)
+  static Stream<Map<String, dynamic>?> watch(String requestId) =>
+      FirebaseFirestore.instance
+          .collection('calls')
+          .doc(requestId)
+          .snapshots()
+          .map((s) => s.data());
+}

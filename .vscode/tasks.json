@@ -1,0 +1,76 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "releaseNotes",
+      "type": "promptString",
+      "description": "Release notes to show in the update dialog (optional)",
+      "default": ""
+    },
+    {
+      "id": "bumpType",
+      "type": "pickString",
+      "description": "Version bump",
+      "options": ["none", "patch", "minor", "major"],
+      "default": "none"
+    },
+    {
+      "id": "forceUpdate",
+      "type": "pickString",
+      "description": "Force update (hide the \"Later\" button)?",
+      "options": ["false", "true"],
+      "default": "false"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "Release: Publish App Update",
+      "detail": "Bump versionCode, build the release APK, upload to Firebase Storage, publish config/appUpdate.",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "release.js",
+        "--notes=${input:releaseNotes}",
+        "--bump=${input:bumpType}",
+        "--force=${input:forceUpdate}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/scripts/release"
+      },
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Release: Dry Run (preview version bump only)",
+      "detail": "Bumps pubspec.yaml and prints what would happen, without building/uploading/publishing.",
+      "type": "shell",
+      "command": "node",
+      "args": ["release.js", "--dry-run", "--bump=${input:bumpType}"],
+      "options": {
+        "cwd": "${workspaceFolder}/scripts/release"
+      },
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Release: Install script dependencies",
+      "detail": "Run once (and again after updating release.js's dependencies).",
+      "type": "shell",
+      "command": "npm",
+      "args": ["install"],
+      "options": {
+        "cwd": "${workspaceFolder}/scripts/release"
+      },
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}
