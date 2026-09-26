@@ -76,7 +76,10 @@ class _HomeScreenState extends State<HomeScreen>
   double _meLng = fallbackLng;
   bool _locReady = false;
   bool _locating = false;
-  String _pickedCategory = ''; // '' = सबै; नत्र नक्सामा त्यही सेवा मात्र फिल्टर
+  // category chip थिच्दा अब सिधै `NearbyScreen` खुल्ने भएकोले (माथि
+  // `_openCategory` हेर्नुहोस्) यो home screen कै आफ्नै नक्सा-फिल्टर अब
+  // कहिल्यै बदलिँदैन — सधैँ 'सबै' (unfiltered) नै रहन्छ।
+  final String _pickedCategory = '';
 
   // क्याटेगोरी → custom marker bitmap (initState मा एकपटक बन्छ)।
   final Map<String, BitmapDescriptor> _catMarkers = {};
@@ -399,11 +402,14 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// क्याटेगोरी चिपमा थिच्दा नक्साका marker त्यही सेवामा फिल्टर हुन्छन्; फेरि उही
-  /// थिच्दा फिल्टर हट्छ। 'Driver' चिपले भने कहिल्यै यो inline filter/bid प्रयोग
-  /// गर्दैन — ride-hailing (Bike/Car) को booking+bidding UI सधैँ छुट्टै
-  /// समर्पित screen (`_openService` कै जस्तो, ServiceMapScreen) मार्फत मात्र
-  /// खुल्नुपर्छ, सामान्य home screen को आफ्नै map मा कहिल्यै नआओस् भनेर।
+  /// क्याटेगोरी चिपमा थिच्दा — पूरा (rating/price/review सहित) provider
+  /// directory (`NearbyScreen`, त्यही सेवामा पहिल्यै फिल्टर भएर) सिधै
+  /// खुल्छ। पहिले यहाँ home screen कै आफ्नै सानो नक्सामा inline marker-फिल्टर
+  /// मात्र हुन्थ्यो — 'Driver' चिपले भने कहिल्यै यो प्रयोग गर्दैन —
+  /// ride-hailing (Bike/Car) को booking+bidding UI सधैँ छुट्टै समर्पित
+  /// screen (`_openService` कै जस्तो, ServiceMapScreen) मार्फत मात्र
+  /// खुल्नुपर्छ, सामान्य home screen को आफ्नै map/directory मा कहिल्यै
+  /// नआओस् भनेर।
   void _openCategory(String name) async {
     if (name == 'Driver') {
       _openService(name);
@@ -411,11 +417,12 @@ class _HomeScreenState extends State<HomeScreen>
     }
     final resolved = await _resolveServiceName(name);
     if (resolved == null || !mounted) return;
-    setState(() {
-      _pickedCategory = _pickedCategory == resolved ? '' : resolved;
-      _selectedWorkerId = null;
-      _selectedWorker = null;
-    });
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NearbyScreen(initialFilter: resolved),
+      ),
+    );
   }
 
   void _selectWorker(

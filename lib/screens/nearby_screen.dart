@@ -14,7 +14,11 @@ import '../widgets/worker_avatar.dart';
 import 'nearby_common.dart';
 
 class NearbyScreen extends StatefulWidget {
-  const NearbyScreen({super.key});
+  // होम स्क्रिनको कुनै एक category chip (जस्तै Plumber) थिचेर सिधै यहाँ
+  // आउँदा सुरुमै त्यही सेवामा फिल्टर भएर देखियोस् भनेर — नदिए (null) सधैँ
+  // जस्तै 'सबै' बाट सुरु हुन्छ (side-menu "Providers" कै उस्तै)।
+  final String? initialFilter;
+  const NearbyScreen({super.key, this.initialFilter});
 
   @override
   State<NearbyScreen> createState() => _NearbyScreenState();
@@ -25,7 +29,7 @@ class _NearbyScreenState extends State<NearbyScreen> {
   double _lng = fallbackLng;
   bool _loadingLoc = true;
   bool _approx = false;
-  String _filter = 'all';
+  late String _filter = widget.initialFilter ?? 'all';
   StreamSubscription<Position>? _posSub;
 
   @override
