@@ -200,13 +200,17 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _startCall({required bool video}) async {
     if (_inCall) return;
     unawaited(_notifyOtherPartyOfCall(video));
-    await _openCall(video: video, isCaller: true);
+    final durationSeconds = await _openCall(video: video, isCaller: true);
     _stampLast(video ? '📹 ${S.videoCall}' : '📞 ${S.voiceCall}');
     _messages.add({
       'senderUid': FirebaseAuth.instance.currentUser?.uid ?? '',
       'type': 'call',
       'mode': video ? 'video' : 'audio',
       'createdAt': FieldValue.serverTimestamp(),
+      // साँच्चै जोडिएकोमा मात्र > 0 (CallScreen/CallSession हेर्नुहोस्) —
+      // नउठाइएको/decline भएको कलमा 0, chat bubble ले त्यसबेला अवधि नै
+      // नदेखाउने।
+      'durationSeconds': durationSeconds,
     });
   }
 
@@ -237,9 +241,12 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _openCall({required bool video, required bool isCaller}) async {
+  /// Call ended भएपछि साँचो अवधि (सेकेन्डमा, `CallScreen`/`CallSession` कै
+  /// live timer मै track भएको) फर्काउँछ — कल message doc मा `durationSeconds`
+  /// राख्न। कहिल्यै नजोडिएको (screen dismiss/error) भए 0।
+  Future<int> _openCall({required bool video, required bool isCaller}) async {
     _inCall = true;
-    await Navigator.push(
+    final durationSeconds = await Navigator.push<int>(
       context,
       MaterialPageRoute(
         fullscreenDialog: true,
@@ -254,6 +261,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
     _inCall = false;
+    return durationSeconds ?? 0;
   }
 
   @override
@@ -545,7 +553,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Voice-note recorder bar (widgets/voice_recorder_bar.dart) ले नै रेकर्ड
   /// + waveform + preview सबै सम्हाल्छ — यहाँ त प्रयोगकर्ताले Send थिचेपछि
   /// आएको bytes मात्र साँच्चै Firestore मा लेख्ने।
-  Future<void> _sendVoiceBytes(Uint8List bytes, String ext) async {
+  Future<void> _sendVoiceBytes(
+      Uint8List bytes, String ext, int durationSeconds) async {
     if (!mounted) return; // _sendImage कै उस्तै — माथिको टिप्पणी हेर्नुहोस्।
     setState(() {
       _recordingVoice = false;
@@ -565,6 +574,7 @@ class _ChatScreenState extends State<ChatScreen> {
         type: 'audio',
         url: url,
         preview: '$preview${S.voiceMessage}',
+        extraFields: {'durationSeconds': durationSeconds},
       );
     } catch (e) {
       unawaited(PendingMediaQueue.enqueue(
@@ -574,10 +584,11 @@ class _ChatScreenState extends State<ChatScreen> {
         bytes: bytes,
         ext: ext,
         previewText: '$preview${S.voiceMessage}',
+        durationSeconds: durationSeconds,
       ));
       _snack(ChatMediaService.friendlyUploadError(e),
           onRetry: kIsWeb
-              ? () => _sendVoiceBytes(bytes, ext)
+              ? () => _sendVoiceBytes(bytes, ext, durationSeconds)
               : PendingMediaQueue.drainNow);
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
@@ -875,6 +886,10 @@ class _ChatScreenState extends State<ChatScreen> {
     if (type == 'call') {
       final video = (data['mode'] ?? 'audio').toString() == 'video';
       final fg = isMe ? AppColors.kmInk : AppColors.kmText;
+      // कल साँच्चै जोडिएकोमा मात्र (`CallSession` ले जोडिएपछि मात्र नाप्ने
+      // भएकोले) — नत्र नउठाइएको/decline भएको कलमा पनि "0:00" जस्तो अर्थहीन
+      // संख्या देखिन्थ्यो।
+      final durationSeconds = (data['durationSeconds'] as num?)?.toInt() ?? 0;
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -883,6 +898,14 @@ class _ChatScreenState extends State<ChatScreen> {
           const SizedBox(width: 6),
           Text(video ? S.videoCall : S.voiceCall,
               style: TextStyle(fontSize: 13, color: fg)),
+          if (durationSeconds > 0) ...[
+            Text(' · ', style: TextStyle(fontSize: 13, color: fg)),
+            Text(formatDuration(durationSeconds),
+                style: TextStyle(
+                    fontSize: 13,
+                    color: fg,
+                    fontFeatures: const [FontFeature.tabularFigures()])),
+          ],
         ],
       );
     }
@@ -931,13 +954,17 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
     if (type == 'audio') {
+      final durationSeconds = (data['durationSeconds'] as num?)?.toInt() ?? 0;
       final url = (data['audioUrl'] ?? '').toString();
       if (url.isNotEmpty) {
-        return _VoiceBubble(audioUrl: url, isMe: isMe);
+        return _VoiceBubble(
+            audioUrl: url, isMe: isMe, durationSeconds: durationSeconds);
       }
       if (data['audioBase64'] != null) {
         return _VoiceBubble(
-            audioBytes: base64Decode(data['audioBase64']), isMe: isMe);
+            audioBytes: base64Decode(data['audioBase64']),
+            isMe: isMe,
+            durationSeconds: durationSeconds);
       }
     }
     return Text(
@@ -1352,8 +1379,19 @@ class _VoiceBubble extends StatefulWidget {
   /// पुरानो base64 message (backward-compat fallback) का लागि मात्र।
   final Uint8List? audioBytes;
   final bool isMe;
-  const _VoiceBubble({this.audioUrl, this.audioBytes, required this.isMe})
-      : assert(audioUrl != null || audioBytes != null);
+
+  /// रेकर्डिङ बेलै नाप्ता (सेकेन्डमा) — यही message देखिनेबित्तिकै तुरुन्तै
+  /// देखाउन (audio फाइल load हुनुपर्दैन, playback सुरु नभई पनि देखिन्छ)।
+  /// पुरानो (यो field आउनुअघिको) सन्देशमा 0 — त्यसबेला साधारण "Voice
+  /// message" लेबल नै देखिन्छ।
+  final int durationSeconds;
+
+  const _VoiceBubble({
+    this.audioUrl,
+    this.audioBytes,
+    required this.isMe,
+    this.durationSeconds = 0,
+  }) : assert(audioUrl != null || audioBytes != null);
 
   @override
   State<_VoiceBubble> createState() => _VoiceBubbleState();
@@ -1408,7 +1446,17 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
         const SizedBox(width: 8),
         Icon(Icons.graphic_eq_rounded, color: fg.withValues(alpha: 0.8)),
         const SizedBox(width: 6),
-        Text(S.voiceMessage, style: TextStyle(fontSize: 12.5, color: fg)),
+        Text(
+          widget.durationSeconds > 0
+              ? formatDuration(widget.durationSeconds)
+              : S.voiceMessage,
+          style: TextStyle(
+              fontSize: 12.5,
+              color: fg,
+              fontFeatures: widget.durationSeconds > 0
+                  ? const [FontFeature.tabularFigures()]
+                  : null),
+        ),
       ],
     );
   }

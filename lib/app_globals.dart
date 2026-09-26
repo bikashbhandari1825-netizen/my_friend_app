@@ -35,6 +35,18 @@ ValueNotifier<bool> notificationsEnabled = ValueNotifier(true);
 // यो ब्यानरले केवल त्यो अवस्था प्रस्ट पार्छ।
 ValueNotifier<bool> isOffline = ValueNotifier(false);
 
+/// कल/भ्वाइस-नोट दुवैको लम्बाइ देखाउन साझा — m:ss (घण्टौं लामो कल भए
+/// h:mm:ss)। `call_screen.dart` (live timer) र `chat_screen.dart` (call/
+/// voice bubble) दुवैले उही ढाँचा प्रयोग गरून् भनेर एउटै ठाउँमा।
+String formatDuration(int totalSeconds) {
+  final h = totalSeconds ~/ 3600;
+  final m = (totalSeconds % 3600) ~/ 60;
+  final s = totalSeconds % 60;
+  final mm = h > 0 ? m.toString().padLeft(2, '0') : m.toString();
+  final ss = s.toString().padLeft(2, '0');
+  return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
+}
+
 // Profile Photo अस्थायी रूपमा राख्ने (Session भरि मात्र, Firebase Storage आउँदासम्म)
 Uint8List? sessionProfilePhoto;
 

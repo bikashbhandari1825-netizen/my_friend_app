@@ -137,6 +137,9 @@ class ChatMediaService {
     required String type, // 'image' | 'video' | 'audio'
     required String url,
     required String preview,
+    // भ्वाइस-नोटको लम्बाइ (सेकन्डमा) जस्ता थप field — bubble मा तुरुन्तै
+    // (कुनै audio metadata load नगरी नै, त्यसैले flicker/lag बिना) देखाउन।
+    Map<String, dynamic>? extraFields,
   }) async {
     final field = switch (type) {
       'image' => 'imageUrl',
@@ -153,6 +156,7 @@ class ChatMediaService {
         'type': type,
         field: url,
         'createdAt': FieldValue.serverTimestamp(),
+        ...?extraFields,
       }),
       debugLabel: 'message $type',
     );

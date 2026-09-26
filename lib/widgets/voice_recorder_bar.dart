@@ -50,7 +50,11 @@ class VoiceRecorderBar extends StatefulWidget {
   /// त्यसको साँचो extension (मोबाइलमा 'm4a', web मा 'webm' — दुई फरक
   /// container format हुन् भन्ने caller (chat_screen.dart) लाई थाहा हुनुपर्छ,
   /// नत्र गलत content-type/extension सहित अपलोड हुन्छ र playback असफल हुन्छ)।
-  final void Function(Uint8List bytes, String ext) onSend;
+  /// अन्तिम पेरामिटर — यहीं रेकर्डिङ बेला नै नाप्ता (सेकेन्डमा) लम्बाइ,
+  /// caller ले chat bubble मा तुरुन्तै देखाउन (पछि audio फाइल नै लोड गरेर
+  /// नाप्नु पर्दैन — त्यसले playback सुरु नहुन्जेल संख्या नै नदेखिने/flicker
+  /// हुने समस्या दिन्थ्यो)।
+  final void Function(Uint8List bytes, String ext, int durationSeconds) onSend;
 
   /// Discard/cancel भयो (recording बेला वा preview बेला) — केही पठाइँदैन।
   final VoidCallback onCancel;
@@ -197,7 +201,7 @@ class _VoiceRecorderBarState extends State<VoiceRecorderBar> {
 
   void _send() {
     if (_bytes == null || _busy) return;
-    widget.onSend(_bytes!, _voiceExt);
+    widget.onSend(_bytes!, _voiceExt, _elapsed.inSeconds);
   }
 
   @override

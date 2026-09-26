@@ -61,6 +61,14 @@ class CallSession {
   // back camera मा मिरर गरे उल्टो/गलत देखिन्छ (यो अघिल्लो एउटा वास्तविक बग थियो)।
   final isFrontCamera = ValueNotifier<bool>(true);
 
+  // कल साँच्चै जोडिएको ("connected" भएको) क्षणदेखि हरेक सेकेन्ड बढ्ने —
+  // CallScreen ले live "00:00" timer देखाउन, र hang-up पछि साँचो अवधि
+  // chat message मा (`durationSeconds`) राख्न दुवैका लागि एउटै source।
+  // कहिल्यै नजोडिएको (no-answer/decline) कलमा सधैँ शून्यमै रहन्छ।
+  final callDuration = ValueNotifier<Duration>(Duration.zero);
+  DateTime? _connectedAt;
+  Timer? _durationTimer;
+
   RTCPeerConnection? _pc;
   MediaStream? _local;
   final _subs = <StreamSubscription>[];
@@ -357,6 +365,7 @@ class CallSession {
         if (_closed) return;
         remoteJoined.value = true;
         status.value = CallStatus.connected;
+        _startDurationTimer();
       } catch (_) {}
     };
     // `disconnected` (कुनै transport ले क्षणिक रूपमा नेटवर्क गुमाउँदा, खास
@@ -556,10 +565,31 @@ class CallSession {
     } catch (_) {}
   }
 
+  /// पहिलोपटक साँच्चै जोडिएको बेला मात्र (audio/video दुवैको आफ्नै छुट्टै
+  /// `onTrack` फायर हुन सक्ने भएकोले — video कलमा यो दुइपटकसम्म बोलिन
+  /// सक्छ) — `_connectedAt` पहिल्यै सेट भइसकेको भए दोहोर्‍याएर फेरि
+  /// timer/base समय नबिगार्ने।
+  void _startDurationTimer() {
+    if (_connectedAt != null) return;
+    _connectedAt = DateTime.now();
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_closed || _connectedAt == null) return;
+      callDuration.value = DateTime.now().difference(_connectedAt!);
+    });
+  }
+
   /// कल समाप्त। [remote] = अर्को पक्षले काटेको (त्यसो भए हामी signal नलेख्ने)।
   Future<void> hangUp({bool remote = false}) async {
     if (_closed) return;
     _closed = true;
+    _durationTimer?.cancel();
+    // `status.value = ended` (तल) ले CallScreen को listener तुरुन्तै
+    // (synchronous) फायर गर्छ र त्यहीबेला यो अन्तिम अवधि पढेर pop हुन्छ —
+    // त्यसैले last periodic tick भन्दा (बढीमा १ सेकेन्ड पुरानो हुन सक्ने)
+    // ताजा मान त्यो status बदलिनुअघि नै सेट गर्नुपर्छ।
+    if (_connectedAt != null) {
+      callDuration.value = DateTime.now().difference(_connectedAt!);
+    }
     status.value = CallStatus.ended;
 
     _disconnectGraceTimer?.cancel();

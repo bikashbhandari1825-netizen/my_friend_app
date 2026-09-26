@@ -30,6 +30,9 @@ class _QueuedMedia {
   final String type; // image | video | audio
   final String ext;
   final String previewText;
+  // भ्वाइस-नोट (type == 'audio') को रेकर्ड-बेलै नाप्ता लम्बाइ — bubble मा
+  // तुरुन्तै देखाउन; अरू type मा 0।
+  final int durationSeconds;
   int attempts;
 
   _QueuedMedia({
@@ -39,6 +42,7 @@ class _QueuedMedia {
     required this.type,
     required this.ext,
     required this.previewText,
+    this.durationSeconds = 0,
     this.attempts = 0,
   });
 
@@ -49,6 +53,7 @@ class _QueuedMedia {
         'type': type,
         'ext': ext,
         'previewText': previewText,
+        'durationSeconds': durationSeconds,
         'attempts': attempts,
       };
 
@@ -59,6 +64,7 @@ class _QueuedMedia {
         type: j['type'] as String,
         ext: (j['ext'] ?? '') as String,
         previewText: (j['previewText'] ?? '') as String,
+        durationSeconds: (j['durationSeconds'] ?? 0) as int,
         attempts: (j['attempts'] ?? 0) as int,
       );
 }
@@ -140,6 +146,7 @@ class PendingMediaQueue {
     required Uint8List bytes,
     String ext = '',
     required String previewText,
+    int durationSeconds = 0,
   }) async {
     if (!_supported) return;
     final id = DateTime.now().microsecondsSinceEpoch.toString();
@@ -152,6 +159,7 @@ class PendingMediaQueue {
         type: type,
         ext: ext,
         previewText: previewText,
+        durationSeconds: durationSeconds,
       );
       await (await _metaFile(id)).writeAsString(jsonEncode(item.toJson()));
       _items.add(item);
@@ -189,6 +197,9 @@ class PendingMediaQueue {
             type: item.type,
             url: url,
             preview: item.previewText,
+            extraFields: item.type == 'audio'
+                ? {'durationSeconds': item.durationSeconds}
+                : null,
           );
           await _remove(item);
         } catch (e) {

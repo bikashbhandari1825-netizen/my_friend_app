@@ -171,7 +171,7 @@ class _CallScreenState extends State<CallScreen>
     }
     if (st == CallStatus.ended && !_closing) {
       _closing = true;
-      if (mounted) Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop(_s.callDuration.value.inSeconds);
     }
   }
 
@@ -200,7 +200,10 @@ class _CallScreenState extends State<CallScreen>
     _closing = true;
     RingtoneService.stop();
     unawaited(_s.hangUp());
-    Navigator.of(context).pop();
+    // `hangUp()` ले (माथिकै फाइल हेर्नुहोस्) `callDuration` लाई कुनै पनि
+    // `await` भन्दा अघि नै अन्तिम/ताजा मानमा सेट गर्छ, त्यसैले
+    // `unawaited(...)` भइकन पनि यहाँ synchronously त्यही ताजा मान पाइन्छ।
+    Navigator.of(context).pop(_s.callDuration.value.inSeconds);
   }
 
   @override
@@ -293,19 +296,42 @@ class _CallScreenState extends State<CallScreen>
                         const SizedBox(height: 4),
                         ValueListenableBuilder<CallStatus>(
                           valueListenable: _s.status,
-                          builder: (_, st, __) => Text(
-                            _error != null
-                                ? '${S.errorWord}: $_error'
-                                : switch (st) {
-                                    CallStatus.ringing => S.callingWord,
-                                    CallStatus.connecting => S.callConnecting,
-                                    CallStatus.connected => S.onlineNow,
-                                    CallStatus.ended => S.callEnded,
-                                    _ => '',
-                                  },
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 13),
-                          ),
+                          builder: (_, st, __) {
+                            if (_error != null) {
+                              return Text('${S.errorWord}: $_error',
+                                  style: const TextStyle(
+                                      color: Colors.white70, fontSize: 13));
+                            }
+                            // जोडिएपछि — static "Online now" को सट्टा live
+                            // "00:00" timer, हरेक सेकेन्ड बढ्दै। यो भित्री
+                            // ValueListenableBuilder ले मात्र (न कि पूरै
+                            // status/name/avatar tree ले) हरेक सेकेन्ड
+                            // rebuild हुने भएकोले कुनै flicker/lag छैन।
+                            if (st == CallStatus.connected) {
+                              return ValueListenableBuilder<Duration>(
+                                valueListenable: _s.callDuration,
+                                builder: (_, d, __) => Text(
+                                  formatDuration(d.inSeconds),
+                                  style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 13,
+                                      fontFeatures: [
+                                        FontFeature.tabularFigures()
+                                      ]),
+                                ),
+                              );
+                            }
+                            return Text(
+                              switch (st) {
+                                CallStatus.ringing => S.callingWord,
+                                CallStatus.connecting => S.callConnecting,
+                                CallStatus.ended => S.callEnded,
+                                _ => '',
+                              },
+                              style: const TextStyle(
+                                  color: Colors.white70, fontSize: 13),
+                            );
+                          },
                         ),
                         if (widget.otherUid.isNotEmpty) ...[
                           const SizedBox(height: 6),
