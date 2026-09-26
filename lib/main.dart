@@ -1,6 +1,8 @@
 // main.dart
 // एपको entry point मात्र। असली widget हरू आ-आफ्नै फाइलमा सारिएका छन् र तल
 // `export` गरिएका छन्, ताकि `import 'main.dart';` गर्ने पुराना फाइलहरू नबिग्रियोस्।
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -15,6 +17,7 @@ import 'prefs.dart';
 import 'services/app_update_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/device_integrity_service.dart';
+import 'services/pending_media_queue.dart';
 import 'services/push_notification_service.dart';
 
 // साझा State/Helper र सबै स्क्रिन — पुराना relative import सँग compatibility को लागि
@@ -123,6 +126,9 @@ void main() async {
 
   await Prefs.load(); // save गरेको theme/भाषा/notification setting फेरि लोड
   ConnectivityService.start();
+  // पहिलेको session (app बन्द/क्र्यास) मा पठाउन नसकिएको फोटो/भिडियो/
+  // भ्वाइस भए — तिनलाई background मै फेरि पठाउने प्रयास सुरु गर्ने।
+  unawaited(PendingMediaQueue.init());
   runApp(const KaamMitraApp());
 
   // App startup मा एकपटक — auto-update जाँच्ने। Login भए/नभए दुवै अवस्थामा

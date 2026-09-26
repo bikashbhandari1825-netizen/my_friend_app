@@ -21,6 +21,7 @@ import 'package:image_picker/image_picker.dart';
 import '../app_globals.dart';
 import '../l10n/strings.dart';
 import '../services/chat_media_service.dart';
+import '../services/pending_media_queue.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_ui.dart';
 import '../widgets/online_badge.dart';
@@ -321,25 +322,37 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _sendImage(Uint8List bytes) async {
     setState(() => _sendingMedia = true);
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    const preview = '📷 ';
     try {
       final url = await ChatMediaService.uploadChatImage(
         requestId: widget.requestId,
         bytes: bytes,
       );
-      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      await ChatMediaService.withRetry(
-        () => _messages.add({
-          'senderUid': uid,
-          'type': 'image',
-          'imageUrl': url,
-          'createdAt': FieldValue.serverTimestamp(),
-        }),
-        debugLabel: 'message image',
+      await ChatMediaService.sendMediaMessage(
+        requestId: widget.requestId,
+        senderUid: uid,
+        type: 'image',
+        url: url,
+        preview: '$preview${S.photo}',
       );
-      _stampLast('📷 ${S.photo}');
     } catch (e) {
+      // `withRetry` भित्रकै तत्काल प्रयास पनि सकिएपछि — mobile/desktop मा
+      // यहीँबाट (chat बन्द भए/app नै बन्द भए पनि) background मा आफैं फेरि
+      // प्रयास जारी रहने गरी थन्क्याउने; Web मा queue समर्थित नभएकोले
+      // (`PendingMediaQueue.enqueue` त्यहाँ no-op) SnackBar कै "फेरि
+      // प्रयास" ले सिधै फेरि पठाउँछ।
+      unawaited(PendingMediaQueue.enqueue(
+        requestId: widget.requestId,
+        senderUid: uid,
+        type: 'image',
+        bytes: bytes,
+        previewText: '$preview${S.photo}',
+      ));
       _snack(ChatMediaService.friendlyUploadError(e),
-          onRetry: () => _sendImage(bytes));
+          onRetry: kIsWeb
+              ? () => _sendImage(bytes)
+              : PendingMediaQueue.drainNow);
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }
@@ -350,28 +363,36 @@ class _ChatScreenState extends State<ChatScreen> {
   /// थिचेपछि मात्र साँच्चै अपलोड।
   Future<void> _sendVideo(Uint8List bytes, String ext) async {
     setState(() => _sendingMedia = true);
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    const preview = '🎥 ';
     try {
       final url = await ChatMediaService.uploadChatVideo(
         requestId: widget.requestId,
         bytes: bytes,
         ext: ext,
       );
-      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      await ChatMediaService.withRetry(
-        () => _messages.add({
-          'senderUid': uid,
-          'type': 'video',
-          'videoUrl': url,
-          'createdAt': FieldValue.serverTimestamp(),
-        }),
-        debugLabel: 'message video',
+      await ChatMediaService.sendMediaMessage(
+        requestId: widget.requestId,
+        senderUid: uid,
+        type: 'video',
+        url: url,
+        preview: '$preview${S.video}',
       );
-      _stampLast('🎥 ${S.video}');
     } on VideoTooLargeException {
       _snack(S.videoTooLarge);
     } catch (e) {
+      unawaited(PendingMediaQueue.enqueue(
+        requestId: widget.requestId,
+        senderUid: uid,
+        type: 'video',
+        bytes: bytes,
+        ext: ext,
+        previewText: '$preview${S.video}',
+      ));
       _snack(ChatMediaService.friendlyUploadError(e),
-          onRetry: () => _sendVideo(bytes, ext));
+          onRetry: kIsWeb
+              ? () => _sendVideo(bytes, ext)
+              : PendingMediaQueue.drainNow);
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }
@@ -522,26 +543,34 @@ class _ChatScreenState extends State<ChatScreen> {
       _recordingVoice = false;
       _sendingMedia = true;
     });
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    const preview = '🎤 ';
     try {
       final url = await ChatMediaService.uploadChatVoice(
         requestId: widget.requestId,
         bytes: bytes,
         ext: ext,
       );
-      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      await ChatMediaService.withRetry(
-        () => _messages.add({
-          'senderUid': uid,
-          'type': 'audio',
-          'audioUrl': url,
-          'createdAt': FieldValue.serverTimestamp(),
-        }),
-        debugLabel: 'message voice',
+      await ChatMediaService.sendMediaMessage(
+        requestId: widget.requestId,
+        senderUid: uid,
+        type: 'audio',
+        url: url,
+        preview: '$preview${S.voiceMessage}',
       );
-      _stampLast('🎤 ${S.voiceMessage}');
     } catch (e) {
+      unawaited(PendingMediaQueue.enqueue(
+        requestId: widget.requestId,
+        senderUid: uid,
+        type: 'audio',
+        bytes: bytes,
+        ext: ext,
+        previewText: '$preview${S.voiceMessage}',
+      ));
       _snack(ChatMediaService.friendlyUploadError(e),
-          onRetry: () => _sendVoiceBytes(bytes, ext));
+          onRetry: kIsWeb
+              ? () => _sendVoiceBytes(bytes, ext)
+              : PendingMediaQueue.drainNow);
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }

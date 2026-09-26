@@ -18,6 +18,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
@@ -123,6 +124,48 @@ class ChatMediaService {
       );
       return ref.getDownloadURL();
     }, debugLabel: 'upload $path');
+  }
+
+  /// Media अपलोड भइसकेपछि — Firestore मा chat message लेख्ने + booking
+  /// doc कै lastMessage/lastMessageAt/lastSenderUid stamp गर्ने, दुवै एकै
+  /// ठाउँमा — तुरुन्तै पठाउने बेला (`chat_screen.dart`) र पछि background
+  /// मा retry हुँदा (`pending_media_queue.dart`) दुवैले उही बाटो प्रयोग
+  /// गरून् भनेर (logic दोहोरिनु हुँदैन)।
+  static Future<void> sendMediaMessage({
+    required String requestId,
+    required String senderUid,
+    required String type, // 'image' | 'video' | 'audio'
+    required String url,
+    required String preview,
+  }) async {
+    final field = switch (type) {
+      'image' => 'imageUrl',
+      'video' => 'videoUrl',
+      _ => 'audioUrl',
+    };
+    final messages = FirebaseFirestore.instance
+        .collection('chats')
+        .doc(requestId)
+        .collection('messages');
+    await withRetry(
+      () => messages.add({
+        'senderUid': senderUid,
+        'type': type,
+        field: url,
+        'createdAt': FieldValue.serverTimestamp(),
+      }),
+      debugLabel: 'message $type',
+    );
+    try {
+      await FirebaseFirestore.instance
+          .collection('serviceRequests')
+          .doc(requestId)
+          .set({
+        'lastMessage': preview,
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastSenderUid': senderUid,
+      }, SetOptions(merge: true));
+    } catch (_) {}
   }
 
   /// फोटो — compress गरेर अपलोड, JPEG मै (सबैभन्दा साना/व्यापक रूपमा
