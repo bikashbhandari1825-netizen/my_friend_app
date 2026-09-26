@@ -321,6 +321,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendImage(Uint8List bytes) async {
+    // SnackBar कै "फेरि प्रयास" ले (Web मा) यो सिधै फेरि बोलाउँछ — त्यो
+    // बेलासम्म प्रयोगकर्ता यो chat छाडेर अर्कै screen गइसकेको (यो State
+    // पहिल्यै disposed भइसकेको) भए यहीँको पहिलो `setState` ले नै तुरुन्तै
+    // "setState() called after dispose()" क्र्यास दिन्थ्यो — यो गुनासोको
+    // साँचो जड device लगमा नै (live testing मा) समातिएको थियो।
+    if (!mounted) return;
     setState(() => _sendingMedia = true);
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     const preview = '📷 ';
@@ -362,6 +368,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// जाँचिन्छ, `ChatMediaService.uploadChatVideo` भित्र)। Preview मा Send
   /// थिचेपछि मात्र साँच्चै अपलोड।
   Future<void> _sendVideo(Uint8List bytes, String ext) async {
+    if (!mounted) return; // _sendImage कै उस्तै — माथिको टिप्पणी हेर्नुहोस्।
     setState(() => _sendingMedia = true);
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     const preview = '🎥 ';
@@ -539,6 +546,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// + waveform + preview सबै सम्हाल्छ — यहाँ त प्रयोगकर्ताले Send थिचेपछि
   /// आएको bytes मात्र साँच्चै Firestore मा लेख्ने।
   Future<void> _sendVoiceBytes(Uint8List bytes, String ext) async {
+    if (!mounted) return; // _sendImage कै उस्तै — माथिको टिप्पणी हेर्नुहोस्।
     setState(() {
       _recordingVoice = false;
       _sendingMedia = true;
