@@ -2,9 +2,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'driver_registration_flow.dart';
 import 'employer_registration_page.dart';
+import 'onboarding/sahayatri_brand.dart';
 import 'theme/app_theme.dart';
-import 'widgets/app_ui.dart';
+import 'widgets/glass_ui.dart';
 import 'worker_registration_page.dart';
 
 class RoleSelectionPage extends StatefulWidget {
@@ -26,7 +28,12 @@ class _RoleSelectionPageState extends State<RoleSelectionPage> {
     });
   }
 
-  Future<void> _selectRole(String role) async {
+  /// [driverEntry] — "Driver" कार्डबाट आएको हो भने, फारम सिधै Driver मोडमा
+  /// खुल्छ (सामान्य "कुन सेवा?" dropdown मा Driver अब छैन — यो नै त्यसको
+  /// छुट्टै प्रवेश-बिन्दु हो)। Backend मा भने अझै उही `role: 'worker'` —
+  /// Driver पनि functionally एक worker नै हो (उही verification/job-feed/
+  /// quota/rating pipeline साझा गर्छ), छुट्टै role infrastructure थपिएको छैन।
+  Future<void> _selectRole(String role, {bool driverEntry = false}) async {
     setState(() => _isSaving = true);
     try {
       final user = FirebaseAuth.instance.currentUser!;
@@ -42,6 +49,16 @@ class _RoleSelectionPageState extends State<RoleSelectionPage> {
         'verificationStatus': 'none',
         'isVerified': false,
         'createdAt': FieldValue.serverTimestamp(),
+        // यही लेखाइ (Firestore write) ले तुरुन्तै root (`app.dart`) कै आफ्नै
+        // live users/{uid} StreamBuilder लाई पनि ब्युँझाउँछ, जुन यहाँको
+        // तल्लो explicit Navigator.pushReplacement सँगै दौडिन्छ (race) —
+        // कुन पहिले पुग्छ भन्ने ग्यारेन्टी छैन। दुवैले एउटै टुंगो (driverEntry
+        // हो कि होइन) निकालून् भनेर, यो `service: 'Driver'` placeholder पनि
+        // यहीँ (उही लेखाइमा) राखिन्छ, ताकि root ले आफैं race जित्दा पनि सही
+        // Driver फारम नै देखाओस् (`app.dart` को `wasDriver` जाँच हेर्नुहोस्)।
+        // वास्तविक Bike/Car चयन पछि `worker_registration_page.dart`
+        // कै `_submit()` ले यो placeholder लाई साँचो मानले overwrite गर्छ।
+        if (driverEntry) 'service': 'Driver',
       }, SetOptions(merge: true));
 
       await createAdminNotification(
@@ -50,12 +67,28 @@ class _RoleSelectionPageState extends State<RoleSelectionPage> {
       );
 
       if (!mounted) return;
-      Navigator.pushReplacement(
+      // BUG FIX: पहिले यहाँ `Navigator.pushReplacement` थियो — यसले CURRENT
+      // (root gate) route लाई नै हटाएर नयाँ route ले प्रतिस्थापन गर्छ। यो
+      // RoleSelectionPage भने app.dart कै root StreamBuilder (`_UserGate`)
+      // कै content को रूपमा (कुनै push बाट होइन) देखिएको हुन्छ — त्यसैले त्यो
+      // pushReplacement ले वास्तवमा जीवितै रहेको root gate route (auth +
+      // users-doc StreamBuilder सहित) लाई नै नष्ट गर्थ्यो, र नयाँ पेजलाई नै
+      // एक्लो/पहिलो route बनाइदिन्थ्यो। अनि पछि WorkerRegistrationPage/
+      // EmployerRegistrationPage/DriverRegistrationFlow कै `_submit()` ले
+      // गर्ने `Navigator.of(context).popUntil((route) => route.isFirst)` ले
+      // (root gate route पहिल्यै नष्ट भइसकेकोले) केही pop नै नगर्ने भई
+      // उपयोगकर्ता उहीँ फारममा अड्किन्थ्यो/फेरि उहीँ स्क्रिनमा फर्किन्थ्यो —
+      // ठ्याक्कै sign-in पछिको "navigation loop" गुनासोको जड। `push` ले भने
+      // root gate route लाई तल्लो (जीवितै) राखेर माथि मात्र नयाँ पेज थप्छ,
+      // ताकि पछि `popUntil(isFirst)` ले सही तरिकाले गेटमै फर्कोस्।
+      Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => role == 'worker'
-              ? const WorkerRegistrationPage()
-              : const EmployerRegistrationPage(),
+          builder: (context) => driverEntry
+              ? const DriverRegistrationFlow()
+              : role == 'worker'
+                  ? const WorkerRegistrationPage()
+                  : const EmployerRegistrationPage(),
         ),
       );
     } catch (e) {
@@ -70,60 +103,39 @@ class _RoleSelectionPageState extends State<RoleSelectionPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: AppGradientBackground(
-        child: SafeArea(
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(24.0),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(24),
-                    boxShadow: [
-                      BoxShadow(
-                          color: AppColors.igPink.withValues(alpha: 0.4),
-                          blurRadius: 30,
-                          spreadRadius: -4),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: Image.asset('assets/images/app_logo.png',
-                        width: 88,
-                        height: 88,
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => const Icon(
-                            Icons.handyman_rounded,
-                            size: 50,
-                            color: AppColors.igViolet)),
-                  ),
-                ),
+                const SahayatriLogoMark(size: 84),
                 const SizedBox(height: 18),
-                const Text('KaamMitra',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                        shadows: [
-                          Shadow(color: Colors.black38, blurRadius: 12)
-                        ])),
+                const SahayatriWordmark(fontSize: 24),
                 const SizedBox(height: 36),
                 const Text(
                   'Are you looking to work?\nLooking to hire?',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                      color: Colors.white,
+                      color: AppColors.kmText,
                       fontSize: 20,
                       fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 36),
                 if (_isSaving)
-                  const CircularProgressIndicator(color: Colors.white)
+                  const CircularProgressIndicator(color: AppColors.kmOrange)
                 else ...[
+                  _RoleCard(
+                    icon: Icons.local_taxi_rounded,
+                    title: 'Driver',
+                    subtitle: 'गाडी/बाइक चलाउने',
+                    onTap: () =>
+                        _selectRole('worker', driverEntry: true),
+                  ),
+                  const SizedBox(height: 14),
                   _RoleCard(
                     icon: Icons.handyman_rounded,
                     title: 'Worker',
@@ -161,46 +173,43 @@ class _RoleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-          child: Row(
-            children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: const BoxDecoration(
-                  gradient: AppColors.buttonGradient,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, color: Colors.white, size: 24),
+    return GlassPanel(
+      radius: 18,
+      padding: EdgeInsets.zero,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+        child: Row(
+          children: [
+            Container(
+              width: 46,
+              height: 46,
+              decoration: const BoxDecoration(
+                gradient: AppColors.kmCtaGradient,
+                shape: BoxShape.circle,
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title,
-                        style: const TextStyle(
-                            color: AppColors.igViolet,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w800)),
-                    Text(subtitle,
-                        style: const TextStyle(
-                            color: Colors.black54,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600)),
-                  ],
-                ),
+              child: Icon(icon, color: AppColors.kmInk, size: 24),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          color: AppColors.kmText,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800)),
+                  Text(subtitle,
+                      style: const TextStyle(
+                          color: AppColors.kmMuted,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600)),
+                ],
               ),
-              const Icon(Icons.arrow_forward_rounded, color: AppColors.igPink),
-            ],
-          ),
+            ),
+            const Icon(Icons.arrow_forward_rounded, color: AppColors.kmOrange),
+          ],
         ),
       ),
     );

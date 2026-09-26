@@ -10,6 +10,7 @@
 // त्यही स्क्रिनमै (कुनै दोस्रो push/pop नगरी) साँचो कल सुरु हुन्छ — यसैले
 // "pop back / crash on accept" जस्तो navigation race सम्भवै छैन।
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -20,6 +21,7 @@ import '../l10n/strings.dart';
 import '../services/call_service.dart';
 import '../services/ringtone_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_ui.dart' show AuroraBackground;
 import '../widgets/online_badge.dart';
 import '../widgets/spring_tap.dart';
 import 'nearby_common.dart' show PulseRings;
@@ -339,7 +341,7 @@ class _CallScreenState extends State<CallScreen>
                         ),
                         const SizedBox(width: 18),
                         _ctl(Icons.call_end_rounded,
-                            bg: AppColors.danger, big: true, onTap: _end),
+                            bg: AppColors.kmRose, big: true, onTap: _end),
                         const SizedBox(width: 18),
                         if (widget.video) ...[
                           ValueListenableBuilder<bool>(
@@ -393,8 +395,7 @@ class _CallScreenState extends State<CallScreen>
     final initial = widget.otherName.trim().isEmpty
         ? '?'
         : widget.otherName.trim()[0].toUpperCase();
-    return Container(
-      decoration: const BoxDecoration(gradient: AppColors.instaGradient),
+    return AuroraBackground(
       child: SafeArea(
         child: Column(
           children: [
@@ -456,7 +457,7 @@ class _CallScreenState extends State<CallScreen>
                   _bigCallBtn(
                     icon: Icons.call_end_rounded,
                     label: S.decline,
-                    color: AppColors.danger,
+                    color: AppColors.kmRose,
                     onTap: _declineIncoming,
                   ),
                   _bigCallBtn(
@@ -464,7 +465,7 @@ class _CallScreenState extends State<CallScreen>
                         ? Icons.videocam_rounded
                         : Icons.call_rounded,
                     label: S.accept,
-                    gradient: AppColors.buttonGradient,
+                    gradient: AppColors.kmCtaGradient,
                     onTap: _acceptIncoming,
                   ),
                 ],
@@ -498,7 +499,7 @@ class _CallScreenState extends State<CallScreen>
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                    color: (color ?? AppColors.igPink).withValues(alpha: 0.5),
+                    color: (color ?? AppColors.kmPink).withValues(alpha: 0.5),
                     blurRadius: 18,
                     offset: const Offset(0, 6)),
               ],
@@ -543,7 +544,7 @@ class _CallScreenState extends State<CallScreen>
               label: Text(S.openSettings),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
-                foregroundColor: AppColors.igViolet,
+                foregroundColor: AppColors.kmPurple,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
                 shape: RoundedRectangleBorder(
@@ -566,9 +567,9 @@ class _CallScreenState extends State<CallScreen>
     final initial = widget.otherName.trim().isEmpty
         ? '?'
         : widget.otherName.trim()[0].toUpperCase();
-    return Container(
-      decoration: const BoxDecoration(gradient: AppColors.instaGradient),
-      alignment: Alignment.center,
+    return DecoratedBox(
+      decoration: const BoxDecoration(color: AppColors.kmVoid2),
+      child: Center(
       child: ValueListenableBuilder<CallStatus>(
         valueListenable: _s.status,
         builder: (_, st, __) {
@@ -602,6 +603,7 @@ class _CallScreenState extends State<CallScreen>
           );
         },
       ),
+      ),
     );
   }
 
@@ -615,17 +617,28 @@ class _CallScreenState extends State<CallScreen>
     return SpringTap(
       onTap: onTap,
       pressedScale: 0.85,
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: bg ??
-              (active ? Colors.white : Colors.white.withValues(alpha: 0.18)),
-          shape: BoxShape.circle,
+      child: ClipOval(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: Container(
+            width: size,
+            height: size,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: bg ??
+                  (active
+                      ? Colors.white.withValues(alpha: 0.92)
+                      : Colors.white.withValues(alpha: 0.16)),
+              shape: BoxShape.circle,
+              border: bg == null
+                  ? Border.all(color: Colors.white.withValues(alpha: 0.22))
+                  : null,
+            ),
+            child: Icon(icon,
+                color: bg != null || !active ? Colors.white : Colors.black87,
+                size: big ? 30 : (small ? 20 : 24)),
+          ),
         ),
-        child: Icon(icon,
-            color: bg != null || !active ? Colors.white : Colors.black87,
-            size: big ? 30 : (small ? 20 : 24)),
       ),
     );
   }

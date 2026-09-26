@@ -14,6 +14,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_ui.dart';
 import 'job_actions.dart';
 import 'nearby_common.dart';
 
@@ -62,7 +63,7 @@ class _JobsMapLayerState extends State<JobsMapLayer> {
   @override
   void initState() {
     super.initState();
-    pulseDotMarker(AppColors.igViolet).then((bd) {
+    pulseDotMarker(AppColors.kmPurple).then((bd) {
       if (mounted) setState(() => _meIcon = bd);
     });
   }
@@ -230,7 +231,6 @@ class _JobMapSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final service = (data['service'] ?? '').toString();
     final desc = (data['details'] ?? '').toString();
     final address = (data['address'] ?? '').toString();
@@ -240,18 +240,9 @@ class _JobMapSheet extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.all(12),
-      child: Container(
+      child: GlassPanel2(
+        radius: AppRadius.lg,
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.25),
-                blurRadius: 16,
-                offset: const Offset(0, 6)),
-          ],
-        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -262,7 +253,7 @@ class _JobMapSheet extends StatelessWidget {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: const Color(0x11833AB4),
+                    color: Colors.white.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   clipBehavior: Clip.antiAlias,
@@ -270,7 +261,7 @@ class _JobMapSheet extends StatelessWidget {
                     serviceImageFor(service),
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => Icon(serviceIconFor(service),
-                        color: AppColors.igViolet),
+                        color: AppColors.kmOrange),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -280,10 +271,12 @@ class _JobMapSheet extends StatelessWidget {
                     children: [
                       Text(S.serviceName(service),
                           style: const TextStyle(
-                              fontWeight: FontWeight.w800, fontSize: 15.5)),
+                              color: AppColors.kmText,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 15.5)),
                       Text(S.distanceLabel(distanceKm),
                           style: const TextStyle(
-                              fontSize: 11.5, color: Colors.black45)),
+                              fontSize: 11.5, color: AppColors.kmMuted)),
                     ],
                   ),
                 ),
@@ -291,14 +284,14 @@ class _JobMapSheet extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
-                    color: AppColors.igRed.withValues(alpha: 0.12),
+                    color: AppColors.kmOrange.withValues(alpha: 0.14),
                     borderRadius: BorderRadius.circular(AppRadius.pill),
                   ),
                   child: Text('${S.customerBudget}: Rs. $budget',
                       style: const TextStyle(
                           fontSize: 10.5,
                           fontWeight: FontWeight.w800,
-                          color: AppColors.igRed)),
+                          color: AppColors.kmOrange)),
                 ),
               ],
             ),
@@ -306,7 +299,7 @@ class _JobMapSheet extends StatelessWidget {
               const SizedBox(height: 10),
               Text(desc,
                   style:
-                      const TextStyle(fontSize: 13.5, color: Colors.black87)),
+                      const TextStyle(fontSize: 13.5, color: AppColors.kmText)),
             ],
             if (address.isNotEmpty) ...[
               const SizedBox(height: 8),
@@ -314,12 +307,12 @@ class _JobMapSheet extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Icon(Icons.place_outlined,
-                      size: 16, color: Colors.black45),
+                      size: 16, color: AppColors.kmMuted),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(address,
                         style: const TextStyle(
-                            fontSize: 12.5, color: Colors.black54)),
+                            fontSize: 12.5, color: AppColors.kmMuted)),
                   ),
                 ],
               ),
@@ -329,14 +322,14 @@ class _JobMapSheet extends StatelessWidget {
               Row(
                 children: [
                   const Icon(Icons.lock_outline_rounded,
-                      size: 14, color: AppColors.danger),
+                      size: 14, color: AppColors.kmRose),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(S.notAuthorizedForJobCategory,
                         style: const TextStyle(
                             fontSize: 11.5,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.danger)),
+                            color: AppColors.kmRose)),
                   ),
                 ],
               ),
@@ -351,9 +344,11 @@ class _JobMapSheet extends StatelessWidget {
                       Navigator.pop(context);
                     },
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.danger,
-                      side: const BorderSide(color: AppColors.danger),
+                      foregroundColor: AppColors.kmRose,
+                      side: BorderSide(color: AppColors.kmRose),
                       padding: const EdgeInsets.symmetric(vertical: 11),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(999)),
                     ),
                     child: Text(S.decline),
                   ),
@@ -369,30 +364,50 @@ class _JobMapSheet extends StatelessWidget {
                                 myService: myService);
                           },
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.igViolet,
-                      side: const BorderSide(color: AppColors.igViolet),
+                      foregroundColor: AppColors.kmOrange,
+                      side: BorderSide(color: AppColors.kmOrange),
                       padding: const EdgeInsets.symmetric(vertical: 11),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(999)),
                     ),
                     child: Text(S.offerPrice, textAlign: TextAlign.center),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: ElevatedButton(
-                    onPressed: skillMismatch
-                        ? null
-                        : () {
-                            Navigator.pop(context);
-                            acceptBroadcastJob(outerContext, docId, data,
-                                myService: myService);
-                          },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.igViolet,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 11),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: skillMismatch ? null : AppColors.kmCtaGradient,
+                      color: skillMismatch
+                          ? Colors.white.withValues(alpha: 0.08)
+                          : null,
+                      borderRadius: BorderRadius.circular(999),
                     ),
-                    child: Text(S.accept,
-                        style: const TextStyle(fontWeight: FontWeight.w800)),
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(999),
+                        onTap: skillMismatch
+                            ? null
+                            : () {
+                                Navigator.pop(context);
+                                acceptBroadcastJob(outerContext, docId, data,
+                                    myService: myService);
+                              },
+                        child: Padding(
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 11),
+                          child: Center(
+                            child: Text(S.accept,
+                                style: TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    color: skillMismatch
+                                        ? AppColors.kmMuted
+                                        : AppColors.kmInk)),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ],

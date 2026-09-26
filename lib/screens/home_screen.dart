@@ -2,18 +2,25 @@
 // inDrive-style map home: full-screen Google Map + sliding drawer + region
 // status banner + bottom search + horizontal service-category selector।
 import 'dart:async';
+import 'dart:typed_data' show Uint8List;
+import 'dart:ui' show ImageFilter;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+import '../config/app_config.dart' show kAdminEmail;
 import '../l10n/strings.dart';
+import '../location_util.dart' show reverseGeocode;
 import '../saved_places_screen.dart';
 import '../settings_page.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/spring_tap.dart';
 import '../widgets/vehicle_type_picker.dart';
 import '../worker_registration_page.dart';
@@ -26,7 +33,7 @@ import 'nearby_screen.dart';
 import 'notification_screen.dart';
 import 'owner_dashboard_screen.dart';
 import 'payment_methods_screen.dart';
-import 'saved_workers_screen.dart';
+import '../watchlist_screen.dart';
 import 'service_map_screen.dart';
 import 'worker_profile_screen.dart';
 import '../widgets/worker_stats.dart';
@@ -39,7 +46,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   GoogleMapController? _map;
   StreamSubscription<Position>? _posSub;
@@ -68,18 +75,46 @@ class _HomeScreenState extends State<HomeScreen>
   double _meLat = fallbackLat;
   double _meLng = fallbackLng;
   bool _locReady = false;
-  bool _inRegion = true;
-  bool _bannerVisible = false;
   bool _locating = false;
   String _pickedCategory = ''; // '' = सबै; नत्र नक्सामा त्यही सेवा मात्र फिल्टर
-  Timer? _bannerTimer;
 
   // क्याटेगोरी → custom marker bitmap (initState मा एकपटक बन्छ)।
   final Map<String, BitmapDescriptor> _catMarkers = {};
-  // प्रयोगकर्ताको current-location — पोल+झन्डा+थोप्लो सबै एउटै static bitmap
-  // भित्र (Uber-style) — नक्सा pan/zoom गर्दा यो अरू marker सँगै native रूपमा
-  // सर्छ, छुट्टै overlay भएकोमा जस्तो कहिल्यै लड्खडाउँदैन।
-  BitmapDescriptor? _userPin;
+  // ── Pin Drop (browse-only, service_map_screen.dart कै उस्तै भिजुअल) ──
+  // यहाँ यो पिनले "job/booking स्थान" बदल्दैन — त्यो सधैँ `_meLat`/`_meLng`
+  // (साँचो GPS) कै रहन्छ, माथि `onSendOffer` को comment हेर्नुहोस्। यो
+  // केवल नक्सा pan गर्दा प्रयोगकर्ता कुन ठाउँ हेर्दैछ भनेर स्पष्ट देखाउने
+  // (स्क्रिनको बीचमा स्थिर झन्डा + माथि ठेगाना कार्ड + touch-lift/nail-drop
+  // haptic) — साँचो booking स्थान भने अझै GPS-आधारित नै।
+  Uint8List? _browsePinBytes;
+  String _browseAddress = '';
+  bool _loadingBrowseAddress = false;
+  Timer? _browseAddrDebounce;
+  double? _pendingBrowseLat;
+  double? _pendingBrowseLng;
+  bool _programmaticCameraMove = false;
+  late final AnimationController _pinLiftCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 140),
+  );
+
+  void _scheduleBrowseGeocode() {
+    _browseAddrDebounce?.cancel();
+    _browseAddrDebounce =
+        Timer(const Duration(milliseconds: 400), _reverseGeocodeBrowsePin);
+  }
+
+  Future<void> _reverseGeocodeBrowsePin() async {
+    final lat = _lat, lng = _lng;
+    if (mounted) setState(() => _loadingBrowseAddress = true);
+    final addr = await reverseGeocode(lat, lng);
+    if (!mounted || _lat != lat || _lng != lng) return;
+    setState(() {
+      _browseAddress = addr;
+      _loadingBrowseAddress = false;
+    });
+  }
+
   // नक्सामा marker थिचेपछि देखिने preview card को worker।
   String? _selectedWorkerId;
   Map<String, dynamic>? _selectedWorker;
@@ -97,14 +132,14 @@ class _HomeScreenState extends State<HomeScreen>
     super.initState();
     _initLocation();
     _loadCategoryMarkers();
+    destinationFlagPinBytes().then((b) {
+      if (mounted) setState(() => _browsePinBytes = b);
+    });
+    _reverseGeocodeBrowsePin();
   }
 
-  /// सबै custom pin bitmap (क्याटेगोरी + user location) पृष्ठभूमिमा तयार पार्ने।
+  /// सबै custom pin bitmap (क्याटेगोरी) पृष्ठभूमिमा तयार पार्ने।
   Future<void> _loadCategoryMarkers() async {
-    try {
-      final me = await destinationFlagPin();
-      if (mounted) _userPin = me;
-    } catch (_) {}
     for (final s in serviceFilters) {
       final name = (s['name'] as String);
       try {
@@ -119,7 +154,8 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void dispose() {
     _posSub?.cancel();
-    _bannerTimer?.cancel();
+    _browseAddrDebounce?.cancel();
+    _pinLiftCtrl.dispose();
     _sheetCtrl.dispose();
     _sheetExtent.dispose();
     _map?.dispose();
@@ -192,15 +228,19 @@ class _HomeScreenState extends State<HomeScreen>
         _meLat = p.latitude;
         _meLng = p.longitude;
       });
-      _setRegion(p.latitude, p.longitude);
+      _programmaticCameraMove = true;
       await _map?.animateCamera(
         CameraUpdate.newLatLngZoom(LatLng(_meLat, _meLng), 15.5),
       );
+      _programmaticCameraMove = false;
+      _reverseGeocodeBrowsePin();
       if (_posSub == null) _startTracking();
     } catch (_) {
+      _programmaticCameraMove = true;
       await _map?.animateCamera(
         CameraUpdate.newLatLngZoom(LatLng(_lat, _lng), 15),
       );
+      _programmaticCameraMove = false;
     } finally {
       if (mounted) setState(() => _locating = false);
     }
@@ -234,28 +274,21 @@ class _HomeScreenState extends State<HomeScreen>
         _originLng = p.longitude;
         _locReady = true;
       });
-      _setRegion(p.latitude, p.longitude);
-      _map?.animateCamera(CameraUpdate.newLatLngZoom(LatLng(_lat, _lng), 13.5));
+      _programmaticCameraMove = true;
+      await _map
+          ?.animateCamera(CameraUpdate.newLatLngZoom(LatLng(_lat, _lng), 13.5));
+      _programmaticCameraMove = false;
+      _reverseGeocodeBrowsePin();
       _startTracking();
     } catch (_) {
       if (mounted) setState(() => _locReady = true);
     }
   }
 
-  void _setRegion(double lat, double lng) {
-    // KaamMitra सेवा क्षेत्र — नेपालको मोटो bounding box
-    final inNepal = lat >= 26.3 && lat <= 30.6 && lng >= 79.9 && lng <= 88.3;
-    setState(() {
-      _inRegion = inNepal;
-      _bannerVisible = true;
-    });
-    _bannerTimer?.cancel();
-    if (inNepal) {
-      _bannerTimer = Timer(const Duration(seconds: 4),
-          () => mounted ? setState(() => _bannerVisible = false) : null);
-    }
-  }
-
+  // Pin Drop — live GPS ले अब `_lat`/`_lng` (browse-pin/camera स्थान) लाई
+  // कहिल्यै ओभरराइट गर्दैन, नत्र प्रयोगकर्ताले pin सारेको केही सेकेन्डमै
+  // हिँडाइले फेरि आफ्नो हालको स्थानमा तानिन्थ्यो। `_meLat`/`_meLng` (साँचो
+  // booking स्थान, "मेरो स्थान" marker) चाहिँ पहिलेकै जस्तो सधैँ live रहन्छ।
   void _startTracking() {
     _posSub?.cancel();
     _posSub = Geolocator.getPositionStream(
@@ -266,8 +299,6 @@ class _HomeScreenState extends State<HomeScreen>
     ).listen((p) {
       if (!mounted) return;
       setState(() {
-        _lat = p.latitude;
-        _lng = p.longitude;
         _meLat = p.latitude;
         _meLng = p.longitude;
       });
@@ -280,12 +311,10 @@ class _HomeScreenState extends State<HomeScreen>
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) {
-        final theme = Theme.of(ctx);
         return Container(
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surface,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+          decoration: const BoxDecoration(
+            color: AppColors.kmSurface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
           ),
           padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
           child: Column(
@@ -301,24 +330,26 @@ class _HomeScreenState extends State<HomeScreen>
                   width: 84,
                   height: 84,
                   decoration: BoxDecoration(
-                    color: AppColors.lime.withValues(alpha: 0.16),
+                    color: AppColors.kmOrange.withValues(alpha: 0.16),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(Icons.location_on_rounded,
-                      size: 40, color: AppColors.lime),
+                      size: 40, color: AppColors.kmOrange),
                 ),
               ),
               const SizedBox(height: 16),
               Text(S.locationOffTitle,
                   style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.w800)),
+                      color: AppColors.kmText,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800)),
               const SizedBox(height: 8),
               Text(S.locationOffBody,
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyMedium
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                  style: const TextStyle(
+                      color: AppColors.kmMuted, fontSize: 13.5, height: 1.4)),
               const SizedBox(height: 20),
-              PrimaryButton(
+              KmCtaButton(
                 label: S.enableLocation,
                 icon: Icons.my_location_rounded,
                 onPressed: () {
@@ -329,6 +360,8 @@ class _HomeScreenState extends State<HomeScreen>
               const SizedBox(height: 8),
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
+                style:
+                    TextButton.styleFrom(foregroundColor: AppColors.kmMuted),
                 child: Text(S.notNow),
               ),
             ],
@@ -366,18 +399,14 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// क्याटेगोरी चिपमा थिच्दा नक्साका marker त्यही सेवामा फिल्टर हुन्छन्;
-  /// फेरि उही थिच्दा फिल्टर हट्छ। 'Driver' चिप भने पहिले नै सक्रिय (Bike/Car
-  /// मध्ये कुनै एउटामा फिल्टर भइसकेको) भए फेरि popup नखोली सिधै हटाउँछ —
-  /// त्यो नै "फेरि थिच्दा हट्ने" toggle व्यवहार हो।
+  /// क्याटेगोरी चिपमा थिच्दा नक्साका marker त्यही सेवामा फिल्टर हुन्छन्; फेरि उही
+  /// थिच्दा फिल्टर हट्छ। 'Driver' चिपले भने कहिल्यै यो inline filter/bid प्रयोग
+  /// गर्दैन — ride-hailing (Bike/Car) को booking+bidding UI सधैँ छुट्टै
+  /// समर्पित screen (`_openService` कै जस्तो, ServiceMapScreen) मार्फत मात्र
+  /// खुल्नुपर्छ, सामान्य home screen को आफ्नै map मा कहिल्यै नआओस् भनेर।
   void _openCategory(String name) async {
-    if (name == 'Driver' &&
-        (_pickedCategory == 'Bike' || _pickedCategory == 'Car')) {
-      setState(() {
-        _pickedCategory = '';
-        _selectedWorkerId = null;
-        _selectedWorker = null;
-      });
+    if (name == 'Driver') {
+      _openService(name);
       return;
     }
     final resolved = await _resolveServiceName(name);
@@ -412,6 +441,7 @@ class _HomeScreenState extends State<HomeScreen>
         'experience': (d['experience'] ?? 'N/A').toString(),
         'location': (d['location'] ?? 'N/A').toString(),
         'phone': (d['phone'] ?? '').toString(),
+        'vehicleDetails': (d['vehicleDetails'] ?? '').toString(),
       };
 
   void _openSearch() {
@@ -429,20 +459,12 @@ class _HomeScreenState extends State<HomeScreen>
   Set<Marker> _markers(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
     final out = <Marker>{};
 
-    // ── प्रयोगकर्ताको current location — झन्डा marker (पोल+थोप्लो मात्र;
-    // एनिमेटेड झन्डा माथि overlay बाट) ──
-    if (_userPin != null && _locReady) {
-      out.add(Marker(
-        markerId: const MarkerId('__me__'),
-        position: LatLng(_meLat, _meLng),
-        anchor: FlagPinGeometry.markerAnchorFraction,
-        icon: _userPin!,
-        zIndexInt: 100,
-        consumeTapEvents: true,
-        onTap: _recenterToCurrent,
-      ));
-    }
-
+    // ── प्रयोगकर्ताको current-location झन्डा हटाइयो — यो जहिल्यै नक्सा
+    // खुल्दा screen-center को "pick location" (Pin Drop) overlay झन्डा
+    // सँगै ठ्याक्कै उही ठाउँमा देखिने भएकोले दुईवटा झन्डा (एउटा ठूलो,
+    // ओभरल्यापिङ) देखिने बग हुन्थ्यो। "मेरो स्थान" मा फर्कने माथिको
+    // round FAB बटन (`_MyLocationBtn` → `_recenterToCurrent`) ले नै
+    // यो काम गर्छ, त्यसैले छुट्टै marker आवश्यक थिएन।
     final filter = _pickedCategory.toLowerCase().trim();
 
     // ── नक्सा default मा सफा राख्ने ──
@@ -489,57 +511,134 @@ class _HomeScreenState extends State<HomeScreen>
       body: Stack(
         children: [
           // ── Map ──
-          // नक्सालाई तल्लो gradient प्यानलमुनि नफैलिने गरी सीमित गरिएको छ:
-          // प्यानलको अहिलेको उचाइ (_sheetExtent) अनुसार तल्लो किनारा सर्छ।
-          // यसरी Google Map को platform-view element प्यानल क्षेत्रमा हुँदै
-          // हुँदैन — त्यसैले web/native दुवैमा प्यानलभित्रको touch/drag कहिल्यै
-          // नक्सामा पुग्दैन (opaque GestureDetector भन्दा यो पक्का उपाय हो;
-          // web मा नक्साले browser का native pointer event सिधै लिने भएकाले)।
-          ValueListenableBuilder<double>(
-            valueListenable: _sheetExtent,
-            builder: (context, ext, __) {
-              final h = MediaQuery.of(context).size.height;
-              // प्यानलको rounded माथिल्लो कुनाभित्र नक्सा अलिकति पस्न दिने।
-              final mapBottom = (h * ext - 24).clamp(0.0, h);
-              return Positioned(
-                left: 0,
-                right: 0,
-                top: 0,
-                bottom: mapBottom,
-                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          // नक्सा सधैँ पूरै स्क्रिन ओगटेर पूर्णतया स्थिर रहन्छ — तल्लो "Drag up
+          // for more" शीट drag गर्दा (live भए पनि settle भएपछि भए पनि)
+          // नक्साको bounds/camera कहिल्यै बदलिँदैन, त्यसैले center coordinate
+          // र zoom level जहिल्यै उस्तै रहन्छ। शीट यसमाथि केवल दृश्य overlay
+          // हो (तल हेर्नुहोस्, आफ्नै `HitTestBehavior.opaque` GestureDetector
+          // ले शीट क्षेत्रभित्रको touch/drag आफैं सोस्छ, नक्सासम्म पुग्न
+          // दिँदैन)।
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 0,
+            child: Stack(
+              children: [
+                StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: _workersStream,
                   builder: (context, snap) {
                     return GoogleMap(
-                      initialCameraPosition:
-                          CameraPosition(target: LatLng(_lat, _lng), zoom: 13),
-                      style: kCleanMapStyle,
-                      onMapCreated: (c) {
-                        _map = c;
-                        if (_locReady) {
-                          c.animateCamera(CameraUpdate.newLatLngZoom(
-                              LatLng(_lat, _lng), 13.5));
-                        }
+                          initialCameraPosition: CameraPosition(
+                              target: LatLng(_lat, _lng), zoom: 13),
+                          style: kCleanMapStyle,
+                          onMapCreated: (c) {
+                            _map = c;
+                            if (_locReady) {
+                              _programmaticCameraMove = true;
+                              c
+                                  .animateCamera(CameraUpdate.newLatLngZoom(
+                                      LatLng(_lat, _lng), 13.5))
+                                  .whenComplete(
+                                      () => _programmaticCameraMove = false);
+                            }
+                          },
+                          // Pin Drop — pan गर्न थालेकै क्षण हलुका haptic +
+                          // पिन माथि उठ्ने (प्रयोगकर्ताले आफैं गरेको बेला
+                          // मात्र, प्रोग्रामेटिक recenter मा होइन)।
+                          onCameraMoveStarted: () {
+                            if (!_programmaticCameraMove) {
+                              HapticFeedback.selectionClick();
+                              _pinLiftCtrl.forward();
+                            }
+                          },
+                          // hरेक frame मा सस्तो थाती राख्ने मात्र, pan
+                          // रोकिएपछि (`onCameraIdle`) एकैचोटि लागू।
+                          onCameraMove: (p) {
+                            _pendingBrowseLat = p.target.latitude;
+                            _pendingBrowseLng = p.target.longitude;
+                          },
+                          onCameraIdle: () {
+                            final la = _pendingBrowseLat;
+                            final ln = _pendingBrowseLng;
+                            if (la == null || ln == null) return;
+                            _pendingBrowseLat = null;
+                            _pendingBrowseLng = null;
+                            if (mounted) {
+                              setState(() {
+                                _lat = la;
+                                _lng = ln;
+                              });
+                            }
+                            // प्रयोगकर्ताले आफैं pan गरेको बेला मात्र ठेगाना
+                            // ताजा गर्ने — programmatic move हरूले आफैं
+                            // छुट्टै explicit geocode गर्छन् (माथि हेर्नुहोस्)।
+                            if (_pinLiftCtrl.value > 0) {
+                              _scheduleBrowseGeocode();
+                            }
+                            // "Nail Drop" — spring physics सहित तल फर्काउने,
+                            // settle भएकै क्षणमा कडा haptic।
+                            if (_pinLiftCtrl.value > 0) {
+                              _pinLiftCtrl
+                                  .animateWith(SpringSimulation(
+                                    const SpringDescription(
+                                        mass: 1, stiffness: 500, damping: 14),
+                                    _pinLiftCtrl.value,
+                                    0,
+                                    0,
+                                  ))
+                                  .whenComplete(() {
+                                if (mounted) HapticFeedback.heavyImpact();
+                              });
+                            }
+                          },
+                          onTap: (_) {
+                            if (_selectedWorker != null) _clearSelection();
+                          },
+                          // निलो थोप्लाको सट्टा हाम्रो custom झन्डा pin।
+                          myLocationEnabled: false,
+                          myLocationButtonEnabled: false,
+                          zoomControlsEnabled: false,
+                          mapToolbarEnabled: false,
+                          // नक्सा सधैँ उत्तर-माथि रहोस् — gesture ले घुमाएर
+                          // "उल्टो" देखिने बग नआओस्।
+                          rotateGesturesEnabled: false,
+                          padding: const EdgeInsets.only(top: 70),
+                          markers: _markers(snap.data?.docs ?? []),
+                        );
                       },
-                      onCameraMove: (p) => _lat = p.target.latitude,
-                      onTap: (_) {
-                        if (_selectedWorker != null) _clearSelection();
-                      },
-                      // निलो थोप्लाको सट्टा हाम्रो custom झन्डा pin।
-                      myLocationEnabled: false,
-                      myLocationButtonEnabled: false,
-                      zoomControlsEnabled: false,
-                      mapToolbarEnabled: false,
-                      // नक्सा सधैँ उत्तर-माथि रहोस् — gesture ले घुमाएर
-                      // "उल्टो" देखिने बग नआओस्।
-                      rotateGesturesEnabled: false,
-                      padding: const EdgeInsets.only(top: 70),
-                      markers: _markers(snap.data?.docs ?? []),
-                    );
-                  },
-                ),
-              );
-            },
-          ),
+                    ),
+
+                    // ── Pin Drop overlay — स्क्रिनको बीचमा स्थिर झन्डा
+                    // (browse-only, "मेरो स्थान" marker फरक — त्यो GPS मै
+                    // native marker रहन्छ) ──
+                    IgnorePointer(
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 70),
+                        child: Center(
+                          child: _browsePinBytes == null
+                              ? const SizedBox.shrink()
+                              : _BrowsePinIcon(
+                                  bytes: _browsePinBytes!,
+                                  liftCtrl: _pinLiftCtrl,
+                                ),
+                        ),
+                      ),
+                    ),
+
+                    // ── ठेगाना floating card — टप बारको मुनि ──
+                    SafeArea(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 66, 14, 0),
+                        child: _BrowseAddressCard(
+                          address: _browseAddress,
+                          loading: _loadingBrowseAddress,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
 
           // ── Top bar (hamburger + bell) ──
           SafeArea(
@@ -564,22 +663,6 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 10),
-                  // ── Region status banner ──
-                  AnimatedSlide(
-                    duration: const Duration(milliseconds: 320),
-                    curve: Curves.easeOut,
-                    offset:
-                        _bannerVisible ? Offset.zero : const Offset(0, -0.4),
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 320),
-                      opacity: _bannerVisible ? 1 : 0,
-                      child: _RegionBanner(
-                        inRegion: _inRegion,
-                        onClose: () => setState(() => _bannerVisible = false),
-                      ),
-                    ),
                   ),
                 ],
               ),
@@ -838,151 +921,242 @@ class _SheetBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: AppColors.igGradient,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black38, blurRadius: 20, offset: Offset(0, -4)),
-        ],
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: 8),
-          Container(
-            width: 44,
-            height: 5,
-            decoration: BoxDecoration(
-              color: Colors.white70,
-              borderRadius: BorderRadius.circular(3),
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.kmSurface.withValues(alpha: 0.92),
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(30)),
+            border: Border(
+              top: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
             ),
           ),
-          const SizedBox(height: 4),
-          Text(S.dragForMore,
-              style: const TextStyle(color: Colors.white60, fontSize: 10.5)),
-          const SizedBox(height: 10),
-          Expanded(
-            child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
-              padding: EdgeInsets.fromLTRB(
-                  14, 0, 14, 14 + MediaQuery.of(context).padding.bottom),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Search — Instagram-gradient pill
-                  GestureDetector(
-                    onTap: onSearch,
-                    child: Container(
-                      height: 54,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      decoration: BoxDecoration(
-                        gradient: AppColors.buttonGradient,
-                        borderRadius: BorderRadius.circular(AppRadius.md),
-                        border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.55)),
-                        boxShadow: const [
-                          BoxShadow(
-                              color: Colors.black38,
-                              blurRadius: 14,
-                              offset: Offset(0, 4)),
-                        ],
+          child: Column(
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 44,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.28),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(S.dragForMore,
+                  style: const TextStyle(
+                      color: AppColors.kmMuted, fontSize: 10.5)),
+              const SizedBox(height: 10),
+              Expanded(
+                child: SingleChildScrollView(
+                  physics: const NeverScrollableScrollPhysics(),
+                  padding: EdgeInsets.fromLTRB(
+                      14, 0, 14, 14 + MediaQuery.of(context).padding.bottom),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Search pill — gradient CTA
+                      GestureDetector(
+                        onTap: onSearch,
+                        child: Container(
+                          height: 54,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          decoration: BoxDecoration(
+                            gradient: AppColors.kmCtaGradient,
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.3),
+                                  blurRadius: 18,
+                                  offset: const Offset(0, 6)),
+                            ],
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(Icons.search_rounded,
+                                  color: AppColors.kmInk),
+                              SizedBox(width: 12),
+                              Expanded(child: _SearchHint()),
+                              Icon(Icons.arrow_forward_rounded,
+                                  size: 18, color: AppColors.kmInk),
+                            ],
+                          ),
+                        ),
                       ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.search_rounded, color: Colors.white),
-                          SizedBox(width: 12),
-                          Expanded(child: _SearchHint()),
-                          Icon(Icons.arrow_forward_rounded,
-                              size: 18, color: Colors.white),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  // Horizontal service selector — real profession photo cards
-                  SizedBox(
-                    height: 114,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
-                      itemCount: serviceFilters.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 10),
-                      itemBuilder: (context, i) {
-                        final s = serviceFilters[i];
-                        final name = s['name'] as String;
-                        // 'Driver' tile आफैं कहिल्यै सिधै filter हुँदैन —
-                        // Bike/Car मध्ये छानिएको बेला पनि यही tile "active"
-                        // देखियोस् भनेर।
-                        final active = pickedCategory == name ||
-                            (name == 'Driver' &&
-                                (pickedCategory == 'Bike' ||
-                                    pickedCategory == 'Car'));
-                        return GestureDetector(
-                          onTap: () => onCategory(name),
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            curve: Curves.easeOut,
-                            width: 88,
-                            transform: Matrix4.diagonal3Values(
-                                active ? 1.06 : 1.0, active ? 1.06 : 1.0, 1.0),
-                            transformAlignment: Alignment.center,
-                            padding: const EdgeInsets.all(5),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(AppRadius.md),
-                              border: Border.all(
-                                  color: active
-                                      ? AppColors.igViolet
-                                      : Colors.white.withValues(alpha: 0.4),
-                                  width: active ? 2.6 : 1),
-                              boxShadow: const [
-                                BoxShadow(
-                                    color: Colors.black26,
-                                    blurRadius: 8,
-                                    offset: Offset(0, 3)),
-                              ],
-                            ),
-                            child: Column(
-                              children: [
-                                Expanded(
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(10),
-                                    child: Image.asset(
-                                      serviceImageFor(name),
-                                      fit: BoxFit.cover,
-                                      width: double.infinity,
-                                      errorBuilder: (_, __, ___) => Container(
-                                        color: const Color(0x11833AB4),
-                                        child: Icon(s['icon'] as IconData,
-                                            color: AppColors.igViolet),
+                      const SizedBox(height: 12),
+                      // Horizontal service selector — real profession photo cards
+                      SizedBox(
+                        height: 114,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
+                          itemCount: serviceFilters.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(width: 10),
+                          itemBuilder: (context, i) {
+                            final s = serviceFilters[i];
+                            final name = s['name'] as String;
+                            // 'Driver' ले home screen को map filter कहिल्यै
+                            // छुँदैन (छुट्टै screen मा जान्छ) — त्यसैले यो
+                            // chip कहिल्यै "active" देखिँदैन, अरू category
+                            // जस्तै toggle-highlight हुँदैन।
+                            final active =
+                                name != 'Driver' && pickedCategory == name;
+                            return GestureDetector(
+                              onTap: () => onCategory(name),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                curve: Curves.easeOut,
+                                width: 88,
+                                transform: Matrix4.diagonal3Values(
+                                    active ? 1.06 : 1.0,
+                                    active ? 1.06 : 1.0,
+                                    1.0),
+                                transformAlignment: Alignment.center,
+                                padding: const EdgeInsets.all(5),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.06),
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(
+                                      color: active
+                                          ? AppColors.kmOrange
+                                          : Colors.white.withValues(alpha: 0.14),
+                                      width: active ? 2.2 : 1),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Expanded(
+                                      child: ClipRRect(
+                                        borderRadius:
+                                            BorderRadius.circular(13),
+                                        child: Image.asset(
+                                          serviceImageFor(name),
+                                          fit: BoxFit.cover,
+                                          width: double.infinity,
+                                          errorBuilder: (_, __, ___) =>
+                                              Container(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.06),
+                                            child: Icon(s['icon'] as IconData,
+                                                color: AppColors.kmOrange),
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      S.serviceName(name),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.w800,
+                                          color: active
+                                              ? AppColors.kmOrange
+                                              : AppColors.kmText),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  S.serviceName(name),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppColors.igViolet),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                    ],
                   ),
-                  const SizedBox(height: 6),
-                ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Pin Drop — स्क्रिनको बीचमा स्थिर झन्डा, touch-lift/nail-drop animation
+/// सहित (service_map_screen.dart कै उही भिजुअल, यहाँ browse-only प्रयोग)।
+class _BrowsePinIcon extends StatelessWidget {
+  final Uint8List bytes;
+  final AnimationController liftCtrl;
+  const _BrowsePinIcon({required this.bytes, required this.liftCtrl});
+
+  @override
+  Widget build(BuildContext context) {
+    const displayHeight = 60.0;
+    const scale = displayHeight / FlagPinGeometry.displayH;
+    const renderedWidth = FlagPinGeometry.displayW * scale;
+    final anchorPx = Offset(
+      FlagPinGeometry.anchor.dx * scale,
+      FlagPinGeometry.anchor.dy * scale,
+    );
+    final offset = Offset(
+      renderedWidth / 2 - anchorPx.dx,
+      displayHeight / 2 - anchorPx.dy,
+    );
+    return Transform.translate(
+      offset: offset,
+      child: AnimatedBuilder(
+        animation: liftCtrl,
+        child: Image.memory(bytes, height: displayHeight),
+        builder: (context, child) {
+          final t = liftCtrl.value;
+          return Transform.translate(
+            offset: Offset(0, -14 * t),
+            child: Transform.scale(scale: 1.0 + 0.08 * t, child: child),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Pin Drop — बीचको झन्डाले छोपेको ठाउँको ठेगाना (browse-only, booking
+/// स्थान बदल्दैन) — dark glass pill, नयाँ डिजाइनसँग मिल्ने।
+class _BrowseAddressCard extends StatelessWidget {
+  final String address;
+  final bool loading;
+  const _BrowseAddressCard({required this.address, required this.loading});
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel2(
+      radius: 18,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            const Icon(Icons.place_rounded,
+                size: 18, color: AppColors.kmOrange),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                loading
+                    ? S.fetchingAddress
+                    : (address.isEmpty ? S.moveMapHint : address),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: AppColors.kmText,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12.5),
               ),
             ),
-          ),
-        ],
+            if (loading) ...[
+              const SizedBox(width: 8),
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppColors.kmOrange),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -996,31 +1170,32 @@ class _MyLocationBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return SpringTap(
       onTap: onTap,
       pressedScale: 0.85,
-      child: Container(
-        width: 46,
-        height: 46,
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.20),
-                blurRadius: 10,
-                offset: const Offset(0, 3)),
-          ],
+      child: ClipOval(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            width: 46,
+            height: 46,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.09),
+              shape: BoxShape.circle,
+              border: Border.all(color: AppColors.kmGlassBorder),
+            ),
+            child: loading
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.4, color: AppColors.kmOrange),
+                  )
+                : const Icon(Icons.my_location_rounded,
+                    size: 22, color: AppColors.kmOrange),
+          ),
         ),
-        child: loading
-            ? const Padding(
-                padding: EdgeInsets.all(13),
-                child: CircularProgressIndicator(
-                    strokeWidth: 2.4, color: AppColors.igViolet),
-              )
-            : const Icon(Icons.my_location_rounded,
-                size: 22, color: AppColors.igViolet),
       ),
     );
   }
@@ -1033,7 +1208,7 @@ class _SearchHint extends StatelessWidget {
   Widget build(BuildContext context) => Text(
         S.whereAndPrice,
         style: const TextStyle(
-            color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+            color: AppColors.kmInk, fontSize: 15, fontWeight: FontWeight.w700),
       );
 }
 
@@ -1047,75 +1222,35 @@ class _RoundBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return SpringTap(
       onTap: onTap,
       pressedScale: 0.85,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.18),
-                    blurRadius: 10,
-                    offset: const Offset(0, 3)),
-              ],
+          ClipOval(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Container(
+                width: 46,
+                height: 46,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.09),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.kmGlassBorder),
+                ),
+                child: Icon(icon, size: 22, color: AppColors.kmText),
+              ),
             ),
-            child: Icon(icon, size: 22, color: theme.colorScheme.onSurface),
           ),
           if (dot)
             const Positioned(
               right: 3,
               top: 3,
-              child: CircleAvatar(radius: 5, backgroundColor: AppColors.lime),
+              child: CircleAvatar(
+                  radius: 5, backgroundColor: AppColors.kmPink),
             ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RegionBanner extends StatelessWidget {
-  final bool inRegion;
-  final VoidCallback onClose;
-  const _RegionBanner({required this.inRegion, required this.onClose});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final bg = inRegion
-        ? AppColors.lime.withValues(alpha: 0.18)
-        : AppColors.warning.withValues(alpha: 0.20);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(AppRadius.md),
-      ),
-      child: Row(
-        children: [
-          Icon(inRegion ? Icons.check_circle_rounded : Icons.info_rounded,
-              size: 16, color: inRegion ? AppColors.lime : AppColors.warning),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              inRegion ? S.regionAvailable : S.regionUnavailable,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(fontWeight: FontWeight.w600),
-            ),
-          ),
-          GestureDetector(
-            onTap: onClose,
-            child: Icon(Icons.close_rounded,
-                size: 16, color: theme.colorScheme.onSurfaceVariant),
-          ),
         ],
       ),
     );
@@ -1161,87 +1296,99 @@ class _SearchSheetState extends State<_SearchSheet> {
       child: ConstrainedBox(
         constraints: BoxConstraints(
             maxHeight: maxSheetHeight.clamp(200, double.infinity)),
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: AppColors.igGradient, // Instagram जस्तै — same to same
-            borderRadius:
-                BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-          ),
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 42,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 14),
-                  decoration: BoxDecoration(
-                    color: Colors.white70,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.kmSurface.withValues(alpha: 0.94),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(28)),
+                border: Border(
+                  top: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.14)),
                 ),
-                TextField(
-                  controller: _c,
-                  autofocus: true,
-                  style: const TextStyle(color: Colors.white),
-                  onChanged: (v) => setState(() => _q = v),
-                  decoration: InputDecoration(
-                    hintText: S.searchHint,
-                    hintStyle: const TextStyle(color: Colors.white70),
-                    prefixIcon:
-                        const Icon(Icons.search_rounded, color: Colors.white),
-                    filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.18),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(AppRadius.md),
-                      borderSide: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.4)),
+              ),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.28),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(AppRadius.md),
-                      borderSide:
-                          const BorderSide(color: Colors.white, width: 1.4),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                ...results.map((s) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Material(
-                        color: Colors.white.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(14),
-                        child: ListTile(
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                          leading: Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            clipBehavior: Clip.antiAlias,
-                            child: Image.asset(
-                              serviceImageFor(s['name'] as String),
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Icon(
-                                  s['icon'] as IconData,
-                                  color: AppColors.igViolet,
-                                  size: 20),
-                            ),
-                          ),
-                          title: Text(S.serviceName(s['name'] as String),
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700)),
-                          subtitle: Text(s['name'] as String,
-                              style: const TextStyle(color: Colors.white70)),
-                          onTap: () => widget.onPick(s['name'] as String),
+                    TextField(
+                      controller: _c,
+                      autofocus: true,
+                      style: const TextStyle(color: AppColors.kmText),
+                      onChanged: (v) => setState(() => _q = v),
+                      decoration: InputDecoration(
+                        hintText: S.searchHint,
+                        hintStyle:
+                            const TextStyle(color: AppColors.kmMuted),
+                        prefixIcon: const Icon(Icons.search_rounded,
+                            color: AppColors.kmOrange),
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.06),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.14)),
+                        ),
+                        focusedBorder: const OutlineInputBorder(
+                          borderRadius: BorderRadius.all(Radius.circular(16)),
+                          borderSide:
+                              BorderSide(color: AppColors.kmOrange, width: 1.4),
                         ),
                       ),
-                    )),
-              ],
+                    ),
+                    const SizedBox(height: 10),
+                    ...results.map((s) => Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Material(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(16),
+                            child: ListTile(
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16)),
+                              leading: Container(
+                                width: 44,
+                                height: 44,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                clipBehavior: Clip.antiAlias,
+                                child: Image.asset(
+                                  serviceImageFor(s['name'] as String),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Icon(
+                                      s['icon'] as IconData,
+                                      color: AppColors.kmOrange,
+                                      size: 20),
+                                ),
+                              ),
+                              title: Text(S.serviceName(s['name'] as String),
+                                  style: const TextStyle(
+                                      color: AppColors.kmText,
+                                      fontWeight: FontWeight.w700)),
+                              subtitle: Text(s['name'] as String,
+                                  style: const TextStyle(
+                                      color: AppColors.kmMuted)),
+                              onTap: () => widget.onPick(s['name'] as String),
+                            ),
+                          ),
+                        )),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
@@ -1255,13 +1402,11 @@ class _SearchSheetState extends State<_SearchSheet> {
 class _HomeDrawer extends StatelessWidget {
   const _HomeDrawer();
 
-  static const String _ownerEmail = 'bikashbhandari1825@gmail.com';
-
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
     final uid = user?.uid;
-    final isOwner = user?.email == _ownerEmail;
+    final isOwner = user?.email == kAdminEmail;
 
     // Drawer बाट खोलिएको जुनसुकै sub-screen (City, Bookings, Settings,
     // Help & Support, आदि) बाट back थिच्दा सिधै "खाली" नक्सामा नखसेर, फेरि
@@ -1279,33 +1424,39 @@ class _HomeDrawer extends StatelessWidget {
       });
     }
 
-    // gradient panel माथिको glass menu button
-    Widget item(IconData icon, String label, VoidCallback onTap,
-            {Color? tint}) =>
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+    // गाढा glass menu item row (मोकअप कै `.mi`)।
+    Widget item(IconData icon, String label, VoidCallback onTap) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1.5),
           child: Material(
-            color: (tint ?? Colors.white).withValues(alpha: 0.16),
-            borderRadius: BorderRadius.circular(14),
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(18),
             child: InkWell(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(18),
               onTap: onTap,
               child: Padding(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
                 child: Row(
                   children: [
-                    Icon(icon, size: 21, color: Colors.white),
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(icon, size: 18, color: AppColors.kmLilac),
+                    ),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Text(label,
                           style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14)),
+                              color: AppColors.kmText,
+                              fontWeight: FontWeight.w500,
+                              fontSize: 14.5)),
                     ),
                     const Icon(Icons.chevron_right_rounded,
-                        color: Colors.white54, size: 20),
+                        color: AppColors.kmMuted, size: 17),
                   ],
                 ),
               ),
@@ -1315,140 +1466,164 @@ class _HomeDrawer extends StatelessWidget {
 
     return Drawer(
       backgroundColor: Colors.transparent,
-      child: DecoratedBox(
-        decoration: const BoxDecoration(gradient: AppColors.igGradient),
-        child: SafeArea(
-          child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-            stream: uid == null
-                ? null
-                : FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(uid)
-                    .snapshots(),
-            builder: (context, snap) {
-              final data = snap.data?.data() ?? {};
-              final name = (data['name'] ??
-                      '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}')
-                  .toString()
-                  .trim();
-              final role = (data['role'] ?? '').toString();
-              final isWorker = role == 'worker';
-              final selfieUrl = (data['selfieUrl'] ?? '').toString();
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.horizontal(right: Radius.circular(34)),
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const DecoratedBox(decoration: BoxDecoration(color: AppColors.kmVoid)),
+          Positioned(
+            right: -140,
+            top: 120,
+            child: IgnorePointer(
+              child: Container(
+                width: 420,
+                height: 420,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(colors: [
+                    AppColors.kmOrangeDeep.withValues(alpha: 0.34),
+                    AppColors.kmOrangeDeep.withValues(alpha: 0),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: uid == null
+                  ? null
+                  : FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(uid)
+                      .snapshots(),
+              builder: (context, snap) {
+                final data = snap.data?.data() ?? {};
+                final name = (data['name'] ??
+                        '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}')
+                    .toString()
+                    .trim();
+                final role = (data['role'] ?? '').toString();
+                final isWorker = role == 'worker';
+                final selfieUrl = (data['selfieUrl'] ?? '').toString();
 
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Profile header
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 54,
-                          height: 54,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.22),
-                            shape: BoxShape.circle,
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: selfieUrl.isEmpty
-                              ? const Icon(Icons.person_rounded,
-                                  color: Colors.white, size: 30)
-                              : Image.network(
-                                  selfieUrl,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => const Icon(
-                                      Icons.person_rounded,
-                                      color: Colors.white,
-                                      size: 30),
-                                ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(name.isEmpty ? 'KaamMitra' : name,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w800)),
-                              const SizedBox(height: 2),
-                              const Row(
-                                children: [
-                                  Icon(Icons.star_rounded,
-                                      size: 15, color: Colors.white),
-                                  SizedBox(width: 3),
-                                  Text('5.0',
-                                      style: TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 13)),
-                                ],
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Profile header
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 58,
+                            height: 58,
+                            padding: const EdgeInsets.all(3),
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: SweepGradient(colors: [
+                                AppColors.kmOrange,
+                                AppColors.kmPink,
+                                AppColors.kmPurple,
+                                AppColors.kmTeal,
+                                AppColors.kmOrange,
+                              ]),
+                            ),
+                            child: ClipOval(
+                              child: Container(
+                                color: AppColors.kmSurface,
+                                child: selfieUrl.isEmpty
+                                    ? const Icon(Icons.person_rounded,
+                                        color: AppColors.kmLilac, size: 28)
+                                    : Image.network(
+                                        selfieUrl,
+                                        key: ValueKey(selfieUrl),
+                                        fit: BoxFit.cover,
+                                        gaplessPlayback: true,
+                                        errorBuilder: (_, __, ___) =>
+                                            const Icon(Icons.person_rounded,
+                                                color: AppColors.kmLilac,
+                                                size: 28),
+                                      ),
                               ),
-                            ],
+                            ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(name.isEmpty ? 'सहयात्री' : name,
+                                    style: const TextStyle(
+                                        color: AppColors.kmText,
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w800)),
+                                const SizedBox(height: 3),
+                                const Row(
+                                  children: [
+                                    Icon(Icons.star_rounded,
+                                        size: 15, color: AppColors.kmOrange),
+                                    SizedBox(width: 4),
+                                    Text('5.0',
+                                        style: TextStyle(
+                                            color: AppColors.kmOrange,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 13.5)),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  const Divider(color: Colors.white24, height: 8),
-                  Expanded(
-                    child: ListView(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      children: [
-                        // Owner-only: Admin Dashboard entry
-                        if (isOwner)
+                    const Divider(color: Color(0x1AFFFFFF), height: 1),
+                    Expanded(
+                      child: ListView(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        children: [
+                          // Owner-only: Admin Dashboard entry
+                          if (isOwner)
+                            item(
+                                Icons.admin_panel_settings_rounded,
+                                'Admin Dashboard',
+                                () => go(const OwnerDashboardScreen())),
+                          item(Icons.location_city_rounded, S.menuCity,
+                              () => go(const SavedPlacesScreen())),
+                          item(Icons.history_rounded, S.menuRequestHistory,
+                              () => go(const BookingsScreen())),
+                          item(Icons.groups_rounded, S.menuProviders,
+                              () => go(const NearbyScreen())),
+                          item(Icons.bookmark_border_rounded, S.savedWorkers,
+                              () => go(const WatchlistScreen())),
+                          item(Icons.place_rounded, S.savedPlacesTitle,
+                              () => go(const SavedPlacesScreen())),
                           item(
-                              Icons.admin_panel_settings_rounded,
-                              'Admin Dashboard',
-                              () => go(const OwnerDashboardScreen())),
-                        item(Icons.location_city_rounded, S.menuCity,
-                            () => go(const SavedPlacesScreen())),
-                        item(Icons.history_rounded, S.menuRequestHistory,
-                            () => go(const BookingsScreen())),
-                        item(Icons.groups_rounded, S.menuProviders,
-                            () => go(const NearbyScreen())),
-                        item(Icons.bookmark_border_rounded, S.savedWorkers,
-                            () => go(const SavedWorkersScreen())),
-                        item(Icons.place_rounded, S.savedPlacesTitle,
-                            () => go(const SavedPlacesScreen())),
-                        item(
-                            Icons.notifications_none_rounded,
-                            S.menuNotifications,
-                            () => go(const NotificationScreen())),
-                        item(Icons.star_border_rounded, S.myReviews,
-                            () => go(const MyReviewsScreen())),
-                        item(Icons.payment_rounded, S.paymentMethods,
-                            () => go(const PaymentMethodsScreen())),
-                        item(Icons.message_rounded, S.messages,
-                            () => go(const MessagesScreen())),
-                        item(Icons.settings_rounded, S.settings,
-                            () => go(const SettingsPage())),
-                        item(Icons.help_outline_rounded, S.helpSupport,
-                            () => go(const HelpSupportScreen())),
-                        item(Icons.support_agent_rounded, S.menuSupport,
-                            () => go(const HelpSupportScreen())),
-                      ],
+                              Icons.notifications_none_rounded,
+                              S.menuNotifications,
+                              () => go(const NotificationScreen())),
+                          item(Icons.star_border_rounded, S.myReviews,
+                              () => go(const MyReviewsScreen())),
+                          item(Icons.payment_rounded, S.paymentMethods,
+                              () => go(const PaymentMethodsScreen())),
+                          item(Icons.message_rounded, S.messages,
+                              () => go(const MessagesScreen())),
+                          item(Icons.settings_rounded, S.settings,
+                              () => go(const SettingsPage())),
+                          item(Icons.help_outline_rounded, S.helpSupport,
+                              () => go(const HelpSupportScreen())),
+                          item(Icons.support_agent_rounded, S.menuSupport,
+                              () => go(const HelpSupportScreen())),
+                        ],
+                      ),
                     ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.workspace_premium_rounded,
-                            color: Colors.white),
-                        label: Text(
-                            isWorker ? S.providerMode : S.becomeProvider,
-                            style: const TextStyle(color: Colors.white)),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.white70),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.pill)),
-                        ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+                      child: KmCtaButton(
+                        icon: Icons.workspace_premium_rounded,
+                        label: isWorker ? S.providerMode : S.becomeProvider,
+                        height: 54,
                         onPressed: () {
                           Navigator.pop(context);
                           Navigator.push(
@@ -1462,12 +1637,12 @@ class _HomeDrawer extends StatelessWidget {
                         },
                       ),
                     ),
-                  ),
-                ],
-              );
-            },
+                  ],
+                );
+              },
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

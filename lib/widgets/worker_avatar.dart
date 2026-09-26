@@ -40,9 +40,16 @@ class WorkerAvatar extends StatelessWidget {
         return ClipOval(
           child: Image.network(
             url,
+            key: ValueKey(url),
             width: size,
             height: size,
             fit: BoxFit.cover,
+            // यो widget StreamBuilder भित्र छ — providers/{uid} doc कुनै
+            // पनि field बदलिँदा (selfieUrl आफैं नबदलिए पनि) rebuild हुन्छ।
+            // `gaplessPlayback` बिना हरेक rebuild मा फोटो एक फ्रेमको लागि
+            // हराएर फेरि देखिने (झिपिक-झिपिक) — chat_screen.dart मै फेला
+            // परेको उही bug class, यहाँ पनि उस्तै फिक्स।
+            gaplessPlayback: true,
             errorBuilder: (_, __, ___) => _fallback(),
           ),
         );

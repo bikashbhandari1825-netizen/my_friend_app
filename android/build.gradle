@@ -13,6 +13,70 @@ subprojects {
     project.evaluationDependsOn(':app')
 }
 
+// कतिपय पुराना/unmaintained pub package (जस्तै flutter_jailbreak_detection
+// 1.10.0) को Android build.gradle मा `namespace` तोकिएको हुँदैन — यो
+// project ले चलाइरहेको नयाँ Android Gradle Plugin मा त्यो अनिवार्य भएकोले
+// "Namespace not specified" भनेर build नै असफल हुन्छ। यहाँ त्यस्तो
+// हरेक (missing namespace भएको) Android library module को लागि, त्यसैको
+// पुरानो-शैली AndroidManifest.xml भित्रको `package="..."` attribute बाटै
+// namespace स्वतः लिने — साँचो code कतै नबदली, केवल build-config compat
+// shim।
+subprojects { proj ->
+    def applyMissingNamespaceFix = {
+        if (proj.plugins.hasPlugin('com.android.library')) {
+            def androidExt = proj.extensions.findByName('android')
+            if (androidExt != null && androidExt.hasProperty('namespace') && androidExt.namespace == null) {
+                def manifestFile = proj.file('src/main/AndroidManifest.xml')
+                if (manifestFile.exists()) {
+                    def manifestText = manifestFile.text
+                    def matcher = (manifestText =~ /package\s*=\s*"([^"]+)"/)
+                    if (matcher.find()) {
+                        androidExt.namespace = matcher.group(1)
+                    }
+                }
+            }
+        }
+    }
+    // त्यही पुराना package हरूले Kotlin जवाफदेही `jvmTarget` पनि प्रस्ट
+    // नराख्दा, Kotlin compiler ले यो मेसिनमा जे JDK चलिरहेको छ त्यही
+    // (यहाँ 25, धेरै नयाँ) अनुमान गर्छ — जुन module कै आफ्नै Java भाग
+    // (डिफल्ट 11) सँग नमिली "Inconsistent JVM Target Compatibility" भनेर
+    // build तोड्छ। यहाँ पनि app कै (android/app/build.gradle) उस्तै १७
+    // मै दुवै (Java + Kotlin) तोकिदिने।
+    def applyJvmTargetFix = {
+        if (proj.plugins.hasPlugin('com.android.library')) {
+            def androidExt = proj.extensions.findByName('android')
+            if (androidExt != null) {
+                try {
+                    androidExt.compileOptions {
+                        sourceCompatibility JavaVersion.VERSION_17
+                        targetCompatibility JavaVersion.VERSION_17
+                    }
+                } catch (ignored) {}
+            }
+        }
+        proj.tasks.matching { it.name.startsWith('compile') && it.name.endsWith('Kotlin') }.configureEach { t ->
+            try {
+                t.kotlinOptions.jvmTarget = '17'
+            } catch (ignored) {}
+        }
+    }
+    // माथिकै `evaluationDependsOn(':app')` ले गर्दा यहाँसम्म आइपुग्दा
+    // कतिपय subproject पहिल्यै evaluate भइसकेको हुन सक्छ — त्यस्तोमा
+    // `afterEvaluate` कल गर्दा नै "already evaluated" भनेर build तोडिन्थ्यो।
+    // यहाँ त्यो अवस्था छुट्याएर, पहिल्यै भइसकेको भए तुरुन्तै (afterEvaluate
+    // बिनै), नभएको भए सामान्य afterEvaluate मार्फत लागू गर्ने।
+    if (proj.state.executed) {
+        applyMissingNamespaceFix()
+        applyJvmTargetFix()
+    } else {
+        proj.afterEvaluate {
+            applyMissingNamespaceFix()
+            applyJvmTargetFix()
+        }
+    }
+}
+
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }

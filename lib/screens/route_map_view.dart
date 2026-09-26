@@ -17,6 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../l10n/strings.dart';
 import '../location_util.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_ui.dart';
 import 'nearby_common.dart'
     show
         bearingBetween,
@@ -101,6 +102,18 @@ class _RouteMapViewState extends State<RouteMapView>
   BitmapDescriptor? _originIcon;
   Offset? _pulseAt;
 
+  // Uber-शैलीको "बगेको लाइट" — रुटको पोलिलाइनमाथि सानो उज्यालो खण्ड
+  // (comet-tail) निरन्तर अगाडि सर्दै loop हुने। हरेक frame मा setState
+  // (polylines Set rebuild) महँगो हुने भएकोले ~18fps मा throttle गरिएको —
+  // आँखाले सहज नै देख्छ, तर माथिको marker-glide कै जस्तो per-frame
+  // platform-channel/rebuild jank निम्त्याउँदैन।
+  late final AnimationController _lightCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  )..repeat();
+  double _lightProgress = 0;
+  DateTime _lastLightTick = DateTime.fromMillisecondsSinceEpoch(0);
+
   // Direction-facing live marker — पहिले यहाँ हरेक GPS बिन्दुबीच सहज
   // गरी सर्ने/घुम्ने animated navigation-arrow थियो, जुन प्रत्येक movement
   // मा ~900ms सम्म frame-by-frame GoogleMap rebuild गराउँथ्यो — तर त्यो
@@ -130,6 +143,7 @@ class _RouteMapViewState extends State<RouteMapView>
   @override
   void initState() {
     super.initState();
+    _lightCtrl.addListener(_onLightTick);
     destinationFlagPin().then((b) {
       if (mounted) setState(() => _flagIcon = b);
     });
@@ -161,6 +175,51 @@ class _RouteMapViewState extends State<RouteMapView>
         a.latitude + (b.latitude - a.latitude) * t,
         a.longitude + (b.longitude - a.longitude) * t,
       );
+
+  void _onLightTick() {
+    final now = DateTime.now();
+    if (now.difference(_lastLightTick).inMilliseconds < 55) return; // ~18fps cap
+    _lastLightTick = now;
+    if (mounted) setState(() => _lightProgress = _lightCtrl.value);
+  }
+
+  /// route.points माथि, कुल दूरीको [windowFraction] जति लामो एउटा चम्किलो
+  /// "comet" खण्ड — [progress] (0→1, लुप हुने) ले route कै सुरुदेखि अन्त्यसम्म
+  /// स्थिरगतिमा (point density जतिसुकै असमान भए पनि, दूरी-आधारित interpolation
+  /// भएकोले) सारिन्छ। route.points सानो भए (<2) खाली सूची फर्काउँछ।
+  List<LatLng> _lightWindowPoints(List<LatLng> points, double progress,
+      {double windowFraction = 0.09}) {
+    if (points.length < 2) return const [];
+    final cum = List<double>.filled(points.length, 0);
+    for (var i = 1; i < points.length; i++) {
+      cum[i] = cum[i - 1] +
+          haversineKm(points[i - 1].latitude, points[i - 1].longitude,
+              points[i].latitude, points[i].longitude);
+    }
+    final total = cum.last;
+    if (total <= 0) return const [];
+
+    LatLng interpAt(double dist) {
+      dist = dist.clamp(0.0, total);
+      for (var i = 1; i < cum.length; i++) {
+        if (cum[i] >= dist) {
+          final segLen = cum[i] - cum[i - 1];
+          final t = segLen <= 0 ? 0.0 : (dist - cum[i - 1]) / segLen;
+          return _lerpLatLng(points[i - 1], points[i], t);
+        }
+      }
+      return points.last;
+    }
+
+    final headDist = progress * total;
+    final tailDist = (headDist - total * windowFraction).clamp(0.0, total);
+    final result = <LatLng>[interpAt(tailDist)];
+    for (var i = 0; i < points.length; i++) {
+      if (cum[i] > tailDist && cum[i] < headDist) result.add(points[i]);
+    }
+    result.add(interpAt(headDist));
+    return result;
+  }
 
   /// नयाँ GPS बिन्दु आउनेबित्तिकै — हालको (देखिइरहेको, नयाँ आउनुअघिकै)
   /// स्थानबाट यो नयाँ स्थानसम्म सहज गरी सार्ने (glide), सिधै "jump" होइन।
@@ -237,6 +296,7 @@ class _RouteMapViewState extends State<RouteMapView>
   void dispose() {
     _pulse.dispose();
     _moveCtrl.dispose();
+    _lightCtrl.dispose();
     _map?.dispose();
     super.dispose();
   }
@@ -431,23 +491,62 @@ class _RouteMapViewState extends State<RouteMapView>
                     markerPos: widget.destination,
                   ),
                 ].whereType<Polyline>(),
+                // ── Uber-शैलीको बगेको लाइट — मुख्य purple रेखामाथि नै ──
+                if (route != null && route.points.length >= 2)
+                  ...() {
+                    final win = _lightWindowPoints(route.points, _lightProgress);
+                    if (win.length < 2) return const <Polyline>[];
+                    return [
+                      // बाहिरी नरम glow — फराकिलो, कम-alpha।
+                      Polyline(
+                        polylineId: const PolylineId('route_light_glow'),
+                        points: win,
+                        color: Colors.white.withValues(alpha: 0.35),
+                        width: 14,
+                        jointType: JointType.round,
+                        startCap: Cap.roundCap,
+                        endCap: Cap.roundCap,
+                        zIndex: 2,
+                      ),
+                      // भित्री चम्किलो core — पातलो, लगभग-सेतो।
+                      Polyline(
+                        polylineId: const PolylineId('route_light_core'),
+                        points: win,
+                        color: Colors.white.withValues(alpha: 0.95),
+                        width: 5,
+                        jointType: JointType.round,
+                        startCap: Cap.roundCap,
+                        endCap: Cap.roundCap,
+                        zIndex: 3,
+                      ),
+                    ];
+                  }(),
             },
           ),
 
           // ── इनड्राइभ-शैलीको धड्किने halo, स्थिर काम-स्थलको पिनमाथि ──
+          // दुवै overlay आफ्नै RepaintBoundary — "बगेको लाइट" एनिमेसनले
+          // (माथिको GoogleMap कै polylines Set) हरेक tick मा यो पूरै
+          // build() दोहोर्‍याउँछ, तर यी दुई (स्थिर summary pill, आफ्नै
+          // बेग्लै `_pulse` controller ले चलेको halo) कुनै हालतमा त्यही
+          // कारणले repaint हुनु पर्दैन।
           if (_pulseAt != null)
-            Positioned(
-              left: _pulseAt!.dx - 70,
-              top: _pulseAt!.dy - 70,
-              child: PulseRings(t: _pulse, color: AppColors.igViolet),
+            RepaintBoundary(
+              child: Positioned(
+                left: _pulseAt!.dx - 70,
+                top: _pulseAt!.dy - 70,
+                child: PulseRings(t: _pulse, color: AppColors.kmPurple),
+              ),
             ),
 
           // ── दूरी/समय — नक्सामाथि सधैँ देखिने pill, कुनै tap नचाहिने ──
-          Positioned(
-            top: 14,
-            left: 12,
-            right: 12,
-            child: Center(child: _summaryPill(theme)),
+          RepaintBoundary(
+            child: Positioned(
+              top: 14,
+              left: 12,
+              right: 12,
+              child: Center(child: _summaryPill(theme)),
+            ),
           ),
         ],
       ),
@@ -462,23 +561,25 @@ class _RouteMapViewState extends State<RouteMapView>
         mainAxisSize: MainAxisSize.min,
         children: [
           const Icon(Icons.location_off_rounded,
-              size: 15, color: AppColors.warning),
+              size: 15, color: AppColors.kmAmber),
           const SizedBox(width: 8),
           Flexible(
             child: Text(S.locationNeededForRoute,
-                style:
-                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                style: const TextStyle(
+                    color: AppColors.kmText,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600)),
           ),
           const SizedBox(width: 8),
           TextButton(
             onPressed: openLocationAppSettings,
             style: TextButton.styleFrom(
+                foregroundColor: AppColors.kmOrange,
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap),
             child: Text(S.openSettings,
-                style:
-                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
           ),
         ],
       );
@@ -489,19 +590,22 @@ class _RouteMapViewState extends State<RouteMapView>
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Icon(Icons.location_off_rounded,
-                    size: 15, color: AppColors.warning),
+                    size: 15, color: AppColors.kmAmber),
                 const SizedBox(width: 8),
                 Flexible(
                   child: Text(
                       widget.originMissingMessage ?? S.locationNeededForRoute,
                       style: const TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600)),
+                          color: AppColors.kmText,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600)),
                 ),
                 if (widget.onRetryOrigin != null) ...[
                   const SizedBox(width: 8),
                   TextButton(
                     onPressed: widget.onRetryOrigin,
                     style: TextButton.styleFrom(
+                        foregroundColor: AppColors.kmOrange,
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap),
@@ -521,12 +625,14 @@ class _RouteMapViewState extends State<RouteMapView>
         mainAxisSize: MainAxisSize.min,
         children: [
           const Icon(Icons.error_outline_rounded,
-              size: 15, color: AppColors.warning),
+              size: 15, color: AppColors.kmAmber),
           const SizedBox(width: 8),
           Flexible(
             child: Text(S.routeUnavailable,
-                style:
-                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                style: const TextStyle(
+                    color: AppColors.kmText,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600)),
           ),
         ],
       );
@@ -538,18 +644,21 @@ class _RouteMapViewState extends State<RouteMapView>
           // timeline icon भन्दा प्रस्ट, ride-hailing app जस्तै तुरुन्तै
           // चिनिने। `!route.real` (fallback source) भए मात्र त्यो जनाउने
           // छुट्टै icon तल थपिन्छ।
-          Icon(route.mode.icon, size: 16, color: const Color(0xFF111111)),
+          Icon(route.mode.icon, size: 16, color: AppColors.kmText),
           const SizedBox(width: 8),
           Text(
             '${route.km.toStringAsFixed(route.km < 10 ? 1 : 0)} km  ·  ${S.minutesShort(route.minutes)}',
-            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5),
+            style: const TextStyle(
+                color: AppColors.kmText,
+                fontWeight: FontWeight.w800,
+                fontSize: 13.5),
           ),
           if (!route.real) ...[
             const SizedBox(width: 6),
             Tooltip(
               message: S.routeFallbackWarning,
               child: const Icon(Icons.info_outline_rounded,
-                  size: 14, color: AppColors.warning),
+                  size: 14, color: AppColors.kmAmber),
             ),
           ],
           if (widget.navigateTarget != null) ...[
@@ -559,11 +668,11 @@ class _RouteMapViewState extends State<RouteMapView>
               child: Container(
                 padding: const EdgeInsets.all(5),
                 decoration: const BoxDecoration(
-                  gradient: AppColors.buttonGradient,
+                  gradient: AppColors.kmCtaGradient,
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(Icons.navigation_rounded,
-                    size: 14, color: Colors.white),
+                    size: 14, color: AppColors.kmInk),
               ),
             ),
           ],
@@ -571,16 +680,9 @@ class _RouteMapViewState extends State<RouteMapView>
       );
     }
 
-    return Container(
+    return GlassPanel2(
+      radius: AppRadius.pill,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(AppRadius.pill),
-        boxShadow: const [
-          BoxShadow(
-              color: Colors.black26, blurRadius: 12, offset: Offset(0, 4)),
-        ],
-      ),
       child: content,
     );
   }
@@ -591,11 +693,14 @@ class _RouteMapViewState extends State<RouteMapView>
           const SizedBox(
               width: 14,
               height: 14,
-              child: CircularProgressIndicator(strokeWidth: 2)),
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: AppColors.kmOrange)),
           const SizedBox(width: 9),
           Text(label,
-              style:
-                  const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+              style: const TextStyle(
+                  color: AppColors.kmText,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600)),
         ],
       );
 }

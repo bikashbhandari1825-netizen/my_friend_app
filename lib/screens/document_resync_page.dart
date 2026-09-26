@@ -12,7 +12,7 @@ import '../l10n/strings.dart';
 import '../services/document_service.dart';
 import '../services/upload_validation.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 
 class DocumentResyncPage extends StatefulWidget {
   const DocumentResyncPage({super.key});
@@ -137,60 +137,66 @@ class _DocumentResyncPageState extends State<DocumentResyncPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: gradientAppBar(S.docsResyncTitle),
-      body: AppGradientBackground(
-        glows: false,
-        child: SafeArea(
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
-            child: Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(S.docsNotUploadedBody,
-                      style: const TextStyle(fontSize: 13.5, height: 1.4)),
-                  const SizedBox(height: 18),
-                  _PickTile(
-                    label: _frontName ?? S.citizenshipFront,
-                    done: _frontBytes != null,
-                    icon: Icons.badge_rounded,
-                    onTap: _busy ? null : _pickFront,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                KmScreenHeader(title: S.docsResyncTitle),
+                const SizedBox(height: 16),
+                GlassPanel(
+                  radius: AppRadius.lg,
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(S.docsNotUploadedBody,
+                          style: const TextStyle(
+                              color: AppColors.kmMuted,
+                              fontSize: 13.5,
+                              height: 1.4)),
+                      const SizedBox(height: 18),
+                      _PickTile(
+                        label: _frontName ?? S.citizenshipFront,
+                        done: _frontBytes != null,
+                        icon: Icons.badge_rounded,
+                        onTap: _busy ? null : _pickFront,
+                      ),
+                      const SizedBox(height: 12),
+                      _PickTile(
+                        label: _backName ?? S.citizenshipBack,
+                        done: _backBytes != null,
+                        icon: Icons.badge_outlined,
+                        onTap: _busy ? null : _pickBack,
+                      ),
+                      const SizedBox(height: 12),
+                      _PickTile(
+                        label: S.selectSelfie,
+                        done: _selfieBytes != null,
+                        icon: Icons.camera_front_rounded,
+                        onTap: _busy ? null : _takeSelfie,
+                      ),
+                      if (_error != null) ...[
+                        const SizedBox(height: 14),
+                        Text(_error!,
+                            style: const TextStyle(
+                                color: AppColors.kmRose, fontSize: 12.5)),
+                      ],
+                      const SizedBox(height: 22),
+                      KmCtaButton(
+                        label: S.uploadNow,
+                        icon: Icons.cloud_upload_rounded,
+                        loading: _busy,
+                        onPressed: _upload,
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  _PickTile(
-                    label: _backName ?? S.citizenshipBack,
-                    done: _backBytes != null,
-                    icon: Icons.badge_outlined,
-                    onTap: _busy ? null : _pickBack,
-                  ),
-                  const SizedBox(height: 12),
-                  _PickTile(
-                    label: S.selectSelfie,
-                    done: _selfieBytes != null,
-                    icon: Icons.camera_front_rounded,
-                    onTap: _busy ? null : _takeSelfie,
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 14),
-                    Text(_error!,
-                        style: const TextStyle(
-                            color: AppColors.danger, fontSize: 12.5)),
-                  ],
-                  const SizedBox(height: 22),
-                  PrimaryButton(
-                    label: S.uploadNow,
-                    icon: Icons.cloud_upload_rounded,
-                    loading: _busy,
-                    onPressed: _upload,
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -219,20 +225,22 @@ class _PickTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(AppRadius.md),
           border: Border.all(
-              color: done ? AppColors.success : Theme.of(context).dividerColor,
+              color: done ? AppColors.kmTeal : Colors.white.withValues(alpha: 0.14),
               width: done ? 1.6 : 1),
         ),
         child: Row(
           children: [
             Icon(done ? Icons.check_circle_rounded : icon,
-                color: done ? AppColors.success : AppColors.igViolet),
+                color: done ? AppColors.kmTeal : AppColors.kmOrange),
             const SizedBox(width: 12),
             Expanded(
                 child: Text(label,
-                    style: const TextStyle(fontWeight: FontWeight.w600))),
-            const Icon(Icons.chevron_right_rounded, color: Colors.black38),
+                    style: const TextStyle(
+                        color: AppColors.kmText, fontWeight: FontWeight.w600))),
+            const Icon(Icons.chevron_right_rounded, color: AppColors.kmMuted),
           ],
         ),
       ),

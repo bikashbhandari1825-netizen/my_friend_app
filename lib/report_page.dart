@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'theme/app_theme.dart';
+import 'widgets/glass_ui.dart';
 
 // मुख्य Report Options पेज (Bullying, Scam, 18+ Content छान्ने ठाउँ)
 class ReportOptionsPage extends StatelessWidget {
@@ -12,55 +13,62 @@ class ReportOptionsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Report a Problem'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 1,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          ListTile(
-            leading: const Icon(Icons.warning_amber, color: Colors.red),
-            title: const Text('Bullying, Harassment or Abuse'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (context) => const BullyingReportPage()),
-              );
-            },
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const KmScreenHeader(title: 'Report a Problem'),
+                const SizedBox(height: 20),
+                KmListTile(
+                  icon: Icons.warning_amber_rounded,
+                  iconBg: const LinearGradient(
+                      colors: [AppColors.kmRose, AppColors.kmPink]),
+                  title: 'Bullying, Harassment or Abuse',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const BullyingReportPage()),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                KmListTile(
+                  icon: Icons.report_problem_rounded,
+                  iconBg: const LinearGradient(
+                      colors: [AppColors.kmOrange, AppColors.kmOrangeDeep]),
+                  title: 'Scam Fraud',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const ScamReportPage()),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                KmListTile(
+                  icon: Icons.block_rounded,
+                  iconBg: const LinearGradient(
+                      colors: [AppColors.kmPurple, AppColors.kmPurpleDeep]),
+                  title: 'Sexually explicit or 18+ content',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const ContentReportPage()),
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
-          const Divider(),
-          ListTile(
-            leading: const Icon(Icons.report_problem, color: Colors.orange),
-            title: const Text('Scam Fraud'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const ScamReportPage()),
-              );
-            },
-          ),
-          const Divider(),
-          ListTile(
-            leading: const Icon(Icons.block, color: Colors.purple),
-            title: const Text(
-                'Problem involving sexually explicit or 18+ content'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (context) => const ContentReportPage()),
-              );
-            },
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -106,65 +114,39 @@ class BullyingReportPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        backgroundColor: AppColors.igViolet,
-        foregroundColor: Colors.white,
-        title: const Text('Back'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Person being harassed',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const KmScreenHeader(title: 'Person being harassed'),
+                const SizedBox(height: 30),
+                KmCtaButton(
+                  label: 'Me',
+                  icon: Icons.arrow_forward_rounded,
+                  onPressed: () => _submitReport(
+                    context: context,
+                    category: 'Bullying, Harassment or Abuse',
+                    details: 'Me',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                KmCtaButton(
+                  label: 'A friend',
+                  icon: Icons.arrow_forward_rounded,
+                  onPressed: () => _submitReport(
+                    context: context,
+                    category: 'Bullying, Harassment or Abuse',
+                    details: 'A friend',
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 30),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => _submitReport(
-                  context: context,
-                  category: 'Bullying, Harassment or Abuse',
-                  details: 'Me',
-                ),
-                icon: const Icon(Icons.arrow_forward, color: Colors.white),
-                label: const Text('Me', style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.igViolet,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => _submitReport(
-                  context: context,
-                  category: 'Bullying, Harassment or Abuse',
-                  details: 'A friend',
-                ),
-                icon: const Icon(Icons.arrow_forward, color: Colors.white),
-                label: const Text('A friend',
-                    style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.igViolet,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -190,73 +172,67 @@ class _ScamReportPageState extends State<ScamReportPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: AppColors.igViolet,
-        foregroundColor: Colors.white,
-        title: const Text('Scam Fraud'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'समस्या छान्नुहोस्',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            ..._issues.map((issue) => RadioListTile<String>(
-                  title: Text(issue),
-                  value: issue,
-                  groupValue: _selectedIssue,
-                  activeColor: AppColors.igViolet,
-                  onChanged: (val) => setState(() => _selectedIssue = val),
-                )),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _selectedIssue == null
-                    ? null
-                    : () => _submitReport(
-                          context: context,
-                          category: 'Scam Fraud',
-                          details: '${_selectedIssue!} - Me',
-                        ),
-                icon: const Icon(Icons.arrow_forward, color: Colors.white),
-                label: const Text('Me', style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.igViolet,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const KmScreenHeader(title: 'Scam Fraud'),
+                const SizedBox(height: 20),
+                Text('समस्या छान्नुहोस्',
+                    style: const TextStyle(
+                        color: AppColors.kmText,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                GlassPanel(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(
+                    children: _issues
+                        .map((issue) => RadioListTile<String>(
+                              title: Text(issue,
+                                  style: const TextStyle(
+                                      color: AppColors.kmText)),
+                              value: issue,
+                              groupValue: _selectedIssue,
+                              activeColor: AppColors.kmOrange,
+                              onChanged: (val) =>
+                                  setState(() => _selectedIssue = val),
+                            ))
+                        .toList(),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _selectedIssue == null
-                    ? null
-                    : () => _submitReport(
-                          context: context,
-                          category: 'Scam Fraud',
-                          details: '${_selectedIssue!} - A friend',
-                        ),
-                icon: const Icon(Icons.arrow_forward, color: Colors.white),
-                label: const Text('A friend',
-                    style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.igViolet,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                const SizedBox(height: 24),
+                KmCtaButton(
+                  label: 'Me',
+                  icon: Icons.arrow_forward_rounded,
+                  onPressed: _selectedIssue == null
+                      ? null
+                      : () => _submitReport(
+                            context: context,
+                            category: 'Scam Fraud',
+                            details: '${_selectedIssue!} - Me',
+                          ),
                 ),
-              ),
+                const SizedBox(height: 16),
+                KmCtaButton(
+                  label: 'A friend',
+                  icon: Icons.arrow_forward_rounded,
+                  onPressed: _selectedIssue == null
+                      ? null
+                      : () => _submitReport(
+                            context: context,
+                            category: 'Scam Fraud',
+                            details: '${_selectedIssue!} - A friend',
+                          ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -269,51 +245,41 @@ class ContentReportPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: AppColors.igViolet,
-        foregroundColor: Colors.white,
-        title: const Text('Report Content'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Sexually explicit or 18+ content',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'यदि तपाईंले यस्तो सामग्री भेट्टाउनुभयो भने, कृपया Report गर्नुहोस्। यो सिधै Admin लाई पठाइनेछ।',
-              style: TextStyle(fontSize: 14, color: Colors.black87),
-            ),
-            const SizedBox(height: 30),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => _submitReport(
-                  context: context,
-                  category: '18+ Content',
-                  details: 'Reported via app',
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.igViolet,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                child: const Text(
-                  'Submit',
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const KmScreenHeader(title: 'Report Content'),
+                const SizedBox(height: 20),
+                const Text(
+                  'Sexually explicit or 18+ content',
                   style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
+                      color: AppColors.kmText,
+                      fontSize: 20,
                       fontWeight: FontWeight.bold),
                 ),
-              ),
+                const SizedBox(height: 12),
+                const Text(
+                  'यदि तपाईंले यस्तो सामग्री भेट्टाउनुभयो भने, कृपया Report गर्नुहोस्। यो सिधै Admin लाई पठाइनेछ।',
+                  style: TextStyle(fontSize: 14, color: AppColors.kmMuted),
+                ),
+                const SizedBox(height: 30),
+                KmCtaButton(
+                  label: 'Submit',
+                  onPressed: () => _submitReport(
+                    context: context,
+                    category: '18+ Content',
+                    details: 'Reported via app',
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

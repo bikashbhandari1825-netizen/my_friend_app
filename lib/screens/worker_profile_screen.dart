@@ -12,7 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/worker_avatar.dart';
 import '../widgets/worker_stats.dart';
 import 'chat_screen.dart';
@@ -33,90 +33,80 @@ class WorkerProfileScreen extends StatelessWidget {
     final name = worker['name'] ?? '';
     final service = worker['service'] ?? '';
 
-    await showDialog(
+    await showKmDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadius.lg)),
-        title: Text(S.requestServiceFrom(name)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(S.serviceName(service),
-                style: const TextStyle(
-                    color: AppColors.igViolet, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: detailsController,
-              decoration: InputDecoration(
-                labelText: S.describeYourTask,
-                border: const OutlineInputBorder(),
-                hintText: S.describeTaskHint,
-              ),
-              maxLines: 3,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(S.cancel),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.igViolet,
-                foregroundColor: Colors.white),
-            onPressed: () async {
-              if (detailsController.text.trim().isEmpty) return;
-
-              final priceStr = (worker['price'] ?? 'Rs. 500')
-                  .replaceAll(RegExp(r'[^0-9]'), '');
-              final price = num.tryParse(priceStr) ?? 500;
-
-              final currentUser = FirebaseAuth.instance.currentUser;
-
-              await FirebaseFirestore.instance
-                  .collection('serviceRequests')
-                  .add({
-                'workerUid': worker['uid'] ?? '',
-                'employerUid': currentUser?.uid ?? '',
-                'employerName': currentUser?.email ?? 'Employer',
-                'workerName': name,
-                'service': service,
-                'details': detailsController.text.trim(),
-                'proposedPrice': price,
-                'status': 'pending_worker',
-                'createdAt': FieldValue.serverTimestamp(),
-              });
-
-              if (!context.mounted) return;
-              Navigator.pop(context);
-
-              await showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadius.lg)),
-                  title: Text(S.serviceRequestSentTitle),
-                  content: Text(S.serviceRequestSentBody),
-                  actions: [
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        Navigator.pop(context);
-                      },
-                      child: Text(S.ok),
-                    ),
-                  ],
-                ),
-              );
-            },
-            child: Text(S.sendRequest,
-                style: const TextStyle(color: Colors.white)),
+      title: S.requestServiceFrom(name),
+      icon: Icons.send_rounded,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(S.serviceName(service),
+              style: const TextStyle(
+                  color: AppColors.kmOrange, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: detailsController,
+            style: const TextStyle(color: AppColors.kmText),
+            decoration:
+                kmInputDecoration(S.describeYourTask, hint: S.describeTaskHint),
+            maxLines: 3,
           ),
         ],
       ),
+      actions: [
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.pop(context),
+        ),
+        KmDialogAction(
+          label: S.sendRequest,
+          filled: true,
+          onPressed: () async {
+            if (detailsController.text.trim().isEmpty) return;
+
+            final priceStr = (worker['price'] ?? 'Rs. 500')
+                .replaceAll(RegExp(r'[^0-9]'), '');
+            final price = num.tryParse(priceStr) ?? 500;
+
+            final currentUser = FirebaseAuth.instance.currentUser;
+
+            await FirebaseFirestore.instance.collection('serviceRequests').add({
+              'workerUid': worker['uid'] ?? '',
+              'employerUid': currentUser?.uid ?? '',
+              'employerName': currentUser?.email ?? 'Employer',
+              'workerName': name,
+              'service': service,
+              'details': detailsController.text.trim(),
+              'proposedPrice': price,
+              'status': 'pending_worker',
+              'createdAt': FieldValue.serverTimestamp(),
+            });
+
+            if (!context.mounted) return;
+            Navigator.pop(context);
+
+            await showKmDialog(
+              context: context,
+              title: S.serviceRequestSentTitle,
+              message: S.serviceRequestSentBody,
+              icon: Icons.check_circle_rounded,
+              iconBg: const LinearGradient(
+                  colors: [AppColors.kmTeal, AppColors.kmTealBlue]),
+              actions: [
+                KmDialogAction(
+                  label: S.ok,
+                  filled: true,
+                  onPressed: () {
+                    Navigator.pop(context);
+                    Navigator.pop(context);
+                  },
+                ),
+              ],
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -130,12 +120,12 @@ class WorkerProfileScreen extends StatelessWidget {
     final price = worker['price'] ?? '';
     final phone = (worker['phone'] ?? '').trim();
     final uid = worker['uid'] ?? '';
+    final vehicleDetails = (worker['vehicleDetails'] ?? '').toString();
 
-    return Scaffold(
-      backgroundColor: AppColors.igViolet,
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppColors.igGradient),
-        child: SafeArea(
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
           bottom: false,
           child: Column(
             children: [
@@ -143,10 +133,9 @@ class WorkerProfileScreen extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
                 child: Row(
                   children: [
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back_rounded,
-                          color: Colors.white),
+                    GlassIconButton(
+                      icon: Icons.arrow_back_rounded,
+                      onTap: () => Navigator.pop(context),
                     ),
                   ],
                 ),
@@ -161,11 +150,11 @@ class WorkerProfileScreen extends StatelessWidget {
                         width: 104,
                         height: 104,
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          gradient: AppColors.kmCtaGradient,
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.18),
+                                color: Colors.black.withValues(alpha: 0.25),
                                 blurRadius: 18,
                                 offset: const Offset(0, 8)),
                           ],
@@ -174,8 +163,8 @@ class WorkerProfileScreen extends StatelessWidget {
                         child: WorkerAvatar(
                           uid: uid,
                           size: 98,
-                          backgroundColor: Colors.white,
-                          iconColor: AppColors.igViolet,
+                          backgroundColor: AppColors.kmSurface,
+                          iconColor: AppColors.kmOrange,
                         ),
                       ),
                       const SizedBox(height: 14),
@@ -184,18 +173,19 @@ class WorkerProfileScreen extends StatelessWidget {
                           style: const TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.w800,
-                              color: Colors.white)),
+                              color: AppColors.kmText)),
                       const SizedBox(height: 6),
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 14, vertical: 5),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.18),
+                          color: Colors.white.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(AppRadius.pill),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
                         ),
                         child: Text(S.serviceName(service),
                             style: const TextStyle(
-                                color: Colors.white,
+                                color: AppColors.kmText,
                                 fontWeight: FontWeight.w700,
                                 fontSize: 12.5)),
                       ),
@@ -207,10 +197,13 @@ class WorkerProfileScreen extends StatelessWidget {
                         constraints: BoxConstraints(
                           minHeight: MediaQuery.of(context).size.height * 0.4,
                         ),
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.vertical(
+                        decoration: BoxDecoration(
+                          color: AppColors.kmSurface.withValues(alpha: 0.92),
+                          borderRadius: const BorderRadius.vertical(
                               top: Radius.circular(28)),
+                          border: Border(
+                            top: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+                          ),
                         ),
                         padding: const EdgeInsets.fromLTRB(20, 24, 20, 28),
                         child: Column(
@@ -239,30 +232,34 @@ class WorkerProfileScreen extends StatelessWidget {
                               label: S.locationRowLabel,
                               value: location.isEmpty ? '—' : location,
                             ),
+                            if (vehicleDetails.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              _InfoRow(
+                                icon: Icons.two_wheeler_rounded,
+                                label: S.vehicleDetails,
+                                value: vehicleDetails,
+                              ),
+                            ],
                             const SizedBox(height: 12),
                             Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 14, vertical: 10),
                               decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    AppColors.igViolet.withValues(alpha: 0.10),
-                                    AppColors.igYellow.withValues(alpha: 0.10),
-                                  ],
-                                ),
+                                color: AppColors.kmTeal.withValues(alpha: 0.12),
                                 borderRadius:
                                     BorderRadius.circular(AppRadius.pill),
+                                border: Border.all(color: AppColors.kmTeal.withValues(alpha: 0.3)),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   const Icon(Icons.verified_rounded,
-                                      size: 18, color: AppColors.igViolet),
+                                      size: 18, color: AppColors.kmTeal),
                                   const SizedBox(width: 8),
                                   Text(
                                     '${S.kycVerified} · ${S.documentAvailable}',
                                     style: const TextStyle(
-                                        color: AppColors.igViolet,
+                                        color: AppColors.kmTeal,
                                         fontWeight: FontWeight.w700,
                                         fontSize: 12.5),
                                   ),
@@ -291,24 +288,24 @@ class WorkerProfileScreen extends StatelessWidget {
                                   padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
                                     border: Border.all(
-                                        color: const Color(0xFFEDEDF2)),
+                                        color: Colors.white.withValues(alpha: 0.1)),
                                     borderRadius:
                                         BorderRadius.circular(AppRadius.md),
                                   ),
                                   child: Row(
                                     children: [
                                       const Icon(Icons.photo_library_rounded,
-                                          color: AppColors.igViolet),
+                                          color: AppColors.kmOrange),
                                       const SizedBox(width: 12),
                                       Expanded(
                                         child: Text(S.workPortfolio,
                                             style: const TextStyle(
                                                 fontWeight: FontWeight.w700,
                                                 fontSize: 14,
-                                                color: Colors.black87)),
+                                                color: AppColors.kmText)),
                                       ),
                                       const Icon(Icons.chevron_right_rounded,
-                                          color: Colors.black38),
+                                          color: AppColors.kmMuted),
                                     ],
                                   ),
                                 ),
@@ -324,16 +321,16 @@ class WorkerProfileScreen extends StatelessWidget {
             ],
           ),
         ),
-      ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Container(
-          color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
-          child: PrimaryButton(
-            label: S.sendRequest,
-            icon: Icons.send_rounded,
-            onPressed: () => _sendServiceRequest(context),
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: Container(
+            color: AppColors.kmSurface.withValues(alpha: 0.94),
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+            child: KmCtaButton(
+              label: S.sendRequest,
+              icon: Icons.send_rounded,
+              onPressed: () => _sendServiceRequest(context),
+            ),
           ),
         ),
       ),
@@ -419,12 +416,12 @@ class _ContactSection extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Icon(Icons.lock_outline_rounded,
-                      size: 13, color: Colors.black45),
+                      size: 13, color: AppColors.kmMuted),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(S.contactLockedCaption,
                         style: const TextStyle(
-                            fontSize: 11.5, color: Colors.black54)),
+                            fontSize: 11.5, color: AppColors.kmMuted)),
                   ),
                 ],
               ),
@@ -469,7 +466,7 @@ class _ContactRow extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFFEDEDF2)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
               borderRadius: BorderRadius.circular(AppRadius.md),
             ),
             child: Row(
@@ -479,12 +476,12 @@ class _ContactRow extends StatelessWidget {
                   height: 42,
                   decoration: BoxDecoration(
                     gradient:
-                        locked ? null : AppColors.buttonGradient,
-                    color: locked ? Colors.black12 : null,
+                        locked ? null : AppColors.kmCtaGradient,
+                    color: locked ? Colors.white.withValues(alpha: 0.08) : null,
                     shape: BoxShape.circle,
                   ),
                   child: Icon(locked ? Icons.lock_rounded : icon,
-                      color: locked ? Colors.black45 : Colors.white,
+                      color: locked ? AppColors.kmMuted : AppColors.kmInk,
                       size: 20),
                 ),
                 const SizedBox(width: 12),
@@ -495,19 +492,19 @@ class _ContactRow extends StatelessWidget {
                       Text(label,
                           style: const TextStyle(
                               fontSize: 11.5,
-                              color: Colors.black54,
+                              color: AppColors.kmMuted,
                               fontWeight: FontWeight.w600)),
                       Text(value,
                           style: const TextStyle(
                               fontSize: 14.5,
                               fontWeight: FontWeight.w800,
-                              color: Colors.black87)),
+                              color: AppColors.kmText)),
                     ],
                   ),
                 ),
                 if (!locked)
                   const Icon(Icons.chevron_right_rounded,
-                      color: Colors.black38),
+                      color: AppColors.kmMuted),
               ],
             ),
           ),
@@ -530,12 +527,13 @@ class _StatTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
         decoration: BoxDecoration(
-          color: AppColors.igViolet.withValues(alpha: 0.07),
+          color: Colors.white.withValues(alpha: 0.06),
           borderRadius: BorderRadius.circular(AppRadius.md),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
         ),
         child: Column(
           children: [
-            Icon(icon, color: AppColors.igViolet, size: 22),
+            Icon(icon, color: AppColors.kmOrange, size: 22),
             const SizedBox(height: 8),
             Text(value,
                 maxLines: 1,
@@ -544,14 +542,14 @@ class _StatTile extends StatelessWidget {
                 style: const TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 14.5,
-                    color: Colors.black87)),
+                    color: AppColors.kmText)),
             const SizedBox(height: 2),
             Text(label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
                 style:
-                    const TextStyle(fontSize: 11, color: Colors.black54)),
+                    const TextStyle(fontSize: 11, color: AppColors.kmMuted)),
           ],
         ),
       ),
@@ -571,12 +569,13 @@ class _InfoRow extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF7F6FA),
+        color: Colors.white.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
       child: Row(
         children: [
-          Icon(icon, color: AppColors.igViolet, size: 20),
+          Icon(icon, color: AppColors.kmOrange, size: 20),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -585,7 +584,7 @@ class _InfoRow extends StatelessWidget {
                 Text(label,
                     style: const TextStyle(
                         fontSize: 11.5,
-                        color: Colors.black54,
+                        color: AppColors.kmMuted,
                         fontWeight: FontWeight.w600)),
                 Text(value,
                     maxLines: 2,
@@ -593,7 +592,7 @@ class _InfoRow extends StatelessWidget {
                     style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
-                        color: Colors.black87)),
+                        color: AppColors.kmText)),
               ],
             ),
           ),

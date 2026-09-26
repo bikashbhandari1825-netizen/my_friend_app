@@ -12,11 +12,14 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../l10n/strings.dart';
 import '../location_util.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
+import '../widgets/app_ui.dart' show GradientActionButton;
+import '../widgets/glass_ui.dart';
 import '../widgets/job_alert_sound.dart';
+import '../widgets/worker_menu_drawer.dart';
 import 'job_actions.dart';
 import 'job_map_screen.dart';
 import 'nearby_common.dart';
+import 'notification_screen.dart';
 
 class JobFeedScreen extends StatefulWidget {
   const JobFeedScreen({super.key});
@@ -36,6 +39,15 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
 
   int? _radiusKm; // null = सबै
   String _tradeFilter = '__mine__'; // '__mine__' | '__all__' | 'Plumber' ...
+
+  // Driver Control Dashboard कै "Ride Preferences" बाट सेट हुने — users/{uid}
+  // मा नै बचत हुन्छ (driverSearchRadiusKm/driverVehicleFilter/driverAutoAccept/
+  // driverOnBreak)। पहिलो snapshot मा मात्र radius/trade प्रारम्भिक मान यहीँबाट
+  // लिने (त्यसपछि chip tap ले session भरि override गर्न सक्ने — Firestore बाट
+  // फेरि नफर्किने)।
+  bool _prefsApplied = false;
+  bool _autoAccept = false;
+  bool _onBreak = false;
 
   // नयाँ काम आउनेबित्तिकै ting-ting बजाउन पहिले देखिसकेका job id हरू ट्र्याक।
   final Set<String> _seenJobIds = {};
@@ -75,19 +87,35 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   void initState() {
     super.initState();
     _initLocation();
-    _jobsStream.listen(_onJobsSnapshot);
+    _jobsStream.listen(_onJobsSnapshot, onError: (e) {
+      // यो screen कै काम-सूची मात्र हो, sign-in/routing यसमा भर पर्दैन —
+      // network/permission त्रुटि आए पनि screen खाली/स्थिर रहन्छ, crash होइन।
+      debugPrint('JobFeedScreen jobsStream error: $e');
+    });
     _userStream.listen((snap) {
-      final s = (snap.data()?['service'] ?? snap.data()?['serviceType'] ?? '')
-          .toString();
-      final activeId = (snap.data()?['activeJobId'] ?? '').toString();
-      final cancelCount = (snap.data()?['workerCancelCount'] as num?) ?? 0;
+      final d = snap.data() ?? {};
+      final s = (d['service'] ?? d['serviceType'] ?? '').toString();
+      final activeId = (d['activeJobId'] ?? '').toString();
+      final cancelCount = (d['workerCancelCount'] as num?) ?? 0;
       if (mounted) {
         setState(() {
           _myService = s;
           _myActiveJobId = activeId;
           _myCancelCount = cancelCount.toInt();
+          _autoAccept = d['driverAutoAccept'] == true;
+          _onBreak = d['driverOnBreak'] == true;
+          if (!_prefsApplied) {
+            _prefsApplied = true;
+            final savedRadius = d['driverSearchRadiusKm'];
+            if (savedRadius is num) _radiusKm = savedRadius.toInt();
+            final savedTrade = (d['driverVehicleFilter'] ?? '').toString();
+            if (savedTrade.isNotEmpty) _tradeFilter = savedTrade;
+          }
         });
+        _recomputeIncoming();
       }
+    }, onError: (e) {
+      debugPrint('JobFeedScreen userStream error: $e');
     });
   }
 
@@ -120,13 +148,37 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
       return;
     }
     final candidate = _pickIncomingCandidate(snap.docs);
-    if (mounted) setState(() => _currentIncoming = candidate);
+    _setIncoming(candidate);
+  }
+
+  /// `_currentIncoming` सेट गर्ने एकमात्र ठाउँ — साथसाथै Auto-Accept
+  /// (Driver Dashboard कै Ride Preferences बाट अन गरिएको भए) पनि यहीँबाट जाँच।
+  void _setIncoming(({String id, Map<String, dynamic> data})? candidate) {
+    if (!mounted) return;
+    setState(() => _currentIncoming = candidate);
+    _maybeAutoAcceptRide(candidate);
+  }
+
+  /// Auto-Accept: राइड (isRide==true) अनुरोध हो, अरू कुनै सक्रिय कामले
+  /// नरोकेको हो भने, passenger कै प्रस्तावित मूल्यमै आफैं offer पठाइदिने —
+  /// driver ले हरेकपटक हातैले "Send Offer" थिच्नु नपरोस्।
+  Future<void> _maybeAutoAcceptRide(
+      ({String id, Map<String, dynamic> data})? candidate) async {
+    if (!_autoAccept || candidate == null) return;
+    if ((candidate.data['isRide'] ?? false) != true) return;
+    if (_myActiveJobId.isNotEmpty && _myActiveJobId != candidate.id) return;
+    final price = (candidate.data['proposedPrice'] as num?) ?? 0;
+    if (price <= 0) return;
+    if (!mounted) return;
+    await submitRideOffer(context, candidate.id, candidate.data, price: price);
   }
 
   /// अहिलेको filter (सीप/दूरी) र session भरिको skip/reject अनुसार सबैभन्दा
   /// नजिकको उपलब्ध काम छान्ने (कोही नभए null)।
   ({String id, Map<String, dynamic> data})? _pickIncomingCandidate(
       List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    // Break Mode — online रहे पनि नयाँ काम/राइड देखिनु/मिल्नु हुँदैन।
+    if (_onBreak) return null;
     final wantTrade = _tradeFilter == '__mine__'
         ? _myService
         : (_tradeFilter == '__all__' ? '' : _tradeFilter);
@@ -168,7 +220,7 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   void _skipIncoming(String id) {
     _skippedIds.add(id);
     final candidate = _pickIncomingCandidate(_lastJobDocs);
-    setState(() => _currentIncoming = candidate);
+    _setIncoming(candidate);
   }
 
   /// Accept/Decline/Counter पछि — तुरुन्तै overlay हटाउने (Auto-Dismiss)।
@@ -238,7 +290,7 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   void _recomputeIncoming() {
     final candidate = _pickIncomingCandidate(_lastJobDocs);
     if (_currentIncoming?.id == candidate?.id) return;
-    setState(() => _currentIncoming = candidate);
+    _setIncoming(candidate);
   }
 
   /// अनलाइन/अफलाइन toggle — रोजगारदाताको नक्सामा देखिने/नदेखिने।
@@ -285,22 +337,33 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
     final screenH = MediaQuery.of(context).size.height;
     return Scaffold(
       extendBodyBehindAppBar: true,
-      backgroundColor: Colors.black,
+      backgroundColor: AppColors.kmVoid,
+      drawer: const WorkerMenuDrawer(),
       appBar: AppBar(
         title: Text(S.openJobsNearby,
             style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w800)),
+                color: AppColors.kmText, fontWeight: FontWeight.w800)),
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
+        foregroundColor: AppColors.kmText,
         elevation: 0,
         flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.buttonGradient),
+          decoration: BoxDecoration(gradient: AppColors.kmCtaGradient),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.notifications_none_rounded),
+            tooltip: S.menuNotifications,
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const NotificationScreen()),
+            ),
+          ),
+        ],
       ),
       body: _uid == null
           ? const Center(
               child: Text('Login गर्नुहोस्',
-                  style: TextStyle(color: Colors.white)))
+                  style: TextStyle(color: AppColors.kmText)))
           : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
               stream: _userStream,
               builder: (context, userSnap) {
@@ -329,11 +392,15 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                       minChildSize: _sheetMin,
                       maxChildSize: _sheetMax,
                       builder: (context, scrollController) => Container(
-                        decoration: const BoxDecoration(
-                          gradient: AppColors.igGradient,
-                          borderRadius: BorderRadius.vertical(
+                        decoration: BoxDecoration(
+                          color: AppColors.kmVoid2.withValues(alpha: 0.97),
+                          borderRadius: const BorderRadius.vertical(
                               top: Radius.circular(AppRadius.lg)),
-                          boxShadow: [
+                          border: Border(
+                            top: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.12)),
+                          ),
+                          boxShadow: const [
                             BoxShadow(
                                 color: Colors.black45,
                                 blurRadius: 18,
@@ -432,8 +499,8 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
         if (!snap.hasData) {
           return const SliverFillRemaining(
             hasScrollBody: false,
-            child:
-                Center(child: CircularProgressIndicator(color: Colors.white)),
+            child: Center(
+                child: CircularProgressIndicator(color: AppColors.kmOrange)),
           );
         }
 
@@ -486,13 +553,21 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
           sliver: SliverList.separated(
             itemCount: rows.length,
             separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, i) => _JobCard(
-              docId: rows[i].id,
-              data: rows[i].data,
-              distanceKm: rows[i].km,
-              myService: myService,
-              blockedByOtherActiveJob:
-                  _myActiveJobId.isNotEmpty && _myActiveJobId != rows[i].id,
+            // `key` नभई नयाँ राइड अनुरोध बीचमा थपिँदा/हराउँदा (सूची पुनः-क्रम
+            // हुँदा) Flutter ले पुरानै index-based element नै पुनः-प्रयोग
+            // गर्ने भएकोले कार्डको आफ्नै भित्री state (जस्तै counter-offer
+            // dialog) गलत card मा टाँसिन सक्थ्यो। RepaintBoundary ले अर्को
+            // कार्ड अपडेट हुँदा यो नछोइने।
+            itemBuilder: (context, i) => RepaintBoundary(
+              key: ValueKey(rows[i].id),
+              child: _JobCard(
+                docId: rows[i].id,
+                data: rows[i].data,
+                distanceKm: rows[i].km,
+                myService: myService,
+                blockedByOtherActiveJob:
+                    _myActiveJobId.isNotEmpty && _myActiveJobId != rows[i].id,
+              ),
             ),
           ),
         );
@@ -504,19 +579,19 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.radar_rounded, size: 60, color: Colors.white70),
+            const Icon(Icons.radar_rounded, size: 60, color: AppColors.kmMuted),
             const SizedBox(height: 14),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 40),
               child: Text(S.noOpenJobs,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white)),
+                  style: const TextStyle(color: AppColors.kmText)),
             ),
             if (_locTried && _approxLocation) ...[
               const SizedBox(height: 8),
               Text(S.enableLocationForDistance,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                  style: const TextStyle(color: AppColors.kmMuted, fontSize: 12)),
             ],
           ],
         ),
@@ -561,6 +636,7 @@ class _IncomingOfferOverlay extends StatelessWidget {
     final service = (data['service'] ?? '').toString();
     final desc = (data['details'] ?? '').toString();
     final address = (data['address'] ?? '').toString();
+    final destinationAddress = (data['destinationAddress'] ?? '').toString();
     final budget = data['proposedPrice'];
     final skillMismatch = myService.isNotEmpty &&
         myService.toLowerCase() != service.toLowerCase();
@@ -584,18 +660,10 @@ class _IncomingOfferOverlay extends StatelessWidget {
           child: child,
         ),
       ),
-      child: Container(
+      child: GlassPanel(
+        radius: AppRadius.lg,
         padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.35),
-                blurRadius: 22,
-                offset: const Offset(0, 10)),
-          ],
-        ),
+        fill: AppColors.kmVoid2.withValues(alpha: 0.94),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -603,19 +671,19 @@ class _IncomingOfferOverlay extends StatelessWidget {
             Row(
               children: [
                 const Icon(Icons.notifications_active_rounded,
-                    size: 15, color: AppColors.igRed),
+                    size: 15, color: AppColors.kmPink),
                 const SizedBox(width: 5),
                 Text(S.newJobNotifTitle,
                     style: const TextStyle(
                         fontSize: 11.5,
                         fontWeight: FontWeight.w800,
-                        color: AppColors.igRed)),
+                        color: AppColors.kmPink)),
                 const Spacer(),
                 IconButton(
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                   iconSize: 18,
-                  icon: const Icon(Icons.close_rounded, color: Colors.black38),
+                  icon: const Icon(Icons.close_rounded, color: AppColors.kmMuted),
                   onPressed: onSkip,
                 ),
               ],
@@ -627,7 +695,7 @@ class _IncomingOfferOverlay extends StatelessWidget {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: const Color(0x11833AB4),
+                    color: Colors.white.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   clipBehavior: Clip.antiAlias,
@@ -635,7 +703,7 @@ class _IncomingOfferOverlay extends StatelessWidget {
                     serviceImageFor(service),
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => Icon(serviceIconFor(service),
-                        color: AppColors.igViolet),
+                        color: AppColors.kmOrange),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -645,11 +713,13 @@ class _IncomingOfferOverlay extends StatelessWidget {
                     children: [
                       Text(S.serviceName(service),
                           style: const TextStyle(
-                              fontWeight: FontWeight.w800, fontSize: 15.5)),
+                              color: AppColors.kmText,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 15.5)),
                       if (distanceKm != null)
                         Text(S.distanceLabel(distanceKm!),
                             style: const TextStyle(
-                                fontSize: 11.5, color: Colors.black45)),
+                                fontSize: 11.5, color: AppColors.kmMuted)),
                     ],
                   ),
                 ),
@@ -657,14 +727,14 @@ class _IncomingOfferOverlay extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
-                    color: AppColors.igRed.withValues(alpha: 0.12),
+                    color: AppColors.kmPink.withValues(alpha: 0.14),
                     borderRadius: BorderRadius.circular(AppRadius.pill),
                   ),
                   child: Text('${S.customerBudget}: Rs. $budget',
                       style: const TextStyle(
                           fontSize: 10.5,
                           fontWeight: FontWeight.w800,
-                          color: AppColors.igRed)),
+                          color: AppColors.kmPink)),
                 ),
               ],
             ),
@@ -673,7 +743,7 @@ class _IncomingOfferOverlay extends StatelessWidget {
               Text(desc,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13, color: Colors.black87)),
+                  style: const TextStyle(fontSize: 13, color: AppColors.kmMuted)),
             ],
             if (address.isNotEmpty) ...[
               const SizedBox(height: 6),
@@ -681,14 +751,34 @@ class _IncomingOfferOverlay extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Icon(Icons.place_outlined,
-                      size: 14, color: Colors.black45),
+                      size: 14, color: AppColors.kmMuted),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(address,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontSize: 12, color: Colors.black54)),
+                            fontSize: 12, color: AppColors.kmMuted)),
+                  ),
+                ],
+              ),
+            ],
+            if (destinationAddress.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.flag_outlined,
+                      size: 14, color: AppColors.kmOrange),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text('${S.destinationLabel}: $destinationAddress',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.kmOrange)),
                   ),
                 ],
               ),
@@ -698,14 +788,14 @@ class _IncomingOfferOverlay extends StatelessWidget {
               Row(
                 children: [
                   const Icon(Icons.lock_outline_rounded,
-                      size: 14, color: AppColors.danger),
+                      size: 14, color: AppColors.kmRose),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(S.notAuthorizedForJobCategory,
                         style: const TextStyle(
                             fontSize: 11.5,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.danger)),
+                            color: AppColors.kmRose)),
                   ),
                 ],
               ),
@@ -714,19 +804,22 @@ class _IncomingOfferOverlay extends StatelessWidget {
               Row(
                 children: [
                   const Icon(Icons.lock_clock_rounded,
-                      size: 14, color: AppColors.warning),
+                      size: 14, color: AppColors.kmAmber),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(S.finishCurrentJobFirst,
                         style: const TextStyle(
                             fontSize: 11.5,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.warning)),
+                            color: AppColors.kmAmber)),
                   ),
                 ],
               ),
             ],
             const SizedBox(height: 12),
+            if ((data['isRide'] ?? false) == true)
+              _SendRideOfferButton(docId: docId, data: data, blocked: blocked)
+            else
             Row(
               children: [
                 Expanded(
@@ -736,8 +829,8 @@ class _IncomingOfferOverlay extends StatelessWidget {
                       onAction();
                     },
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.danger,
-                      side: const BorderSide(color: AppColors.danger),
+                      foregroundColor: AppColors.kmRose,
+                      side: const BorderSide(color: AppColors.kmRose),
                       padding: const EdgeInsets.symmetric(vertical: 11),
                     ),
                     child: Text(S.decline),
@@ -754,8 +847,8 @@ class _IncomingOfferOverlay extends StatelessWidget {
                                 myService: myService);
                           },
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.igViolet,
-                      side: const BorderSide(color: AppColors.igViolet),
+                      foregroundColor: AppColors.kmOrange,
+                      side: const BorderSide(color: AppColors.kmOrange),
                       padding: const EdgeInsets.symmetric(vertical: 11),
                     ),
                     child: Text(S.offerPrice, textAlign: TextAlign.center),
@@ -772,8 +865,8 @@ class _IncomingOfferOverlay extends StatelessWidget {
                                 myService: myService);
                           },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.igViolet,
-                      foregroundColor: Colors.white,
+                      backgroundColor: AppColors.kmOrange,
+                      foregroundColor: AppColors.kmInk,
                       padding: const EdgeInsets.symmetric(vertical: 11),
                     ),
                     child: Text(S.accept,
@@ -785,6 +878,193 @@ class _IncomingOfferOverlay extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Ride-Hailing (Bike/Car) मात्र — सामान्य Decline/Offer/Accept row को सट्टा
+/// यो देखिन्छ। धेरै driver ले एकैचोटि प्रस्ताव पठाउन सक्ने भएकोले (parent
+/// doc कहिल्यै claim नगरी), आफूले पहिल्यै यो राइडका लागि प्रस्ताव
+/// पठाइसकेको भए फेरि नपठाइयोस् भनेर आफ्नै `rideOffers/{myUid}` doc लाइभ
+/// जाँच्छ।
+class _SendRideOfferButton extends StatelessWidget {
+  final String docId;
+  final Map<String, dynamic> data;
+  final bool blocked;
+  const _SendRideOfferButton({
+    required this.docId,
+    required this.data,
+    required this.blocked,
+  });
+
+  Future<void> _openOfferDialog(BuildContext context) async {
+    final suggested = (data['proposedPrice'] as num?)?.toInt() ?? 200;
+    final controller = TextEditingController(text: suggested.toString());
+    await showKmDialog(
+      context: context,
+      title: S.offerPrice,
+      icon: Icons.local_offer_rounded,
+      content: TextField(
+        controller: controller,
+        keyboardType: TextInputType.number,
+        autofocus: true,
+        style: const TextStyle(color: AppColors.kmText),
+        decoration: kmInputDecoration(S.yourPriceRs),
+      ),
+      actions: [
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        KmDialogAction(
+          label: 'Send',
+          filled: true,
+          onPressed: () {
+            final price = num.tryParse(controller.text.trim());
+            Navigator.of(context).pop();
+            if (price == null) return;
+            submitRideOffer(context, docId, data, price: price);
+          },
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('serviceRequests')
+          .doc(docId)
+          .collection('rideOffers')
+          .doc(uid)
+          .snapshots(),
+      builder: (context, snap) {
+        final existing = snap.data?.data();
+        if (existing != null) {
+          final status = (existing['status'] ?? 'pending').toString();
+          // passenger ले फरक मूल्य प्रस्ताव फिर्ता पठाएको — यहीँबाट
+          // driver ले accept/decline गर्न पाउँछ।
+          if (status == 'passenger_countered') {
+            final counter = existing['passengerCounterPrice'];
+            return Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.kmOrange.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('${S.counterBack}: Rs. $counter',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w700, color: AppColors.kmOrange)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () =>
+                              driverDeclinePassengerCounter(docId, uid),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.kmRose,
+                            side: const BorderSide(color: AppColors.kmRose),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 10),
+                          ),
+                          child: Text(S.decline,
+                              style: const TextStyle(fontSize: 12.5)),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => driverCounterOffer(
+                              context, docId, uid, (counter as num?) ?? 0),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.kmOrange,
+                            side: const BorderSide(color: AppColors.kmOrange),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 10),
+                          ),
+                          child: Text(S.counterBack,
+                              style: const TextStyle(fontSize: 12.5)),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => driverAcceptPassengerCounter(
+                              docId, uid, (counter as num?) ?? 0),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.kmOrange,
+                            foregroundColor: AppColors.kmInk,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 10),
+                          ),
+                          child: Text(S.accept,
+                              style: const TextStyle(
+                                  fontSize: 12.5, fontWeight: FontWeight.w800)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }
+          final label = status == 'declined'
+              ? S.offerNoLongerAvailable
+              : S.youAlreadySentOffer;
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 11),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            alignment: Alignment.center,
+            child: Text(label,
+                style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.kmMuted)),
+          );
+        }
+        return Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => declineBroadcastJob(docId),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.kmRose,
+                  side: const BorderSide(color: AppColors.kmRose),
+                  padding: const EdgeInsets.symmetric(vertical: 11),
+                ),
+                child: Text(S.decline),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 2,
+              child: ElevatedButton.icon(
+                onPressed: blocked ? null : () => _openOfferDialog(context),
+                icon: const Icon(Icons.local_taxi_rounded, size: 18),
+                label: Text(S.offerPrice,
+                    style: const TextStyle(fontWeight: FontWeight.w800)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.kmOrange,
+                  foregroundColor: AppColors.kmInk,
+                  padding: const EdgeInsets.symmetric(vertical: 11),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -801,27 +1081,27 @@ class _OnlineBanner extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: online ? 0.22 : 0.12),
+        color: Colors.white.withValues(alpha: online ? 0.1 : 0.06),
         borderRadius: BorderRadius.circular(AppRadius.md),
         border: Border.all(
             color: online
-                ? AppColors.success
-                : Colors.white.withValues(alpha: 0.3)),
+                ? AppColors.kmTeal
+                : Colors.white.withValues(alpha: 0.16)),
       ),
       child: Row(
         children: [
           Icon(online ? Icons.wifi_rounded : Icons.wifi_off_rounded,
-              color: online ? AppColors.success : Colors.white70, size: 18),
+              color: online ? AppColors.kmTeal : AppColors.kmMuted, size: 18),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               online ? S.youAreOnline : S.youAreOffline,
-              style: const TextStyle(color: Colors.white, fontSize: 11.5),
+              style: const TextStyle(color: AppColors.kmText, fontSize: 11.5),
             ),
           ),
           Switch(
             value: online,
-            activeTrackColor: AppColors.success,
+            activeTrackColor: AppColors.kmTeal,
             onChanged: onChanged,
           ),
         ],
@@ -857,15 +1137,17 @@ class _FilterBar extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: active
-                    ? Colors.white
-                    : Colors.white.withValues(alpha: 0.16),
+                gradient: active ? AppColors.kmCtaGradient : null,
+                color: active ? null : Colors.white.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(AppRadius.pill),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                border: Border.all(
+                    color: active
+                        ? Colors.transparent
+                        : Colors.white.withValues(alpha: 0.16)),
               ),
               child: Text(label,
                   style: TextStyle(
-                      color: active ? AppColors.igViolet : Colors.white,
+                      color: active ? AppColors.kmInk : AppColors.kmText,
                       fontWeight: FontWeight.w700,
                       fontSize: 12.5)),
             ),
@@ -887,11 +1169,11 @@ class _FilterBar extends StatelessWidget {
           Row(
             children: [
               const Icon(Icons.social_distance_rounded,
-                  color: Colors.white70, size: 16),
+                  color: AppColors.kmMuted, size: 16),
               const SizedBox(width: 6),
               Text(S.filterDistance,
                   style: const TextStyle(
-                      color: Colors.white70,
+                      color: AppColors.kmMuted,
                       fontSize: 12,
                       fontWeight: FontWeight.w600)),
               if (!hasLocation) ...[
@@ -899,7 +1181,7 @@ class _FilterBar extends StatelessWidget {
                 Expanded(
                   child: Text(S.enableLocationForDistance,
                       style: const TextStyle(
-                          color: Colors.white38, fontSize: 10.5),
+                          color: AppColors.kmMuted, fontSize: 10.5),
                       overflow: TextOverflow.ellipsis),
                 ),
               ],
@@ -973,6 +1255,7 @@ class _JobCard extends StatelessWidget {
     final service = (data['service'] ?? '').toString();
     final desc = (data['details'] ?? '').toString();
     final address = (data['address'] ?? '').toString();
+    final destinationAddress = (data['destinationAddress'] ?? '').toString();
     final budget = data['proposedPrice'];
     final date = _fmtDate(data['preferredDate']);
     final slot = _slotLabel((data['timeSlot'] ?? 'anytime').toString());
@@ -985,12 +1268,9 @@ class _JobCard extends StatelessWidget {
         myService.toLowerCase() != service.toLowerCase();
     final blocked = skillMismatch || blockedByOtherActiveJob;
 
-    return Container(
+    return GlassPanel(
+      radius: AppRadius.lg,
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1000,7 +1280,7 @@ class _JobCard extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: const Color(0x11833AB4),
+                  color: Colors.white.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 clipBehavior: Clip.antiAlias,
@@ -1008,7 +1288,7 @@ class _JobCard extends StatelessWidget {
                   serviceImageFor(service),
                   fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) =>
-                      Icon(serviceIconFor(service), color: AppColors.igViolet),
+                      Icon(serviceIconFor(service), color: AppColors.kmOrange),
                 ),
               ),
               const SizedBox(width: 12),
@@ -1018,11 +1298,13 @@ class _JobCard extends StatelessWidget {
                   children: [
                     Text(S.serviceName(service),
                         style: const TextStyle(
-                            fontWeight: FontWeight.w800, fontSize: 15.5)),
+                            color: AppColors.kmText,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15.5)),
                     if (distanceKm != null)
                       Text(S.distanceLabel(distanceKm!),
                           style: const TextStyle(
-                              fontSize: 11.5, color: Colors.black45)),
+                              fontSize: 11.5, color: AppColors.kmMuted)),
                   ],
                 ),
               ),
@@ -1030,25 +1312,27 @@ class _JobCard extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: AppColors.igRed.withValues(alpha: 0.12),
+                  color: AppColors.kmPink.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(AppRadius.pill),
                 ),
                 child: Text('${S.customerBudget}: Rs. $budget',
                     style: const TextStyle(
                         fontSize: 10.5,
                         fontWeight: FontWeight.w800,
-                        color: AppColors.igRed)),
+                        color: AppColors.kmPink)),
               ),
             ],
           ),
           if (desc.isNotEmpty) ...[
             const SizedBox(height: 10),
             Text(desc,
-                style: const TextStyle(fontSize: 13.5, color: Colors.black87)),
+                style: const TextStyle(fontSize: 13.5, color: AppColors.kmMuted)),
           ],
           const SizedBox(height: 8),
           _row(Icons.event_rounded, '$date  ·  $slot'),
           if (address.isNotEmpty) _row(Icons.place_outlined, address),
+          if (destinationAddress.isNotEmpty)
+            _row(Icons.flag_outlined, '${S.destinationLabel}: $destinationAddress'),
           const SizedBox(height: 10),
           if (lat != null && lng != null)
             Align(
@@ -1069,19 +1353,19 @@ class _JobCard extends StatelessWidget {
                 ),
               ),
             ),
-          const Divider(height: 20),
+          Divider(height: 20, color: Colors.white.withValues(alpha: 0.1)),
           if (skillMismatch) ...[
             Row(
               children: [
                 const Icon(Icons.lock_outline_rounded,
-                    size: 14, color: AppColors.danger),
+                    size: 14, color: AppColors.kmRose),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(S.notAuthorizedForJobCategory,
                       style: const TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.danger)),
+                          color: AppColors.kmRose)),
                 ),
               ],
             ),
@@ -1090,27 +1374,30 @@ class _JobCard extends StatelessWidget {
             Row(
               children: [
                 const Icon(Icons.lock_clock_rounded,
-                    size: 14, color: AppColors.warning),
+                    size: 14, color: AppColors.kmAmber),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(S.finishCurrentJobFirst,
                       style: const TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.warning)),
+                          color: AppColors.kmAmber)),
                 ),
               ],
             ),
             const SizedBox(height: 8),
           ],
+          if ((data['isRide'] ?? false) == true)
+            _SendRideOfferButton(docId: docId, data: data, blocked: blocked)
+          else
           Row(
             children: [
               Expanded(
                 child: OutlinedButton(
                   onPressed: () => declineBroadcastJob(docId),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.danger,
-                    side: const BorderSide(color: AppColors.danger),
+                    foregroundColor: AppColors.kmRose,
+                    side: const BorderSide(color: AppColors.kmRose),
                     padding: const EdgeInsets.symmetric(vertical: 11),
                   ),
                   child: Text(S.decline),
@@ -1124,8 +1411,8 @@ class _JobCard extends StatelessWidget {
                       : () => counterBroadcastJob(context, docId, data,
                           myService: myService),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.igViolet,
-                    side: const BorderSide(color: AppColors.igViolet),
+                    foregroundColor: AppColors.kmOrange,
+                    side: const BorderSide(color: AppColors.kmOrange),
                     padding: const EdgeInsets.symmetric(vertical: 11),
                   ),
                   child: Text(S.offerPrice, textAlign: TextAlign.center),
@@ -1139,8 +1426,8 @@ class _JobCard extends StatelessWidget {
                       : () => acceptBroadcastJob(context, docId, data,
                           myService: myService),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.igViolet,
-                    foregroundColor: Colors.white,
+                    backgroundColor: AppColors.kmOrange,
+                    foregroundColor: AppColors.kmInk,
                     padding: const EdgeInsets.symmetric(vertical: 11),
                   ),
                   child: Text(S.accept,
@@ -1159,11 +1446,11 @@ class _JobCard extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, size: 14, color: Colors.black45),
+            Icon(icon, size: 14, color: AppColors.kmMuted),
             const SizedBox(width: 6),
             Expanded(
               child: Text(text,
-                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                  style: const TextStyle(fontSize: 12, color: AppColors.kmMuted)),
             ),
           ],
         ),
@@ -1190,10 +1477,10 @@ class JobLocationScreen extends StatelessWidget {
       appBar: AppBar(
         title: Text(S.jobLocationTitle),
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
+        foregroundColor: AppColors.kmText,
         elevation: 0,
         flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.buttonGradient),
+          decoration: BoxDecoration(gradient: AppColors.kmCtaGradient),
         ),
       ),
       body: Stack(
@@ -1222,37 +1509,30 @@ class JobLocationScreen extends StatelessWidget {
               left: 12,
               right: 12,
               bottom: 16,
-              child: Container(
+              child: GlassPanel(
+                radius: AppRadius.lg,
                 padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surface,
-                  borderRadius: BorderRadius.circular(AppRadius.lg),
-                  boxShadow: const [
-                    BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 14,
-                        offset: Offset(0, 4)),
-                  ],
-                ),
+                fill: AppColors.kmVoid2.withValues(alpha: 0.92),
                 child: Row(
                   children: [
-                    const Icon(Icons.place_rounded, color: AppColors.igRed),
+                    const Icon(Icons.place_rounded, color: AppColors.kmPink),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(title,
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.w800)),
+                              style: const TextStyle(
+                                  color: AppColors.kmText,
+                                  fontWeight: FontWeight.w800)),
                           const SizedBox(height: 2),
                           Text(address,
                               style: const TextStyle(
-                                  fontSize: 12.5, color: Colors.black54)),
+                                  fontSize: 12.5, color: AppColors.kmMuted)),
                           const SizedBox(height: 2),
                           Text(S.serviceAddressNote,
                               style: const TextStyle(
-                                  fontSize: 11, color: Colors.black38)),
+                                  fontSize: 11, color: AppColors.kmMuted)),
                         ],
                       ),
                     ),

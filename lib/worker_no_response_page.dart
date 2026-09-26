@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'theme/app_theme.dart';
+import 'widgets/glass_ui.dart';
 
 class WorkerNoResponsePage extends StatefulWidget {
   const WorkerNoResponsePage({super.key});
@@ -60,79 +61,70 @@ class _WorkerNoResponsePageState extends State<WorkerNoResponsePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: AppColors.igViolet,
-        foregroundColor: Colors.white,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text('Worker Don\'t Response'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'यदि तपाईंले बुक गर्नुभएको कामदारले जवाफ दिइरहनुभएको छैन भने, यहाँबाट सिधै Admin लाई सन्देश पठाउनुहोस्।',
-              style: TextStyle(fontSize: 15, color: Colors.black87),
-            ),
-            const SizedBox(height: 30),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.igViolet.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: AppColors.igViolet.withValues(alpha: 0.3)),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.message, color: AppColors.igViolet, size: 28),
-                  SizedBox(width: 10),
-                  Text(
-                    'Write a support',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _messageController,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                hintText: 'Enter your message',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Align(
-              alignment: Alignment.centerRight,
-              child: ElevatedButton.icon(
-                onPressed: _isSending ? null : _sendMessage,
-                icon: _isSending
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.send, color: Colors.white),
-                label:
-                    const Text('Send', style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.igViolet,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const KmScreenHeader(title: "Worker Don't Response"),
+                const SizedBox(height: 24),
+                const Text(
+                  'यदि तपाईंले बुक गर्नुभएको कामदारले जवाफ दिइरहनुभएको छैन भने, यहाँबाट सिधै Admin लाई सन्देश पठाउनुहोस्।',
+                  style: TextStyle(fontSize: 15, color: AppColors.kmMuted),
                 ),
-              ),
+                const SizedBox(height: 24),
+                GlassPanel(
+                  radius: 16,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: const BoxDecoration(
+                          gradient: AppColors.kmCtaGradient,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.message_rounded,
+                            color: AppColors.kmInk, size: 20),
+                      ),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Text(
+                          'Write a support',
+                          style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.kmText),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _messageController,
+                  maxLines: 5,
+                  style: const TextStyle(color: AppColors.kmText),
+                  decoration: kmInputDecoration('', hint: 'Enter your message'),
+                ),
+                const SizedBox(height: 20),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: KmCtaButton(
+                    label: 'Send',
+                    icon: Icons.send_rounded,
+                    loading: _isSending,
+                    expand: false,
+                    onPressed: _isSending ? null : _sendMessage,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

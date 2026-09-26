@@ -1,19 +1,21 @@
 // screens/nearby_common.dart
 // Nearby list र Nearby map दुवैले प्रयोग गर्ने साझा: geo helper + offer/bidding sheet।
+import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data' show Uint8List;
 import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+import '../app_globals.dart' show createNotificationForUser;
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/worker_avatar.dart';
 
 // काठमाडौँ केन्द्र — location नपाउँदा fallback।
@@ -136,7 +138,7 @@ Color serviceMarkerColor(String service) {
     case 'carpenter':
       return const Color(0xFFE1306C); // rose
     case 'painter':
-      return AppColors.igViolet;
+      return AppColors.kmPurple;
     case 'cleaner':
       return const Color(0xFF16B8C4); // cyan
     case 'driver':
@@ -148,7 +150,7 @@ Color serviceMarkerColor(String service) {
     case 'tutor':
       return const Color(0xFFC13584); // magenta
     default:
-      return AppColors.igRed;
+      return AppColors.kmPink;
   }
 }
 
@@ -252,9 +254,9 @@ Future<BitmapDescriptor> travelModeMarker(TravelMode mode) async {
   const double c = s / 2;
   const rect = Rect.fromLTWH(0, 0, s, s);
   const gradientColors = [
-    AppColors.igViolet,
-    AppColors.igRed,
-    AppColors.igYellow,
+    AppColors.kmPurple,
+    AppColors.kmPink,
+    AppColors.kmOrange,
   ];
   final haloShader = LinearGradient(
     begin: Alignment.bottomLeft,
@@ -563,9 +565,9 @@ class TravelModeChips extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12),
         height: 34,
         decoration: BoxDecoration(
-          gradient: isSelected ? AppColors.buttonGradient : null,
+          gradient: isSelected ? AppColors.kmCtaGradient : null,
           color:
-              isSelected ? null : AppColors.igViolet.withValues(alpha: 0.08),
+              isSelected ? null : AppColors.kmPurple.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(AppRadius.pill),
         ),
         child: Row(
@@ -573,13 +575,13 @@ class TravelModeChips extends StatelessWidget {
           children: [
             Icon(m.icon,
                 size: 16,
-                color: isSelected ? Colors.white : AppColors.igViolet),
+                color: isSelected ? Colors.white : AppColors.kmPurple),
             const SizedBox(width: 6),
             Text(_label(m),
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: isSelected ? Colors.white : AppColors.igViolet)),
+                    color: isSelected ? Colors.white : AppColors.kmPurple)),
           ],
         ),
       ),
@@ -606,12 +608,6 @@ Future<RoadRoute?> fetchRoadRoute(LatLng a, LatLng b,
     final data = result.data;
     final encoded = (data['polyline'] as String?) ?? '';
     final points = _decodePolyline(encoded);
-    // ROUTE-DEBUG PROBE — polyline mismatch (web straight line) कारण पत्ता लगाउन।
-    // ignore: avoid_print
-    print('[ROUTE-DEBUG] platform=${kIsWeb ? "web" : "native"} '
-        'encodedLen=${encoded.length} decodedCount=${points.length} '
-        'first3=${points.take(3).map((p) => '(${p.latitude},${p.longitude})').join(' | ')} '
-        'last3=${points.skip((points.length - 3).clamp(0, points.length)).map((p) => '(${p.latitude},${p.longitude})').join(' | ')}');
     // दुई-बिन्दुको "route" ले पनि सीधा रेखा नै बनाउँछ — त्यो पनि साँचो
     // route जस्तै कहिल्यै नदेखियोस् भनेर कम्तिमा ३ बिन्दु अनिवार्य।
     if (points.length < 3) return null;
@@ -692,7 +688,7 @@ Polyline routePolylineCasing(String id, RoadRoute route) => Polyline(
 Polyline routePolyline(String id, RoadRoute route) => Polyline(
       polylineId: PolylineId(id),
       points: route.points,
-      color: AppColors.igViolet,
+      color: AppColors.kmPurple,
       width: 7,
       jointType: JointType.round,
       startCap: Cap.roundCap,
@@ -836,17 +832,16 @@ class FlagPinGeometry {
 }
 
 BitmapDescriptor? _flagPinCache;
+Uint8List? _flagPinBytesCache;
 
-/// स्थिर काम/गन्तव्य स्थानको marker — पोल + झन्डा (चन्द्रमा+तारा सहित) +
-/// आधार-थोप्लो **सबै एउटै static bitmap भित्र**। Uber/InDrive को pin जस्तै
-/// — यो एउटै native `Marker` भएकाले नक्सा pan/zoom/rotate गर्दा यो सधैँ
-/// नक्साकै अरू सबैसँग ठ्याक्कै सँगसँगै सर्छ, छुट्टै Flutter overlay भएको
-/// भए जस्तो कहिल्यै लड्खडाउँदैन वा भाग-भाग देखिँदैन। (पहिले झन्डालाई अलग
-/// एनिमेटेड overlay बनाइएको थियो — त्यसले pan गर्दा async screen-coordinate
-/// lag का कारण पोल र झन्डा एक-अर्कादेखि छुट्टिएको देखिन्थ्यो; अब हटाइयो।)
-/// Marker मा `anchor: FlagPinGeometry.markerAnchorFraction` प्रयोग गर्नुहोस्।
-Future<BitmapDescriptor> destinationFlagPin() async {
-  final cached = _flagPinCache;
+/// पोल + झन्डा (चन्द्रमा+तारा सहित) + आधार-थोप्लो — सबै एउटै static PNG
+/// bitmap भित्र कोरिन्छ (raw bytes)। [destinationFlagPin] (native Map
+/// `Marker` का लागि) र [destinationFlagPinBytes] (plain Flutter
+/// `Image.memory` overlay का लागि, जस्तै service_map_screen.dart कै
+/// "पिन screen-center मा स्थिर रहने, नक्सा मुनि pan हुने" pattern) दुवैले
+/// यही एउटै drawing पुनः-प्रयोग गर्छन्।
+Future<Uint8List> _renderFlagPinBytes() async {
+  final cached = _flagPinBytesCache;
   if (cached != null) return cached;
 
   const double scale = 4.0;
@@ -897,16 +892,163 @@ Future<BitmapDescriptor> destinationFlagPin() async {
       (FlagPinGeometry.displayW * scale).ceil(),
       (FlagPinGeometry.displayH * scale).ceil());
   final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+  final result = bytes!.buffer.asUint8List();
+  _flagPinBytesCache = result;
+  return result;
+}
+
+/// स्थिर काम/गन्तव्य स्थानको marker — Uber/InDrive को pin जस्तै — यो एउटै
+/// native `Marker` भएकाले नक्सा pan/zoom/rotate गर्दा यो सधैँ नक्साकै अरू
+/// सबैसँग ठ्याक्कै सँगसँगै सर्छ, छुट्टै Flutter overlay भएको भए जस्तो
+/// कहिल्यै लड्खडाउँदैन वा भाग-भाग देखिँदैन। (पहिले झन्डालाई अलग एनिमेटेड
+/// overlay बनाइएको थियो — त्यसले pan गर्दा async screen-coordinate lag का
+/// कारण पोल र झन्डा एक-अर्कादेखि छुट्टिएको देखिन्थ्यो; अब हटाइयो।)
+/// Marker मा `anchor: FlagPinGeometry.markerAnchorFraction` प्रयोग गर्नुहोस्।
+Future<BitmapDescriptor> destinationFlagPin() async {
+  final cached = _flagPinCache;
+  if (cached != null) return cached;
+  final bytes = await _renderFlagPinBytes();
   // width/height दिएर Maps लाई bitmap ठ्याक्कै display size मा (48×displayH
   // logical px) देखाउन भन्ने — नत्र 4× supersampled raw pixel साइजमै (4 गुणा
   // ठूलो) देखिन्थ्यो।
   final bd = BitmapDescriptor.bytes(
-    bytes!.buffer.asUint8List(),
+    bytes,
     width: FlagPinGeometry.displayW,
     height: FlagPinGeometry.displayH,
   );
   _flagPinCache = bd;
   return bd;
+}
+
+/// उही झन्डा bitmap, तर plain Flutter widget (`Image.memory`) मा देखाउनको
+/// लागि — Google Maps-विशिष्ट `BitmapDescriptor` भन्दा फरक प्रकार।
+/// service_map_screen.dart मा "पिन screen-center मा स्थिर रहने, प्रयोगकर्ताले
+/// नक्सा नै pan गरेर आफ्नो स्थान म्यानुअली छान्ने" (Uber/inDrive-style)
+/// pattern का लागि — यहाँ कुनै coordinate-conversion/lag जोखिम छैन (पिन
+/// स्क्रिनमै स्थिर बस्छ, नक्सा मात्र चल्छ), त्यसैले माथिको "छुट्टै overlay
+/// लड्खडाउने" समस्यासँग यो फरक हो।
+Future<Uint8List> destinationFlagPinBytes() => _renderFlagPinBytes();
+
+final Map<String, BitmapDescriptor> _labeledPinIconCache = {};
+final Map<String, Offset> _labeledPinAnchorCache = {};
+
+/// Uber/inDrive-शैली — झन्डाको ठ्याक्कै माथि "Pickup"/"Drop-off" जस्तो छोटो
+/// लेबल-ब्याज सधैँ टाँसिएको एउटै static bitmap (badge + पोल + झन्डा +
+/// थोप्लो सबै एउटै PNG भित्रै baked)। किनभने यो पनि (माथिको [destinationFlagPin]
+/// जस्तै) एउटै native `Marker` हो — नक्सा pan/zoom/drag गर्दा लेबल र झन्डा
+/// सधैँ pixel-सटीक सँगसँगै सर्छन्; छुट्टै Flutter overlay/per-frame
+/// screen-coordinate projection चाहिँदैन, त्यसैले lag/overflow/misalignment
+/// को जोखिम शून्य। `anchorFraction` लाई `Marker(anchor: ...)` मा दिनैपर्छ —
+/// badge को चौडाइअनुसार साँचो GPS-बिन्दु (थोप्लो) bitmap भित्र कहाँ पर्छ
+/// भन्ने फरक-फरक हुन्छ, [FlagPinGeometry.markerAnchorFraction] (लेबल-रहित
+/// झन्डाको लागि मात्र सही) यहाँ प्रयोग गर्न मिल्दैन।
+Future<({BitmapDescriptor icon, Offset anchorFraction})> labeledFlagPin(
+    String label, Color badgeColor) async {
+  final key = '$label|${badgeColor.toARGB32()}';
+  final cachedIcon = _labeledPinIconCache[key];
+  final cachedAnchor = _labeledPinAnchorCache[key];
+  if (cachedIcon != null && cachedAnchor != null) {
+    return (icon: cachedIcon, anchorFraction: cachedAnchor);
+  }
+
+  const double scale = 4.0;
+  const double badgeH = 20;
+  const double gap = 5;
+  const double flagNaturalW = FlagPinGeometry.displayW;
+
+  final tp = TextPainter(
+    text: TextSpan(
+      text: label,
+      style: const TextStyle(
+          color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  final badgeW = (tp.width + 20).clamp(flagNaturalW, 200.0);
+  final canvasW = badgeW;
+  const canvasH = badgeH + gap + FlagPinGeometry.displayH;
+  final flagOffsetX = (canvasW - flagNaturalW) / 2;
+
+  final rec = ui.PictureRecorder();
+  final canvas = Canvas(rec);
+  canvas.scale(scale);
+
+  // ── लेबल ब्याज — माथि, क्यानभासको बीचमा केन्द्रित ──
+  final badgeRect = RRect.fromRectAndRadius(
+    Rect.fromLTWH((canvasW - badgeW) / 2, 0, badgeW, badgeH),
+    const Radius.circular(6),
+  );
+  canvas.drawRRect(badgeRect, Paint()..color = badgeColor);
+  canvas.drawRRect(
+    badgeRect,
+    Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = Colors.white.withValues(alpha: 0.55),
+  );
+  tp.paint(canvas, Offset((canvasW - tp.width) / 2, (badgeH - tp.height) / 2));
+  final pointerCx = canvasW / 2;
+  canvas.drawPath(
+    Path()
+      ..moveTo(pointerCx - 4, badgeH)
+      ..lineTo(pointerCx + 4, badgeH)
+      ..lineTo(pointerCx, badgeH + 4)
+      ..close(),
+    Paint()..color = badgeColor,
+  );
+
+  // ── झन्डा + पोल + थोप्लो — [_renderFlagPinBytes] कै उही drawing, तल sारिएको ──
+  canvas.save();
+  canvas.translate(flagOffsetX, badgeH + gap);
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      const Rect.fromLTWH(FlagPinGeometry.poleX, FlagPinGeometry.poleY,
+          FlagPinGeometry.poleW, FlagPinGeometry.poleH),
+      const Radius.circular(FlagPinGeometry.poleRadius),
+    ),
+    Paint()..color = const Color(0xFF111111),
+  );
+  final flagPath = FlagPinGeometry.flagPath();
+  final flagRect = flagPath.getBounds();
+  canvas.drawPath(
+    flagPath,
+    Paint()
+      ..shader = ui.Gradient.linear(
+          flagRect.topLeft, flagRect.bottomRight, FlagPinGeometry.flagGradient),
+  );
+  canvas.drawPath(
+    flagPath,
+    Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = FlagPinGeometry.flagStrokeWidth
+      ..strokeJoin = StrokeJoin.round
+      ..shader = ui.Gradient.linear(flagRect.topLeft, flagRect.bottomRight,
+          [badgeColor, badgeColor.withValues(alpha: 0.55)]),
+  );
+  canvas.drawPath(FlagPinGeometry.moonPath(), Paint()..color = Colors.white);
+  canvas.drawPath(FlagPinGeometry.starPath(), Paint()..color = Colors.white);
+  canvas.drawCircle(
+      FlagPinGeometry.dotCenter,
+      FlagPinGeometry.dotRadius + FlagPinGeometry.dotBorder,
+      Paint()..color = Colors.white);
+  canvas.drawCircle(
+      FlagPinGeometry.dotCenter, FlagPinGeometry.dotRadius, Paint()..color = badgeColor);
+  canvas.restore();
+
+  final img = await rec
+      .endRecording()
+      .toImage((canvasW * scale).ceil(), (canvasH * scale).ceil());
+  final bytesData = await img.toByteData(format: ui.ImageByteFormat.png);
+  final bytes = bytesData!.buffer.asUint8List();
+
+  final bd = BitmapDescriptor.bytes(bytes, width: canvasW, height: canvasH);
+  final anchorFraction = Offset(
+    (FlagPinGeometry.anchor.dx + flagOffsetX) / canvasW,
+    (FlagPinGeometry.anchor.dy + badgeH + gap) / canvasH,
+  );
+  _labeledPinIconCache[key] = bd;
+  _labeledPinAnchorCache[key] = anchorFraction;
+  return (icon: bd, anchorFraction: anchorFraction);
 }
 
 final Map<int, List<BitmapDescriptor>> _waveFramesCache = {};
@@ -1061,13 +1203,16 @@ class _OfferSheetState extends State<OfferSheet> {
         final p = (u.data()?['phone'] ?? '').toString().trim();
         if (p.isNotEmpty) employerPhone = p;
       } catch (_) {}
-      await FirebaseFirestore.instance.collection('serviceRequests').add({
-        'workerUid': widget.data['uid'] ?? widget.workerId,
+      final workerUid = (widget.data['uid'] ?? widget.workerId).toString();
+      final service = (widget.data['service'] ?? '').toString();
+      final doc =
+          await FirebaseFirestore.instance.collection('serviceRequests').add({
+        'workerUid': workerUid,
         'employerUid': user?.uid ?? '',
         'employerName': employerName,
         'employerPhone': employerPhone,
         'workerName': widget.data['name'] ?? '',
-        'service': widget.data['service'] ?? '',
+        'service': service,
         'details': _detailsCtrl.text.trim(),
         'proposedPrice': _amount,
         'status': 'pending_worker',
@@ -1078,18 +1223,45 @@ class _OfferSheetState extends State<OfferSheet> {
         'employerLat': widget.employerLat,
         'employerLng': widget.employerLng,
       });
+      // worker profile बाट सिधै पठाइएको यो offer पहिले Firestore मा मात्र
+      // लेखिँदै थियो, worker लाई कतै notify नगरी — worker ले आफैं app
+      // खोलेर आफ्नो requests list नहेरेसम्म थाहै नपाउने ("worker को home
+      // screen मा notification आउनुपर्छ" भन्ने गुनासोको साँचो जड)। अब
+      // broadcast/accept/arrival जस्तै उस्तै साझा बाटोबाट (in-app
+      // notifications collection, push miss भए पनि पछि देखिने) worker लाई
+      // पठाउने।
+      if (workerUid.isNotEmpty) {
+        unawaited(createNotificationForUser(
+          workerUid,
+          S.directOfferNotifTitle,
+          S.directOfferNotifBody(employerName, service, _amount),
+          data: {'requestId': doc.id, 'type': 'direct_offer'},
+        ));
+      }
       if (!mounted) return;
       Navigator.pop(context);
-      showDialog(
+      showKmDialog(
         context: context,
-        builder: (_) => AlertDialog(
-          title: Text(S.offerSentTitle),
-          content: Text(S.offerSentBody),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context), child: Text(S.ok)),
-          ],
-        ),
+        title: S.offerSentTitle,
+        message: S.offerSentBody,
+        icon: Icons.check_circle_rounded,
+        iconBg: const LinearGradient(
+            colors: [AppColors.kmTeal, AppColors.kmTealBlue]),
+        actions: [
+          KmDialogAction(
+            label: S.ok,
+            filled: true,
+            onPressed: () {
+              // OK थिचेपछि dialog मात्र होइन, यो पूरै nearby/map screen
+              // (जहाँबाट offer पठाइयो) पनि बन्द हुनुपर्छ — offer पहिल्यै
+              // पठाइसकेकोले उही पुरानो "Post job"/नजिकका worker list
+              // पर्दामा फर्किनु user लाई अन्योलमा पार्थ्यो (फेरि केही
+              // गर्नुपर्ने जस्तो देखिने), सिधै अघिल्लो (home) screen मा।
+              Navigator.pop(context); // dialog
+              Navigator.pop(context); // ServiceMapScreen
+            },
+          ),
+        ],
       );
     } catch (e) {
       if (!mounted) return;
@@ -1102,7 +1274,6 @@ class _OfferSheetState extends State<OfferSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final name = (widget.data['name'] ?? '').toString();
     final service = (widget.data['service'] ?? '').toString();
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
@@ -1112,116 +1283,132 @@ class _OfferSheetState extends State<OfferSheet> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
+              color: Colors.white.withValues(alpha: 0.07),
               borderRadius: BorderRadius.circular(AppRadius.pill),
-              border: Border.all(color: theme.dividerColor),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
             ),
             child: Text(label,
                 style: const TextStyle(
-                    fontSize: 12.5, fontWeight: FontWeight.w700)),
+                    color: AppColors.kmText,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700)),
           ),
         );
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
-      child: Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          borderRadius:
-              const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: theme.dividerColor,
-                borderRadius: BorderRadius.circular(2),
-              ),
+      child: ClipRRect(
+        borderRadius:
+            const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.kmGlass2Fill,
+              border: Border(
+                  top: BorderSide(color: AppColors.kmGlass2Border)),
             ),
-            const SizedBox(height: 16),
-            Row(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                WorkerAvatar(
-                    uid: (widget.data['uid'] ?? '').toString(), size: 42),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(name.isEmpty ? '—' : name,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 15)),
-                      Text(
-                          '${S.serviceName(service)}  ·  ${S.distanceLabel(widget.distanceKm)}',
-                          style: theme.textTheme.bodySmall),
-                    ],
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.24),
+                    borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            Text(
-                '${S.askingPrice}: Rs. $_asking   ·   ${S.suggestedFare}: Rs. ${estimateFare(service, widget.distanceKm)}',
-                style: theme.textTheme.bodySmall),
-            const SizedBox(height: 6),
-            Text(S.yourOffer,
-                style: const TextStyle(
-                    fontSize: 12.5, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                PriceStepButton(
-                    icon: Icons.remove_rounded,
-                    onTap: () => _setAmount(_amount - _step)),
-                const SizedBox(width: 18),
-                Column(
+                const SizedBox(height: 16),
+                Row(
                   children: [
-                    const Text('Rs.',
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    Text('$_amount',
-                        style: const TextStyle(
-                            fontSize: 34, fontWeight: FontWeight.w800)),
+                    WorkerAvatar(
+                        uid: (widget.data['uid'] ?? '').toString(), size: 42),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(name.isEmpty ? '—' : name,
+                              style: const TextStyle(
+                                  color: AppColors.kmText,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 15)),
+                          Text(
+                              '${S.serviceName(service)}  ·  ${S.distanceLabel(widget.distanceKm)}',
+                              style:
+                                  const TextStyle(color: AppColors.kmMuted)),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
-                const SizedBox(width: 18),
-                PriceStepButton(
-                    icon: Icons.add_rounded,
-                    onTap: () => _setAmount(_amount + _step)),
+                const SizedBox(height: 18),
+                Text(
+                    '${S.askingPrice}: Rs. $_asking   ·   ${S.suggestedFare}: Rs. ${estimateFare(service, widget.distanceKm)}',
+                    style: const TextStyle(color: AppColors.kmMuted)),
+                const SizedBox(height: 6),
+                Text(S.yourOffer,
+                    style: const TextStyle(
+                        color: AppColors.kmText,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    PriceStepButton(
+                        icon: Icons.remove_rounded,
+                        onTap: () => _setAmount(_amount - _step)),
+                    const SizedBox(width: 18),
+                    Column(
+                      children: [
+                        const Text('Rs.',
+                            style: TextStyle(
+                                fontSize: 12, color: AppColors.kmMuted)),
+                        Text('$_amount',
+                            style: const TextStyle(
+                                color: AppColors.kmText,
+                                fontSize: 34,
+                                fontWeight: FontWeight.w800)),
+                      ],
+                    ),
+                    const SizedBox(width: 18),
+                    PriceStepButton(
+                        icon: Icons.add_rounded,
+                        onTap: () => _setAmount(_amount + _step)),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    quickChip('−20%', (_asking * 0.8).round()),
+                    const SizedBox(width: 8),
+                    quickChip(S.askingPrice, _asking),
+                    const SizedBox(width: 8),
+                    quickChip('+10%', (_asking * 1.1).round()),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                TextField(
+                  controller: _detailsCtrl,
+                  maxLines: 2,
+                  style: const TextStyle(color: AppColors.kmText),
+                  decoration: kmInputDecoration(S.describeTask,
+                      hint: S.describeTaskHint),
+                ),
+                const SizedBox(height: 18),
+                KmCtaButton(
+                  label: S.sendOffer,
+                  icon: Icons.send_rounded,
+                  loading: _sending,
+                  onPressed: _send,
+                ),
               ],
             ),
-            const SizedBox(height: 14),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                quickChip('−20%', (_asking * 0.8).round()),
-                const SizedBox(width: 8),
-                quickChip(S.askingPrice, _asking),
-                const SizedBox(width: 8),
-                quickChip('+10%', (_asking * 1.1).round()),
-              ],
-            ),
-            const SizedBox(height: 18),
-            TextField(
-              controller: _detailsCtrl,
-              maxLines: 2,
-              decoration: InputDecoration(
-                labelText: S.describeTask,
-                hintText: S.describeTaskHint,
-              ),
-            ),
-            const SizedBox(height: 18),
-            PrimaryButton(
-              label: S.sendOffer,
-              icon: Icons.send_rounded,
-              loading: _sending,
-              onPressed: _send,
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -1235,18 +1422,17 @@ class PriceStepButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return GestureDetector(
       onTap: onTap,
       child: Container(
         width: 44,
         height: 44,
         decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest,
+          color: Colors.white.withValues(alpha: 0.07),
           shape: BoxShape.circle,
-          border: Border.all(color: theme.dividerColor),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
         ),
-        child: Icon(icon, color: theme.colorScheme.onSurface),
+        child: Icon(icon, color: AppColors.kmText),
       ),
     );
   }

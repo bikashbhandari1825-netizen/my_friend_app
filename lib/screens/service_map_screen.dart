@@ -4,17 +4,21 @@
 // (pickup) झन्डा मात्र। तल "Post job" बटनले नजिकका सबै worker लाई
 // एकैचोटि अनुरोध पठाउँछ (broadcast), अनि tracking स्क्रिन खुल्छ।
 import 'dart:async';
+import 'dart:typed_data' show Uint8List;
+import 'dart:ui' show ImageFilter;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../l10n/strings.dart';
 import '../location_util.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/worker_avatar.dart';
 import 'nearby_common.dart';
 import 'request_tracking_screen.dart';
@@ -39,7 +43,8 @@ class ServiceMapScreen extends StatefulWidget {
   State<ServiceMapScreen> createState() => _ServiceMapScreenState();
 }
 
-class _ServiceMapScreenState extends State<ServiceMapScreen> {
+class _ServiceMapScreenState extends State<ServiceMapScreen>
+    with SingleTickerProviderStateMixin {
   GoogleMapController? _map;
   StreamSubscription<Position>? _posSub;
 
@@ -51,10 +56,21 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
   double _lat = fallbackLat;
   double _lng = fallbackLng;
   bool _centeredOnce = false;
+  // `onCameraMoveStarted` हाम्रै कोडले चलाएको (`animateCamera`, जस्तै
+  // सुरुको auto-centre वा "home" बटन) कारणले पनि फायर हुन्छ, प्रयोगकर्ताले
+  // औंलाले pan गरेकै बेला मात्र होइन — त्यसैले haptic feedback प्रयोगकर्ताले
+  // साँच्चै आफैं pin/नक्सा चलाउँदा मात्र दिन (auto-centre मा अनावश्यक
+  // भाइब्रेट नहोस्), यो flag ले छुट्याउने।
+  bool _programmaticCameraMove = false;
   bool _sending = false;
   // "Confirm job details" sheet खुला हुँदा नक्साका gesture निष्क्रिय — नत्र
   // web मा बटनको tap पछाडिको Google Map ले खोस्थ्यो।
   bool _postSheetOpen = false;
+  // तल्लो प्यानल अब सधैँ पूरै खुला रहनुको सट्टा, सुरुमा बन्द/peek मात्र —
+  // माथि स्वाइप (वा header tap) गरेपछि मात्र पूरा (worker chips, भाडा
+  // stepper, Post job बटन) देखिने। बन्द छँदा header row (icon + "N
+  // providers nearby") मात्र देखिन्छ।
+  bool _panelExpanded = false;
 
   // InDrive-style: ग्राहकको प्रस्तावित मूल्य (अनुमानित भाडाबाट सुरु)।
   int? _offer;
@@ -62,12 +78,145 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
   void _setOffer(int v) =>
       setState(() => _offer = v.clamp(_priceStep, 1000000));
 
-  // दायरा filter (किमी) — null = सबै
-  int? _radiusKm = 10;
-  // प्रयोगकर्ताको आफ्नै स्थान — पोल+झन्डा+थोप्लो सबै एउटै static bitmap
-  // भित्र (Uber-style, निलो थोप्लाको सट्टा) — नक्सा pan/zoom गर्दा native
-  // marker भएकाले कहिल्यै अलग-अलग लड्खडाउँदैन।
-  BitmapDescriptor? _pickupPin;
+  // दायरा filter (किमी) — यसलाई बदल्ने UI हटाइएको भएकाले अब सधैँ यही
+  // default (10km) कायम रहन्छ (worker list यही अनुसार फिल्टर हुन्छ)।
+  final int _radiusKm = 10;
+
+  // Ride-Hailing (Bike/Car मात्र) — सामान्य सेवा (plumber/electrician) मा
+  // एउटै स्थान (काम हुने ठाउँ) भए पुग्छ, तर सवारी सेवामा pickup पछि गन्तव्य
+  // (destination) पनि छान्नुपर्छ। यही पुरानै drag-pin मेकानिजम दुई पासमा
+  // प्रयोग हुन्छ — पहिलो पास pickup (आजैकै जस्तै व्यवहार), दोस्रो पास
+  // destination; अरू सेवाहरूको व्यवहार यसले कहिल्यै छोड्दैन (`_isRide`
+  // सधैँ false रहन्छ तिनका लागि)।
+  bool get _isRide =>
+      widget.serviceType == 'Bike' || widget.serviceType == 'Car';
+  bool _pickingDestination = false;
+  double? _pickupLat;
+  double? _pickupLng;
+  String _pickupAddress = '';
+  double? _destLat;
+  double? _destLng;
+  String _destAddress = '';
+  // InDrive-शैली "Enter your route" कार्ड — तल्लो "Confirm pickup · Where
+  // to?" बटन नथिचेसम्म लुकेको रहन्छ; थिचेपछि मात्र माथि आउँछ। भित्र एकपल्टमा
+  // एउटै फिल्ड मात्र सक्रिय (खुला खोज बक्स) हुन्छ — अर्को सानो/compact
+  // पंक्तिमा खुम्चिन्छ (`_activeRouteField`: 'from'/'to'/null=दुवै खुम्चिएको)।
+  // "To" छानेपछि सिधै टक्राउँदैन — `_pendingDest*` मा पर्खिरहन्छ, प्रयोगकर्ताले
+  // "Confirm"/"Done" नथिचेसम्म।
+  bool _routeCardOpen = false;
+  String? _activeRouteField;
+  double? _pendingDestLat;
+  double? _pendingDestLng;
+  String _pendingDestAddress = '';
+  RoadRoute? _rideRoute;
+  bool _rideRouteLoading = false;
+  // Confirm भइसकेपछि pickup+destination दुवैका native marker यही एउटै
+  // custom झन्डा bitmap प्रयोग गर्छन् (Google को default नीलो/हरियो थोप्लो
+  // होइन) — त्यो बेला केन्द्रको ठूलो drag-pin overlay पहिल्यै लुकिसकेको
+  // हुन्छ, त्यसैले "दोहोरो ठूलो झन्डा" को पुरानो समस्या फेरि आउँदैन।
+  BitmapDescriptor? _flagMarkerIcon;
+  // Uber/inDrive-शैली — pickup/destination marker माथि सधैँ टाँसिएको "Pickup"/
+  // "Drop-off" लेबल-ब्याज (साँचो GPS-बिन्दु + झन्डा सँगै baked भएको एउटै
+  // native Marker bitmap — `labeledFlagPin()` हेर्नुहोस्)। `_flagMarkerIcon`
+  // माथि नै fallback कायमै — यी async load नभइन्जेलसम्म मात्र प्रयोग हुन्छ।
+  BitmapDescriptor? _pickupLabeledIcon;
+  Offset? _pickupLabeledAnchor;
+  BitmapDescriptor? _destLabeledIcon;
+  Offset? _destLabeledAnchor;
+  // Pin Drop — काम/pickup स्थान अब सधैँ GPS मै बाँधिएको छैन। झन्डा
+  // (यही bitmap, अब plain Flutter `Image.memory` overlay मार्फत) स्क्रिनकै
+  // ठ्याक्कै बीचमा स्थिर बस्छ; प्रयोगकर्ताले नक्सा नै pan गरेर मुनिको
+  // कुन बिन्दु त्यो झन्डाको मुनि पर्ने भनेर आफैं छान्छ — त्यही बिन्दु नै
+  // (`onCameraMove`/`onCameraIdle` ले `_lat`/`_lng` अपडेट गर्ने) साँचो
+  // काम/booking स्थान बन्छ। कहिल्यै लड्खडाउँदैन/भाग-भाग देखिँदैन — पिन
+  // आफैं कहिल्यै screen-position बदल्दैन, नक्सा मात्र चल्छ।
+  Uint8List? _pickupPinBytes;
+  // Pin Touch & Lift — प्रयोगकर्ताले नक्सा pan गर्न थालेकै बित्तिकै पिन
+  // हल्का माथि उठ्ने (0 = बिश्राम, 1 = उठेको), पान रोकिएपछि spring physics
+  // सहित तल "ठोक्किँदै" फर्कने (Uber/inDrive-style "nail drop" feel) —
+  // `_buildPickupPinOverlay()` ले यही value पढेर translate+scale गर्छ।
+  late final AnimationController _pinLiftCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 140),
+  );
+  // Camera pan हुँदा-हुँदै (`onCameraMove`) हरेक frame मा setState नगरी
+  // यहीं थाती राख्ने, pan रोकिएपछि (`onCameraIdle`) मात्र एकैचोटि
+  // `_lat`/`_lng` मा लागू गर्ने — नत्र थुप्रै rebuild ले pan नै jank हुन्थ्यो।
+  double? _pendingLat;
+  double? _pendingLng;
+  // प्रयोगकर्ताको साँचो live GPS — अब सिधै `_lat`/`_lng` (booking स्थान)
+  // होइन, केवल "मेरो स्थानमा फर्कनुहोस्" बटनका लागि छुट्टै राखिएको। यसले
+  // म्यानुअली छानिएको pin लाई कहिल्यै ओभरराइट गर्दैन।
+  double? _myGpsLat;
+  double? _myGpsLng;
+
+  // Pin Drop — बीचको झन्डाले ठ्याक्कै छोपेको ठाउँको पढ्न मिल्ने ठेगाना,
+  // माथि floating card मा (location_picker_page.dart कै उस्तै debounced
+  // reverse-geocode pattern)। pan रोकिएपछि (`onCameraIdle`) मात्र एकपटक
+  // — हरेक frame मा होइन, नत्र बेकारमा धेरै network call जान्थ्यो।
+  String _pinAddress = '';
+  bool _loadingPinAddress = false;
+  Timer? _addrDebounce;
+  // झन्डा tap गर्दा ठेगाना बक्स लुकाउने/देखाउने — झन्डामाथि tap गर्दा लुक्छ,
+  // प्रयोगकर्ताले फेरि पिन तानेर नयाँ ठाउँमा "ड्रप" गर्दा (साँचो Nail Drop
+  // settle) फेरि देखिन्छ (`onCameraIdle` हेर्नुहोस्)।
+  bool _addrCardHidden = false;
+  // "Where & for how much?" बटन थिचेपछि खुल्ने खोजी पट्टी (तल्लो प्यानलको
+  // ठ्याक्कै माथि) — छानेपछि फेरि बटन आकारमा फर्किन्छ।
+  bool _bottomSearchOpen = false;
+
+  /// झन्डाको भिजुअल टुप्पो (pole/flag को टुप्पो, GPS-anchor थोप्लो होइन)
+  /// स्क्रिनको तल्लो किनाराबाट कति माथि पर्छ — [_PinAddressCard] लाई
+  /// त्यही बिन्दुको ठ्याक्कै माथि टाँस्न। नक्सा/झन्डा कै उही
+  /// `top: 118, bottom: 260` padding प्रयोग गर्छ (माथि `_buildPickupPinOverlay`
+  /// हेर्नुहोस्)।
+  double _pinTipBottomOffset(BuildContext context) {
+    const topPad = 118.0;
+    const bottomPad = 260.0;
+    const displayHeight = 60.0;
+    const scale = displayHeight / FlagPinGeometry.displayH;
+    final tipAboveCenter = FlagPinGeometry.anchor.dy * scale;
+    final h = MediaQuery.of(context).size.height;
+    return (h - topPad + bottomPad) / 2 + tipAboveCenter;
+  }
+
+  void _scheduleReverseGeocode() {
+    _addrDebounce?.cancel();
+    _addrDebounce = Timer(const Duration(milliseconds: 400), _reverseGeocodePin);
+  }
+
+  Future<void> _reverseGeocodePin() async {
+    final lat = _lat, lng = _lng;
+    if (mounted) setState(() => _loadingPinAddress = true);
+    final addr = await reverseGeocode(lat, lng);
+    // पर्खँदा-पर्खँदै pin अरू सर्‍यो भने यो (अब पुरानो भइसकेको) जवाफ लागू
+    // नगर्ने — पछिल्लो `_scheduleReverseGeocode()` कै जवाफले मात्र देखिने।
+    if (!mounted || _lat != lat || _lng != lng) return;
+    setState(() {
+      // खाली जवाफले पहिल्यै देखिरहेको (सायद खोजी-नतिजाबाट आएको ठ्याक्कै)
+      // ठेगाना नामेटाउने — Nominatim असफल/rate-limit भए पनि प्रयोगकर्ताले
+      // पहिल्यै देखेको ठेगाना अचानक खाली नदेखियोस्।
+      if (addr.isNotEmpty) _pinAddress = addr;
+      _loadingPinAddress = false;
+      // Pin ↔ Input Sync — "Enter your route" कार्ड खुला र "From"/"To"
+      // सक्रिय (search-चालित होइन, नक्सा तानेरै) हुँदा पिन ड्रप भयो भने
+      // पनि त्यही फिल्डको pending मान (input text + "Confirm route" बटनको
+      // enablement दुवैले प्रयोग गर्ने) उत्तिकै ताजा हुनुपर्छ — नत्र search
+      // बाहेक drag ले कहिल्यै "Confirm route" सक्रिय गर्दैनथ्यो, र "To"
+      // बक्सले तानिएको ठाउँ कहिल्यै नदेखाउँथ्यो।
+      if (_isRide && _routeCardOpen) {
+        if (_activeRouteField == 'to') {
+          _pendingDestLat = lat;
+          _pendingDestLng = lng;
+          if (addr.isNotEmpty) _pendingDestAddress = addr;
+        } else if (_activeRouteField == 'from') {
+          _pickupLat = lat;
+          _pickupLng = lng;
+          if (addr.isNotEmpty) _pickupAddress = addr;
+        }
+      }
+    });
+  }
 
   // ── तल्लो सूचीबाट छानिएको worker (नक्सामा कुनै pin छैन — सूचीको कार्डबाटै
   // छनौट हुन्छ) ──
@@ -129,14 +278,40 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
       _lng = seedLng;
     }
     _initLocation();
-    destinationFlagPin().then((p) {
-      if (mounted) setState(() => _pickupPin = p);
+    // सुरुमा जुनसुकै भए पनि (seed/fallback/GPS) — कम्तिमा एकपटक ठेगाना
+    // अवश्य देखियोस्, GPS सफल भए पछि मात्र होइन।
+    _reverseGeocodePin();
+    destinationFlagPinBytes().then((b) {
+      if (mounted) setState(() => _pickupPinBytes = b);
     });
+    if (_isRide) {
+      destinationFlagPin().then((bd) {
+        if (mounted) setState(() => _flagMarkerIcon = bd);
+      });
+      labeledFlagPin(S.pickupLabel, AppColors.kmTeal).then((r) {
+        if (mounted) {
+          setState(() {
+            _pickupLabeledIcon = r.icon;
+            _pickupLabeledAnchor = r.anchorFraction;
+          });
+        }
+      });
+      labeledFlagPin(S.destinationLabel, AppColors.kmOrange).then((r) {
+        if (mounted) {
+          setState(() {
+            _destLabeledIcon = r.icon;
+            _destLabeledAnchor = r.anchorFraction;
+          });
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
     _posSub?.cancel();
+    _addrDebounce?.cancel();
+    _pinLiftCtrl.dispose();
     _map?.dispose();
     super.dispose();
   }
@@ -162,9 +337,12 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
         _originLng = p.longitude;
         _lat = p.latitude;
         _lng = p.longitude;
+        _myGpsLat = p.latitude;
+        _myGpsLng = p.longitude;
       });
       _recentre();
       _startTracking();
+      _reverseGeocodePin();
     } catch (_) {
       _useFallback();
     }
@@ -184,6 +362,11 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
     _recentre();
   }
 
+  /// Pin Drop — live GPS अब सिधै booking स्थान (`_lat`/`_lng`) लाई कहिल्यै
+  /// ओभरराइट गर्दैन (त्यसो भए प्रयोगकर्ताले म्यानुअली छानेको pin स्थान
+  /// हरेक ~25m हिँडाइमा फेरि आफ्नो हालको स्थानमा फर्किन्थ्यो!)। केवल
+  /// `_myGpsLat`/`_myGpsLng` ताजा राख्ने — "मेरो स्थानमा फर्कनुहोस्" बटनले
+  /// मात्र प्रयोग गर्छ।
   void _startTracking() {
     _posSub?.cancel();
     _posSub = Geolocator.getPositionStream(
@@ -194,17 +377,343 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
     ).listen((p) {
       if (!mounted) return;
       setState(() {
-        _lat = p.latitude;
-        _lng = p.longitude;
+        _myGpsLat = p.latitude;
+        _myGpsLng = p.longitude;
       });
     }, onError: (_) {});
   }
 
   Future<void> _recentre() async {
     if (_map == null) return;
+    _programmaticCameraMove = true;
     await _map!
         .animateCamera(CameraUpdate.newLatLngZoom(LatLng(_lat, _lng), 13.5));
+    _programmaticCameraMove = false;
     _centeredOnce = true;
+  }
+
+  /// "मेरो स्थानमा फर्कनुहोस्" बटन — pin drag गरेर टाढा पुगेको भए साँचो
+  /// हालको GPS स्थानमा फेरि फर्कन। GPS अझै नआएको भए (दुर्लभ) पहिले नै
+  /// पर्खेर लिने कोसिस गर्छ।
+  Future<void> _recenterToMyLocation() async {
+    var lat = _myGpsLat;
+    var lng = _myGpsLng;
+    if (lat == null || lng == null) {
+      try {
+        final p = await Geolocator.getCurrentPosition(
+          locationSettings:
+              const LocationSettings(accuracy: LocationAccuracy.medium),
+        ).timeout(const Duration(seconds: 8));
+        lat = p.latitude;
+        lng = p.longitude;
+        if (mounted) {
+          setState(() {
+            _myGpsLat = lat;
+            _myGpsLng = lng;
+          });
+        }
+      } catch (_) {
+        return;
+      }
+    }
+    if (_map == null) return;
+    _programmaticCameraMove = true;
+    await _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 15));
+    _programmaticCameraMove = false;
+    if (mounted) {
+      setState(() {
+        _lat = lat!;
+        _lng = lng!;
+      });
+    }
+    // यो programmatic move हो (`onCameraIdle` ले auto-geocode गर्दैन,
+    // माथिको note हेर्नुहोस्) — त्यसैले यहीं स्पष्ट रूपमा ताजा गर्ने।
+    _reverseGeocodePin();
+  }
+
+  // ── Ride-Hailing (Bike/Car मात्र) — pickup → destination दुई-चरण ────────────
+
+  /// पहिलो "Confirm pickup" थिच्दा — हालको pin स्थान pickup को रूपमा freeze,
+  /// अनि उही pin-drop UI लाई गन्तव्य छान्ने दोस्रो पासमा लैजाने।
+  void _confirmPickupAndStartDestination() {
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _pickupLat = _lat;
+      _pickupLng = _lng;
+      _pickupAddress = _pinAddress;
+      _pickingDestination = true;
+      _routeCardOpen = true;
+      _activeRouteField = 'to';
+    });
+  }
+
+  /// राइड कार्ड फेरि सम्पादन गर्न खोल्ने — pickup/destination जुनसुकै
+  /// पंक्तिबाट (`field` = 'from'/'to') आइपुग्न सकिन्छ। हालको destination
+  /// (भए) `_pendingDest*` मा सारेर मात्र खाली गरिन्छ — ताकि "To" सक्रिय
+  /// हुँदा त्यही पहिलेकै मूल्य pre-filled देखियोस्, प्रयोगकर्ताले नछोई
+  /// "Confirm" थिच्दा पनि उही ठाउँ कायमै रहोस्।
+  void _openRouteCardForEdit(String field) {
+    setState(() {
+      _pendingDestLat = _destLat;
+      _pendingDestLng = _destLng;
+      _pendingDestAddress = _destAddress;
+      _destLat = null;
+      _destLng = null;
+      _destAddress = '';
+      _rideRoute = null;
+      _pickingDestination = true;
+      _routeCardOpen = true;
+      _activeRouteField = field;
+    });
+  }
+
+  /// कार्डभित्रको "Confirm"/"Done" बटन — pickup + pending destination दुवै
+  /// भइसकेपछि मात्र देखिने, अनि यहीँबाट साँचो route टक्राउने।
+  Future<void> _confirmPendingRoute() async {
+    if (_pickupLat == null || _pendingDestLat == null) return;
+    // Pickup र Destination कहिल्यै एउटै बिन्दु हुन नहुने।
+    final gapKm = haversineKm(
+        _pickupLat!, _pickupLng!, _pendingDestLat!, _pendingDestLng!);
+    if (gapKm < 0.05) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(S.destinationTooCloseError)),
+      );
+      return;
+    }
+    await _finalizeRoute(
+      pLat: _pickupLat!,
+      pLng: _pickupLng!,
+      pAddr: _pickupAddress,
+      dLat: _pendingDestLat!,
+      dLng: _pendingDestLng!,
+      dAddr: _pendingDestAddress,
+    );
+    if (mounted) setState(() => _routeCardOpen = false);
+  }
+
+  /// "Enter your route" कार्डभित्रको खुम्चिएको (inactive) From/To पंक्ति —
+  /// tap गर्दा त्यो फिल्ड सक्रिय (पूरा खोज बक्स) बन्छ, अर्को स्वतः खुम्चिन्छ।
+  Widget _compactRouteRow({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String value,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.sm),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Icon(icon, size: 14, color: iconColor),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: const TextStyle(
+                          color: AppColors.kmMuted, fontSize: 10.5)),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: AppColors.kmText,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.edit_rounded, size: 15, color: AppColors.kmMuted),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// pickup + destination दुवै टक्रिएपछि (drag+confirm भएर वा सिधै search
+  /// छानेर — दुवै बाटोले यहीं आइपुग्छन्) — state फिक्स, क्यामेरा दुवै
+  /// बिन्दु देखिने गरी fit, अनि साँचो सडक route ल्याउने। यही साझा tail
+  /// प्रयोग गरेर दोहोरिनबाट जोगिइएको छ।
+  Future<void> _finalizeRoute({
+    required double pLat,
+    required double pLng,
+    required String pAddr,
+    required double dLat,
+    required double dLng,
+    required String dAddr,
+  }) async {
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _pickupLat = pLat;
+      _pickupLng = pLng;
+      _pickupAddress = pAddr;
+      _destLat = dLat;
+      _destLng = dLng;
+      _destAddress = dAddr;
+      _pickingDestination = false;
+      _rideRouteLoading = true;
+      _lat = pLat;
+      _lng = pLng;
+      // भाडा अनुमान अघिको (गन्तव्य-रहित) दूरीमा अडेको हुनसक्छ — नयाँ साँचो
+      // यात्रा-दूरी अनुसार पुनः-गणना हुन दिने।
+      _offer = null;
+    });
+    if (_map != null) {
+      _programmaticCameraMove = true;
+      final south = pLat < dLat ? pLat : dLat;
+      final west = pLng < dLng ? pLng : dLng;
+      final north = pLat > dLat ? pLat : dLat;
+      final east = pLng > dLng ? pLng : dLng;
+      await _map!.animateCamera(CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+            southwest: LatLng(south, west), northeast: LatLng(north, east)),
+        72,
+      ));
+      _programmaticCameraMove = false;
+    }
+    final route =
+        await fetchRoadRoute(LatLng(pLat, pLng), LatLng(dLat, dLng));
+    if (!mounted) return;
+    setState(() {
+      _rideRoute = route;
+      _rideRouteLoading = false;
+    });
+  }
+
+  /// "Confirm destination" थिच्दा (drag-pin बाटो) — हालको pin गन्तव्यको
+  /// रूपमा — `_finalizeRoute` कै साझा tail।
+  Future<void> _confirmDestination() async {
+    final dLat = _lat, dLng = _lng;
+    // Pickup र Destination कहिल्यै एउटै बिन्दु हुन नहुने (गन्तव्य खोज्दा
+    // नतिजा नभेटिए वा नक्सा नै नचलाई सिधै confirm थिचे, दुवै चुपचाप उही
+    // ठाउँमा अड्किरहन्थ्यो — त्यसले route/भाडा अर्थहीन बनाउँथ्यो)।
+    final gapKm = haversineKm(_pickupLat!, _pickupLng!, dLat, dLng);
+    if (gapKm < 0.05) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(S.destinationTooCloseError)),
+      );
+      return;
+    }
+    await _finalizeRoute(
+      pLat: _pickupLat!,
+      pLng: _pickupLng!,
+      pAddr: _pickupAddress,
+      dLat: dLat,
+      dLng: dLng,
+      dAddr: _pinAddress,
+    );
+  }
+
+  /// InDrive-शैली — माथिको "From" बक्समा सिधै खोजेर pickup छान्दा। गन्तव्य
+  /// पहिल्यै छानिइसकेको भए (route सम्पादन गर्दै) — pickup बदलेर route/भाडा
+  /// तुरुन्तै पुनः-गणना; नत्र (अझै pickup-चरणमै) — pin/`_pinAddress` मात्र
+  /// त्यहाँ सार्ने (drag गरे जस्तै), "Confirm pickup" अझै उपलब्ध रहन्छ।
+  Future<void> _pickSearchedPickup(String label, double lat, double lng) async {
+    HapticFeedback.selectionClick();
+    if (_destLat != null) {
+      final gapKm = haversineKm(lat, lng, _destLat!, _destLng!);
+      if (gapKm < 0.05) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(S.destinationTooCloseError)),
+        );
+        return;
+      }
+      await _finalizeRoute(
+        pLat: lat,
+        pLng: lng,
+        pAddr: label,
+        dLat: _destLat!,
+        dLng: _destLng!,
+        dAddr: _destAddress,
+      );
+      return;
+    }
+    _pinLiftCtrl.stop();
+    _pinLiftCtrl.value = 0;
+    setState(() {
+      _lat = lat;
+      _lng = lng;
+      _pinAddress = label;
+      _loadingPinAddress = false;
+      // pickup पहिल्यै "Confirm pickup" थिचेर frozen भइसकेको भए (गन्तव्य
+      // छान्दै गर्दा फेरि "From" सच्याएको केस) — त्यो freeze पनि साथसाथै
+      // ताजा गर्ने, नत्र यो सम्पादन बेवास्ता हुन्थ्यो।
+      if (_pickupLat != null) {
+        _pickupLat = lat;
+        _pickupLng = lng;
+        _pickupAddress = label;
+      }
+    });
+    if (_map != null) {
+      _programmaticCameraMove = true;
+      await _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 16));
+      _programmaticCameraMove = false;
+    }
+  }
+
+  /// खोज-नतिजाबाट सिधै गन्तव्य छान्दा — dragging जस्तै गरी `_lat`/`_lng`/
+  /// `_pinAddress` अपडेट गर्ने (Confirm destination बटन अझै थिच्नुपर्छ,
+  /// यसले pin मात्र त्यहाँ सार्छ)। Ride-Hailing बाहेक (सामान्य सेवाको
+  /// "Where & for how much?" search) अझै यही प्रयोग हुन्छ।
+  Future<void> _pickSearchedDestination(String label, double lat, double lng) async {
+    // पहिले (drag बाट) उठिरहेको/settle हुँदै गरेको पिन भए पनि सफा 0 मा
+    // ल्याइदिने — नत्र `onCameraIdle` ले "प्रयोगकर्ताले आफैं pan गर्‍यो"
+    // भन्ने ठान्दै यो प्रोग्रामेटिक (search-चालित) move पछि पनि फेरि
+    // reverse-geocode तानिदिन्थ्यो, जसले खोजिएकै ठ्याक्कै ठेगाना (जस्तै
+    // "szkolna 23") लाई सामान्य/धमिलो वा खाली जवाफले silently ओभरराइट
+    // गरिदिन्थ्यो।
+    _pinLiftCtrl.stop();
+    _pinLiftCtrl.value = 0;
+    setState(() {
+      _lat = lat;
+      _lng = lng;
+      _pinAddress = label;
+      _loadingPinAddress = false;
+    });
+    if (_map != null) {
+      _programmaticCameraMove = true;
+      // एउटै मात्र सफा animated move — पहिले यहाँ `moveCamera` (तुरुन्तै
+      // "जम्प") अनि सोही ठाउँमा फेरि `animateCamera` (उही target, बेकारमा
+      // दोहोरो call) दुवै एकपछि अर्को गरिँदा भिजुअल हल्का "twitch"/jerk
+      // जस्तो देखिन सक्थ्यो। एउटै smooth animation ले नै ठ्याक्कै खोजिएकै
+      // बिन्दुमा पुर्‍याउँछ।
+      await _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 16));
+      _programmaticCameraMove = false;
+    }
+  }
+
+  /// "Change" — फेरि गन्तव्य छान्ने पासमा फर्कने (pickup कायमै रहन्छ), कार्ड
+  /// "To" सक्रिय अवस्थामा खोलेर।
+  void _changeDestination() => _openRouteCardForEdit('to');
+
+  /// Pickup row tap — कार्ड "From" सक्रिय अवस्थामा खोल्ने (destination
+  /// पहिल्यै छानिएको भए त्यो pre-filled/pending कायमै रहन्छ)।
+  void _editPickup() => _openRouteCardForEdit('from');
+
+  // ── Back Navigation (Ride-Hailing मात्र) — pickup → destination → confirm
+  // यी सबै यही एउटै स्क्रिनका internal चरण हुन् (Navigator route होइनन्),
+  // त्यसैले system/AppBar back थिच्दा सिधै Home नजाई एक-एक चरण पछाडि
+  // फर्काउनुपर्छ (`_hasRideStepToUndo` भएसम्म route कहिल्यै pop हुँदैन)।
+  bool get _hasRideStepToUndo =>
+      _isRide && (_pickingDestination || _destLat != null);
+
+  void _rideBackStep() {
+    if (_destLat != null) {
+      // गन्तव्य/भाडा confirm भइसकेको थियो — फेरि गन्तव्य सम्पादन गर्ने
+      // अवस्थामा (pickup कायमै)।
+      _changeDestination();
+    } else if (_pickingDestination) {
+      // गन्तव्य छान्दै थियो — pickup-मात्र अवस्थामा फर्कने, कार्ड पनि लुकाउने।
+      setState(() {
+        _pickingDestination = false;
+        _routeCardOpen = false;
+      });
+    }
   }
 
   /// online + दायरा भित्रका worker मात्र — nearest-first।
@@ -217,7 +726,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
       if (data['isOnline'] == false) continue; // offline लाई हटाउने
       final wp = workerPos(data, d.id, _originLat, _originLng);
       final km = haversineKm(_lat, _lng, wp.lat, wp.lng);
-      if (_radiusKm != null && km > _radiusKm!) continue;
+      if (km > _radiusKm) continue;
       rows.add((id: d.id, data: data, km: km, pos: LatLng(wp.lat, wp.lng)));
     }
     rows.sort((a, b) => a.km.compareTo(b.km));
@@ -227,20 +736,113 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
   // worker-अवतार pin हरू (नाम अनुसारको रङको "व्यक्ति" marker) जानाजान
   // हटाइएको — नक्सा सफा राख्ने, अनुरोध सधैँ तल्लो "Post job" प्यानलबाट
   // सबै नजिकका worker लाई broadcast हुने भएकोले map मा व्यक्तिगत pin
-  // छान्नुपर्ने आवश्यकता छैन। pickup (आफ्नो) झन्डा मात्र देखिन्छ।
+  // छान्नुपर्ने आवश्यकता छैन। pickup (आफ्नो) झन्डा अब native `Marker`
+  // होइन — Pin Drop pattern (screen-center मा स्थिर Flutter overlay,
+  // तल `_buildPickupPinOverlay()` हेर्नुहोस्) — त्यसैले यहाँ कुनै marker
+  // बाँकी रहँदैन।
   Set<Marker> _buildMarkers(
       List<({String id, Map<String, dynamic> data, double km, LatLng pos})>
           rows) {
+    if (!_isRide) return const {};
+    // Ride-Hailing — गन्तव्य छान्दै गर्दा वा confirm भइसकेपछि मात्र pickup
+    // बिन्दु static marker को रूपमा (झन्डा अझै drag हुने बित्तिकै screen-
+    // center overlay नै हो, यो अलग स्थिर बिन्दु हो)।
+    final markers = <Marker>{};
+    // गन्तव्य अझै confirm नभई छान्दै गरेको बेला केन्द्रको ठूलो drag-pin
+    // overlay कायमै देखिने भएकोले pickup सानो/सामान्य marker मात्र रहन्छ
+    // (नत्र दुई ठूलो झन्डा एकैचोटि देखिने पुरानो समस्या फर्कने)। Confirm
+    // भइसकेपछि (overlay लुकेको बेला) मात्र दुवै (pickup + destination) ले
+    // ठ्याक्कै त्यही custom झन्डा bitmap प्रयोग गर्छन् — Google को default
+    // नीलो/हरियो थोप्लोको सट्टा।
+    final confirmed = _destLat != null && !_pickingDestination;
+    if ((_pickingDestination || _destLat != null) &&
+        _pickupLat != null &&
+        _pickupLng != null) {
+      final labeled = _pickupLabeledIcon;
+      markers.add(Marker(
+        markerId: const MarkerId('__pickup__'),
+        position: LatLng(_pickupLat!, _pickupLng!),
+        icon: labeled ??
+            (confirmed && _flagMarkerIcon != null
+                ? _flagMarkerIcon!
+                : BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueAzure)),
+        anchor: labeled != null
+            ? (_pickupLabeledAnchor ?? FlagPinGeometry.markerAnchorFraction)
+            : (confirmed && _flagMarkerIcon != null
+                ? FlagPinGeometry.markerAnchorFraction
+                : const Offset(0.5, 1.0)),
+        zIndexInt: 90,
+      ));
+    }
+    if (_destLat != null && _destLng != null) {
+      final labeled = _destLabeledIcon;
+      markers.add(Marker(
+        markerId: const MarkerId('__destination__'),
+        position: LatLng(_destLat!, _destLng!),
+        icon: labeled ??
+            (confirmed && _flagMarkerIcon != null
+                ? _flagMarkerIcon!
+                : BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueGreen)),
+        anchor: labeled != null
+            ? (_destLabeledAnchor ?? FlagPinGeometry.markerAnchorFraction)
+            : (confirmed && _flagMarkerIcon != null
+                ? FlagPinGeometry.markerAnchorFraction
+                : const Offset(0.5, 1.0)),
+        zIndexInt: 91,
+      ));
+    }
+    return markers;
+  }
+
+  /// Ride-Hailing — pickup→destination बीचको साँचो सडक route (worker
+  /// selection कै उही `fetchRoadRoute`/polyline pattern पुनः-प्रयोग)।
+  Set<Polyline> _buildRidePolylines() {
+    final route = _rideRoute;
+    if (route == null) return const {};
     return {
-      if (_pickupPin != null)
-        Marker(
-          markerId: const MarkerId('__pickup__'),
-          position: LatLng(_lat, _lng),
-          icon: _pickupPin!,
-          anchor: FlagPinGeometry.markerAnchorFraction,
-          zIndexInt: 100,
-        ),
+      routePolylineCasing('ride', route),
+      routePolyline('ride', route),
     };
+  }
+
+  // झन्डाको PNG भित्रको आधार-थोप्लो (साँचो GPS anchor point) झन्डाको
+  // दृश्य केन्द्रमा होइन — तल-देब्रेतिर पर्छ (उही `FlagPinGeometry`, native
+  // `Marker` हरूले पनि `markerAnchorFraction` मार्फत प्रयोग गर्ने)। यहाँ
+  // (plain Flutter overlay भएकोले) त्यही anchor बिन्दु नै Stack को ठ्याक्कै
+  // बीचमा पर्ने गरी `Transform.translate` ले सार्छ — नत्र थोप्लो (साँचो
+  // "यहीं हो" बिन्दु) केन्द्रबाट पुगेर देखिन्थ्यो।
+  Widget _buildPickupPinOverlay() {
+    const displayHeight = 60.0;
+    const scale = displayHeight / FlagPinGeometry.displayH;
+    const renderedWidth = FlagPinGeometry.displayW * scale;
+    final anchorPx = Offset(
+      FlagPinGeometry.anchor.dx * scale,
+      FlagPinGeometry.anchor.dy * scale,
+    );
+    final offset = Offset(
+      renderedWidth / 2 - anchorPx.dx,
+      displayHeight / 2 - anchorPx.dy,
+    );
+    return Transform.translate(
+      offset: offset,
+      // Pin Touch & Lift — `_pinLiftCtrl.value` (0=बिश्राम, 1=उठेको, spring
+      // settle हुँदा क्षणिक रूपमा 0 भन्दा अलिक्ति तल पनि जान सक्छ — त्यही
+      // प्राकृतिक overshoot ले तल "ठोक्किएको" सानो bounce feel दिन्छ) ले
+      // माथि-तल translate + हल्का scale गर्छ।
+      child: AnimatedBuilder(
+        animation: _pinLiftCtrl,
+        child: Image.memory(_pickupPinBytes!, height: displayHeight),
+        builder: (context, child) {
+          final t = _pinLiftCtrl.value;
+          return Transform.translate(
+            offset: Offset(0, -14 * t),
+            child: Transform.scale(scale: 1.0 + 0.08 * t, child: child),
+          );
+        },
+      ),
+    );
   }
 
   /// "काम पोस्ट गर्नुहोस्" — Job Confirmation sheet खोल्छ, अनि broadcast गर्छ।
@@ -258,8 +860,18 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
         serviceType: widget.serviceType,
         lat: _lat,
         lng: _lng,
+        // माथिको floating address card (`_PinAddressCard`) ले पहिल्यै
+        // यही ठाउँको ठेगाना geocode गरिसकेको हुन्छ — यहाँ फेरि छुट्टै
+        // (दोहोरो/race हुनसक्ने, कहिलेकाहीं फरक जवाफ दिने) network call
+        // नगरी त्यही पुनः-प्रयोग गर्ने, ताकि दुवैतिर ठ्याक्कै उही ठेगाना
+        // देखियोस्।
+        initialAddress: _isRide ? _pickupAddress : _pinAddress,
         initialBudget: _offer ?? estFare,
         nearbyCount: nearby.length,
+        isRide: _isRide,
+        destinationAddress: _destAddress,
+        destLat: _destLat,
+        destLng: _destLng,
       ),
     );
     if (mounted) setState(() => _postSheetOpen = false);
@@ -292,6 +904,9 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
       } catch (_) {}
 
       final db = FirebaseFirestore.instance;
+      // नेटवर्क साँच्चै खराब भएमा पनि प्रयोगकर्ता अनिश्चित कालसम्म spinner
+      // हेरेर नअड्कियोस् — बरु छिट्टै स्पष्ट त्रुटि (तलको outer catch) देखेर
+      // फेरि प्रयास गर्न सकून्।
       final ref = await db.collection('serviceRequests').add({
         'service': widget.serviceType,
         'broadcast': true,
@@ -312,9 +927,18 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
         'preferredDate': Timestamp.fromDate(job.date),
         'timeSlot': job.slot,
         'proposedPrice': job.budget,
+        // Ride-Hailing (Bike/Car) मात्र — गन्तव्य, driver ले कहाँ पुर्‍याउने
+        // हो थाहा पाओस् (job_feed_screen.dart/job_route_screen.dart ले पढ्छन्)।
+        if (job.destLat != null && job.destLng != null) ...{
+          'isRide': true,
+          'destinationLat': job.destLat,
+          'destinationLng': job.destLng,
+          'destinationAddress': job.destAddress ?? '',
+          'autoOffer': job.autoOffer,
+        },
         'nearbyCount': nearby.length,
         'createdAt': FieldValue.serverTimestamp(),
-      });
+      }).timeout(const Duration(seconds: 20));
 
       // ── real-time radar alert: नजिकका online matching worker लाई notification ──
       final label = job.title.isNotEmpty ? job.title : job.description;
@@ -338,12 +962,27 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
       setState(() => _sending = false);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(S.requestSent)));
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => RequestTrackingScreen(requestId: ref.id),
-        ),
-      );
+      // Ride-Hailing (Bike/Car) मात्र — `pushReplacement` ले यो स्क्रिन
+      // (pickup/destination setup) stack बाटै हटाइदिन्थ्यो, त्यसैले bidding/
+      // searching स्क्रिनबाट पछाडि थिच्दा सिधै Home मा पुगिन्थ्यो (destination
+      // फेरि छान्ने/भाडा सच्याउने ठाउँ नै हराउँथ्यो)। यहाँ भने साधारण `push`
+      // — stack मा यही स्क्रिन कायमै रहन्छ, back ले फेरि यहीं फर्काउँछ।
+      // अरू सेवा (plumber/electrician) को व्यवहार यथावत।
+      if (_isRide) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RequestTrackingScreen(requestId: ref.id),
+          ),
+        );
+      } else {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RequestTrackingScreen(requestId: ref.id),
+          ),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
@@ -359,23 +998,37 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _measurePanel();
     });
-    return Scaffold(
+    return PopScope(
+      canPop: !_hasRideStepToUndo,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _rideBackStep();
+      },
+      child: Scaffold(
+      // किबोर्ड खुल्दा तल्लो panel/content हरूले माथिको महत्वपूर्ण
+      // कन्टेन्ट (search bar/route card) नछोपोस् भनेर — Flutter को default
+      // नै true हो, तर यहाँ स्पष्ट राखिएको ताकि भविष्यमा कसैले नियतवश/
+      // अनजानमा false नराखोस्।
+      resizeToAvoidBottomInset: true,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
+        foregroundColor: AppColors.kmText,
         elevation: 0,
         flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.buttonGradient),
+          decoration: BoxDecoration(gradient: AppColors.kmCtaGradient),
         ),
         title: Text(
           '${S.serviceName(widget.serviceType)} — ${S.nearbyTitle}',
           style: const TextStyle(
-              color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16),
+              color: AppColors.kmText, fontWeight: FontWeight.w800, fontSize: 16),
         ),
       ),
+      // "Home"/मेरो-स्थान बटन — अब pin drag गरेर टाढा पुगे पनि साँचो हालको
+      // GPS स्थानमा फर्काउँछ (पहिले जस्तो स्थिर `_lat`/`_lng` मा मात्र
+      // होइन — त्यो त अब म्यानुअली छानिएको बिन्दु नै हो)।
       floatingActionButton: FloatingActionButton.small(
-        onPressed: _recentre,
+        onPressed: _recenterToMyLocation,
         child: const Icon(Icons.my_location_rounded),
       ),
       // नक्सा/worker list सधैँ तुरुन्तै देखिन्छ (seed भएको वा fallback
@@ -389,7 +1042,15 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
         builder: (context, snap) {
           final rows = _nearbyOnline(snap.data?.docs ?? []);
           final nearestKm = rows.isEmpty ? null : rows.first.km;
-          final estFare = estimateFare(widget.serviceType, nearestKm ?? 2.0);
+          // Ride-Hailing — भाडा अनुमान pickup→destination दूरीबाट (यात्रा
+          // साँच्चै जति टाढा जाने हो त्यसैबाट), अरू सेवाहरूमा जस्तो
+          // नजिकैको worker-सम्मको दूरीबाट होइन।
+          final rideKm = _rideRoute?.km ??
+              (_pickupLat != null && _destLat != null
+                  ? haversineKm(_pickupLat!, _pickupLng!, _destLat!, _destLng!)
+                  : null);
+          final estFare = estimateFare(
+              widget.serviceType, (_isRide ? rideKm : null) ?? nearestKm ?? 2.0);
           _offer ??= estFare;
 
           return Stack(
@@ -399,6 +1060,12 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                   target: LatLng(_lat, _lng),
                   zoom: 13.5,
                 ),
+                // Uber/inDrive-style सफा नक्सा — Google का आफ्नै default
+                // POI/business marker (नामको सेतो लेबल + रातो थोप्लो, जुन
+                // हाम्रो कुनै widget होइन) लुकाउने। home_screen.dart/
+                // route_map_view.dart मा पहिल्यै प्रयोग हुने उही साझा style
+                // — यहाँ छुटेको रहेछ।
+                style: kCleanMapStyle,
                 onMapCreated: (c) {
                   _map = c;
                   if (!_centeredOnce) _recentre();
@@ -417,20 +1084,182 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                 tiltGesturesEnabled: !_postSheetOpen,
                 padding: const EdgeInsets.only(bottom: 260, top: 118),
                 markers: _buildMarkers(rows),
+                polylines: _isRide ? _buildRidePolylines() : const {},
+                // Uber/inDrive जस्तै — प्रयोगकर्ताले आफैं औंलाले नक्सा pan
+                // गर्न थालेकै क्षण एकपटक हलुका haptic (छोयो/स्थान बदलिँदै छ
+                // भन्ने feel), auto-centre/home-बटन जस्तो हाम्रै कोडले
+                // चलाएको (`_programmaticCameraMove`) क्षणमा भने कहिल्यै
+                // नबजोस्।
+                onCameraMoveStarted: () {
+                  final locked = _isRide && _destLat != null && !_pickingDestination;
+                  if (!_programmaticCameraMove && !locked) {
+                    HapticFeedback.selectionClick();
+                    _pinLiftCtrl.forward();
+                    // InDrive-शैली — पिन उठ्नेबित्तिकै (drag सुरु हुनेबित्तिकै)
+                    // माथिको ठेगाना बक्स तुरुन्तै लुक्छ; पिन फेरि "ड्रप" भएपछि
+                    // (तल `onCameraIdle`) मात्र नयाँ ठेगानासहित फर्किन्छ।
+                    if (!_addrCardHidden) {
+                      setState(() => _addrCardHidden = true);
+                    }
+                  }
+                },
+                // Pin Drop — pan गर्दा-गर्दै हरेक frame मा थाती राख्ने
+                // (सस्तो), pan रोकिएपछि मात्र एकैचोटि साँचो booking
+                // स्थानमा लागू (`onCameraIdle`)।
+                onCameraMove: (pos) {
+                  _pendingLat = pos.target.latitude;
+                  _pendingLng = pos.target.longitude;
+                },
+                onCameraIdle: () {
+                  final la = _pendingLat;
+                  final ln = _pendingLng;
+                  if (la == null || ln == null) return;
+                  _pendingLat = null;
+                  _pendingLng = null;
+                  // Ride-Hailing — गन्तव्य पहिल्यै confirm भइसकेपछि pin
+                  // freeze हुनुपर्छ, नत्र route हेर्दा-हेर्दै मात्रै map pan
+                  // गर्दा pickup नै (`_lat`/`_lng`, nearby-driver खोजको
+                  // आधार) चुपचाप बदलिन्थ्यो।
+                  if (_isRide && _destLat != null && !_pickingDestination) {
+                    return;
+                  }
+                  if (mounted) {
+                    setState(() {
+                      _lat = la;
+                      _lng = ln;
+                    });
+                  }
+                  // Pin बसेको नयाँ ठाउँको ठेगाना (माथिको floating card) पनि
+                  // ताजा — तर प्रयोगकर्ताले आफैं pan गरेको बेला मात्र
+                  // (`_pinLiftCtrl.value > 0`, नीचैको "Nail Drop" कै उही
+                  // भरपर्दो जाँच — `_programmaticCameraMove` बाट होइन,
+                  // किनभने त्यो flag reset हुने समय र यो `onCameraIdle`
+                  // फायर हुने समयबीच race हुनसक्छ)। प्रोग्रामेटिक move
+                  // (_recentre/_recenterToMyLocation/initState) हरूले
+                  // आफैं छुट्टै explicit geocode गर्छन् — यहाँ दोहोरिनु
+                  // पर्दैन। पहिले यहाँ सधैँ चल्थ्यो, त्यसैले सुरुमै (initState
+                  // + GPS-resolve + यही onCameraIdle) एउटै ठाउँका लागि
+                  // लगातार ३ वटासम्म geocode request जान्थ्यो — Nominatim
+                  // (free tier) ले rate-limit गरेर बीचबीचमा खाली जवाफ
+                  // दिन्थ्यो, जुन नै "ठेगाना कार्ड सधैँ 'Move the map...'
+                  // मै अड्किने" गुनासोको मूल कारण थियो।
+                  if (_pinLiftCtrl.value > 0) {
+                    // drag सुरु हुँदा लुकाइएको ठेगाना बक्स — पिन नयाँ ठाउँमा
+                    // "ड्रप" (settle) हुनेबित्तिकै फेरि देखियोस् (तलको
+                    // `_scheduleReverseGeocode()` ले नयाँ ठेगाना ताजा गर्छ,
+                    // बक्स आफैं `loading` अवस्थामै तुरुन्तै फर्कने भएकोले
+                    // प्रयोगकर्ताले स्पिनर देख्छन्, कहिल्यै पुरानो ठेगाना
+                    // होइन)।
+                    if (mounted && _addrCardHidden) {
+                      setState(() => _addrCardHidden = false);
+                    }
+                    _scheduleReverseGeocode();
+                  }
+                  // "Nail Drop" — पिन साँच्चै उठिसकेको भए मात्र (प्रयोगकर्ताले
+                  // आफैं pan गरेको — प्रोग्रामेटिक move मा `_pinLiftCtrl`
+                  // कहिल्यै उठ्दैन, त्यसैले यहाँ छुट्टै programmatic-guard
+                  // नचाहिने) spring physics सहित तल फर्काउने; "ठोक्किने"
+                  // (settle भइसकेको) क्षणमै मात्र कडा haptic, उठाउँदा-सारि
+                  // होइन।
+                  if (_pinLiftCtrl.value > 0) {
+                    _pinLiftCtrl
+                        .animateWith(SpringSimulation(
+                          const SpringDescription(
+                              mass: 1, stiffness: 500, damping: 14),
+                          _pinLiftCtrl.value,
+                          0,
+                          0,
+                        ))
+                        .whenComplete(() {
+                      if (mounted) HapticFeedback.heavyImpact();
+                    });
+                  }
+                },
               ),
 
-              // ── दायरा filter + online count ──
-              Positioned(
-                top: 96,
-                left: 12,
-                right: 12,
-                child: _RadiusBar(
-                  radiusKm: _radiusKm,
-                  onlineCount: rows.length,
-                  serviceType: widget.serviceType,
-                  onPick: (v) => setState(() => _radiusKm = v),
+              // ── Pin Drop — झन्डा स्क्रिनकै ठ्याक्कै बीचमा स्थिर (नक्सा
+              // कै त्यही padding प्रयोग गरेर, camera target सँग ठ्याक्कै
+              // मिल्ने गरी) — नक्सा नै pan भएर मुनि सर्छ, यो कहिल्यै हल्दैन।
+              // InDrive-शैली — झन्डामा tap गरेर होइन, नक्सा नै touch/drag
+              // गर्न थालेकै बित्तिकै (`onCameraMoveStarted`) माथिको ठेगाना
+              // बक्स लुक्छ, पिन "ड्रप" भएपछि (`onCameraIdle`) फेरि देखिन्छ
+              // — त्यसैले झन्डा आफैं फेरि पास-थ्रु (IgnorePointer) मात्र।
+              if (_pickupPinBytes != null &&
+                  !(_isRide && _destLat != null && !_pickingDestination))
+                IgnorePointer(
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 260, top: 118),
+                    child: Center(child: _buildPickupPinOverlay()),
+                  ),
                 ),
-              ),
+
+              // ── पिनको ठेगाना कार्ड — झन्डाको भिजुअल टुप्पो (tip) को
+              // ठ्याक्कै माथि, `bottom:` लाई pixel-सटीक गणना गरेर (Column
+              // भित्र राखेर होइन — त्यसो गरे झन्डा आफैं साँचो GPS/camera
+              // target बिन्दुबाट तलतिर सर्ने बग आउँथ्यो, किनभने Column ले
+              // दुवै (बक्स + झन्डा) लाई सँगै केन्द्रित गर्थ्यो)।
+              if (_selData == null &&
+                  !_addrCardHidden &&
+                  !(_isRide && _destLat != null && !_pickingDestination))
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: _pinTipBottomOffset(context) + 8,
+                  child: Center(
+                    child: _PinAddressCard(
+                      address: _pinAddress,
+                      loading: _loadingPinAddress,
+                      hint: _isRide && _pickingDestination
+                          ? S.whereToHint
+                          : S.moveMapHint,
+                      onOpenProviders: () =>
+                          setState(() => _panelExpanded = true),
+                    ),
+                  ),
+                ),
+
+              // ── "Where & for how much?" — तल्लो "N providers nearby"
+              // प्यानलको ठ्याक्कै माथि, खोजेर छिटो अर्को ठाउँमा जाने बटन
+              // (Ride-Hailing बाहेक — त्यहाँ आफ्नै destination search
+              // बटन/पट्टी पहिल्यै छ)।
+              if (!_isRide && _selData == null)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: _panelHeight + 12,
+                  child: _bottomSearchOpen
+                      ? _DestinationSearchBar(
+                          key: const ValueKey('browseSearchBar'),
+                          biasLat: _lat,
+                          biasLng: _lng,
+                          onPicked: (label, lat, lng) {
+                            _pickSearchedDestination(label, lat, lng);
+                            setState(() => _bottomSearchOpen = false);
+                          },
+                        )
+                      : _WhereAndHowMuchButton(
+                          onTap: () =>
+                              setState(() => _bottomSearchOpen = true),
+                        ),
+                ),
+
+              // ── Ride-Hailing — गन्तव्य confirm भइसकेपछि pickup→destination
+              // सारांश (दुई कार्डको सट्टा एउटै सानो पट्टी, माथिको live pin
+              // कार्ड यहाँ hidden भइसकेको हुन्छ) — फेरि छान्ने ("Change")
+              // लिंक सहित।
+              if (_isRide && _destLat != null && !_pickingDestination && _selData == null)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: _panelHeight + 12,
+                  child: _RideSummaryCard(
+                    pickupAddress: _pickupAddress,
+                    destAddress: _destAddress,
+                    routeLoading: _rideRouteLoading,
+                    onEditPickup: _editPickup,
+                    onChangeDestination: _changeDestination,
+                  ),
+                ),
 
               // ── छानिएको worker को details card — सूचीबाट छानेपछि देखिने ──
               if (_selData != null)
@@ -456,40 +1285,174 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                 left: 0,
                 right: 0,
                 bottom: 0,
-                child: Container(
+                child: ClipRRect(
                   key: _panelKey,
-                  decoration: const BoxDecoration(
-                    gradient: AppColors.igGradient,
-                    borderRadius: BorderRadius.vertical(
+                  borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(AppRadius.lg)),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                    child: Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.kmSurface.withValues(alpha: 0.9),
+                    borderRadius: const BorderRadius.vertical(
                         top: Radius.circular(AppRadius.lg)),
-                    boxShadow: [
+                    border: Border(
+                      top: BorderSide(color: AppColors.kmGlassBorder),
+                    ),
+                    boxShadow: const [
                       BoxShadow(
                           color: Colors.black38,
                           blurRadius: 20,
                           offset: Offset(0, -4)),
                     ],
                   ),
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
                   child: SafeArea(
                     top: false,
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Row(
-                          children: [
-                            Icon(serviceIconFor(widget.serviceType),
-                                color: Colors.white, size: 20),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                '${rows.length} ${S.serviceName(widget.serviceType)} ${S.providersNearby}',
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700),
+                        // ── drag handle + header — tap वा माथि/तल स्वाइप
+                        // गरेर प्यानल पूरा खोल्ने/बन्द गर्ने। बन्द छँदा यही
+                        // एउटा row मात्र देखिन्छ (peek), माथि स्वाइप गरेपछि
+                        // मात्र भाडा/Post job/worker list पूरा देखिने।
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () =>
+                              setState(() => _panelExpanded = !_panelExpanded),
+                          onVerticalDragEnd: (details) {
+                            final v = details.primaryVelocity ?? 0;
+                            if (v < -150) {
+                              setState(() => _panelExpanded = true);
+                            } else if (v > 150) {
+                              setState(() => _panelExpanded = false);
+                            }
+                          },
+                          child: Column(
+                            children: [
+                              Container(
+                                width: 36,
+                                height: 4,
+                                margin: const EdgeInsets.only(bottom: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.5),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
                               ),
-                            ),
-                          ],
+                              Row(
+                                children: [
+                                  Icon(serviceIconFor(widget.serviceType),
+                                      color: Colors.white, size: 20),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      '${rows.length} ${S.serviceName(widget.serviceType)} ${S.providersNearby}',
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w700),
+                                    ),
+                                  ),
+                                  Icon(
+                                    _panelExpanded
+                                        ? Icons.keyboard_arrow_down_rounded
+                                        : Icons.keyboard_arrow_up_rounded,
+                                    color: Colors.white70,
+                                  ),
+                                ],
+                              ),
+                              // ── InDrive-style — सवारी छान्ने chip पट्टी +
+                              // भरपर्दो ड्राइभर banner, प्यानल खुला/बन्द
+                              // जुनसुकै अवस्थामा पनि सधैँ देखिने (collapsible
+                              // AnimatedSize भन्दा बाहिर) — गन्तव्य confirm
+                              // नभएसम्म मात्र।
+                              if (_isRide && _destLat == null) ...[
+                                const SizedBox(height: 10),
+                                _VehicleChipRow(
+                                  current: widget.serviceType,
+                                  initialLat: _originLat,
+                                  initialLng: _originLng,
+                                ),
+                                const SizedBox(height: 8),
+                                // दायाँतिर थप margin — screen को तल्लो-दायाँ
+                                // कुनामा सधैँ तैरिरहने Scaffold FAB (मेरो
+                                // स्थान बटन) मुनि पर्ने/ओभरल्याप हुनबाट जोगाउन।
+                                const Padding(
+                                  padding: EdgeInsets.only(right: 52),
+                                  child: _TrustBanner(),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOut,
+                          alignment: Alignment.topCenter,
+                          child: !_panelExpanded
+                              ? const SizedBox(width: double.infinity)
+                              : Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                        // ── Ride-Hailing — गन्तव्य अझै छानिएको छैन भने,
+                        // सामान्य worker-सूची/भाडा प्यानलको सट्टा pickup/
+                        // destination confirm गर्ने दुई-चरण CTA मात्र ──
+                        if (_isRide && _destLat == null) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.16),
+                              borderRadius:
+                                  BorderRadius.circular(AppRadius.md),
+                              border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.35)),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                    _pickingDestination
+                                        ? Icons.flag_rounded
+                                        : Icons.my_location_rounded,
+                                    color: Colors.white,
+                                    size: 18),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    // खाली भएमा मात्र hint — नत्र खोजी/drag
+                                    // बाट पहिल्यै छानिएको ठ्याक्कै ठेगाना
+                                    // यहाँ (Confirm बटनको ठ्याक्कै माथि) पनि
+                                    // देखियोस्, ताकि प्रयोगकर्ताले के
+                                    // confirm गर्दैछन् भन्ने प्रस्ट देखोस्।
+                                    _pinAddress.isEmpty
+                                        ? (_pickingDestination
+                                            ? S.whereToHint
+                                            : S.moveMapHint)
+                                        : _pinAddress,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 12.5),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          KmCtaButton(
+                            onPressed: _pickingDestination
+                                ? _confirmDestination
+                                : _confirmPickupAndStartDestination,
+                            icon: _pickingDestination
+                                ? Icons.flag_rounded
+                                : Icons.navigate_next_rounded,
+                            label: _pickingDestination
+                                ? S.confirmDestinationCta
+                                : S.confirmPickupCta,
+                          ),
+                        ] else ...[
                         // ── तल्लो horizontal सूची — नक्सामा pin नभई यहींबाट
                         // कुनै एक worker छानेर details card खोल्ने ──
                         if (rows.isNotEmpty) ...[
@@ -506,6 +1469,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                                 final selected = r.id == _selId;
                                 final name = (r.data['name'] ?? '—').toString();
                                 return _WorkerChip(
+                                  key: ValueKey(r.id),
                                   uid: r.id,
                                   name: name,
                                   distanceKm: r.km,
@@ -589,34 +1553,16 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: _sending
-                                ? null
-                                : () => _openPostJob(rows, estFare),
-                            icon: _sending
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: AppColors.igViolet),
-                                  )
-                                : const Icon(Icons.post_add_rounded),
-                            label: Text(
-                                '${S.postJob}  ·  Rs. ${_offer ?? estFare}',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w800)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white,
-                              foregroundColor: AppColors.igViolet,
-                              padding: const EdgeInsets.symmetric(vertical: 15),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius:
-                                      BorderRadius.circular(AppRadius.pill)),
-                            ),
-                          ),
+                        KmCtaButton(
+                          onPressed: _sending
+                              ? null
+                              : () => _openPostJob(rows, estFare),
+                          loading: _sending,
+                          icon: _isRide
+                              ? Icons.local_taxi_rounded
+                              : Icons.post_add_rounded,
+                          label:
+                              '${_isRide ? S.findOffer : S.postJob}  ·  Rs. ${_offer ?? estFare}',
                         ),
                         if (rows.isEmpty)
                           Padding(
@@ -626,14 +1572,165 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                                 style: const TextStyle(
                                     color: Colors.white70, fontSize: 12)),
                           ),
+                        ],
+                                  ],
+                                ),
+                        ),
                       ],
                     ),
                   ),
                 ),
+                  ),
+                ),
               ),
+
+              // ── Ride-Hailing — "Enter your route" कार्ड (InDrive-style) —
+              // तल्लो "Confirm pickup · Where to?" नथिचेसम्म पूर्ण रूपमा
+              // लुकेको रहन्छ (`_routeCardOpen`)। भित्र एकपल्टमा एउटै फिल्ड
+              // मात्र सक्रिय (पूरा खोज बक्स) — "From" tap गर्दा "To" सानो
+              // सारांश-पंक्तिमा खुम्चिन्छ, र उल्टो। "To" छानेपछि सिधै
+              // टक्राउँदैन — तल्लो "Confirm route" बटन थिचेपछि मात्र।
+              // Stack को सबैभन्दा पछिल्लो (topmost z-order) child — तल्लो
+              // "N providers nearby" panel (माथि नै) ले यसलाई कहिल्यै ढाक्न
+              // नपाओस् भनेर जानाजानी अन्त्यमा राखिएको (पहिले सुरुतिर थियो,
+              // panel त्यसमाथि नै चित्रित हुन्थ्यो — किबोर्ड खुल्दा/panel
+              // तानिँदा "To" फिल्ड लुक्ने बग यही थियो, कार्डको उचाइले
+              // कहिल्यै फरक पारेन)।
+              if (_isRide && _destLat == null && _routeCardOpen)
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 6,
+                  left: 12,
+                  right: 12,
+                  // कार्डको तल्लो सीमा किबोर्ड (`viewInsets.bottom`) को
+                  // ठ्याक्कै माथि — सामग्री लामो भए भित्रै scroll हुन्छ।
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: SingleChildScrollView(
+                      child: Container(
+                      padding: const EdgeInsets.fromLTRB(14, 12, 8, 14),
+                      decoration: BoxDecoration(
+                        color: AppColors.kmVoid2.withValues(alpha: 0.97),
+                        borderRadius: BorderRadius.circular(AppRadius.lg),
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                        boxShadow: const [
+                          BoxShadow(color: Colors.black45, blurRadius: 16, offset: Offset(0, 6)),
+                        ],
+                      ),
+                      child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(S.enterRouteTitle,
+                                  style: const TextStyle(
+                                      color: AppColors.kmText,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 15)),
+                            ),
+                            InkWell(
+                              borderRadius: BorderRadius.circular(999),
+                              onTap: () =>
+                                  setState(() => _routeCardOpen = false),
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(Icons.close_rounded,
+                                    color: AppColors.kmMuted, size: 20),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        // ── "From" — सक्रिय भए पूरा खोज बक्स, नत्र सानो
+                        // सारांश-पंक्ति (tap गर्दा सक्रिय बन्छ) ──
+                        if (_activeRouteField == 'from')
+                          _DestinationSearchBar(
+                            key: const ValueKey('ridePickupSearchBar'),
+                            biasLat: _lat,
+                            biasLng: _lng,
+                            fieldLabel: S.fromLabel,
+                            hintText: S.moveMapHint,
+                            initialText: _pickupLat != null
+                                ? _pickupAddress
+                                : _pinAddress,
+                            showLiveLocationButton: true,
+                            onPicked: (label, lat, lng) {
+                              _pickSearchedPickup(label, lat, lng);
+                              setState(() => _activeRouteField =
+                                  _pendingDestLat == null ? 'to' : null);
+                            },
+                          )
+                        else
+                          _compactRouteRow(
+                            icon: Icons.trip_origin_rounded,
+                            iconColor: AppColors.kmTeal,
+                            label: S.fromLabel,
+                            value: _pickupLat != null
+                                ? _pickupAddress
+                                : (_pinAddress.isEmpty
+                                    ? S.moveMapHint
+                                    : _pinAddress),
+                            onTap: () =>
+                                setState(() => _activeRouteField = 'from'),
+                          ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Divider(height: 1, color: AppColors.kmGlassBorder),
+                        ),
+                        // ── "To" — सक्रिय भए पूरा खोज बक्स, नत्र सानो
+                        // सारांश-पंक्ति ──
+                        if (_activeRouteField == 'to')
+                          _DestinationSearchBar(
+                            key: const ValueKey('rideDestinationSearchBar'),
+                            biasLat: _pickupLat ?? _lat,
+                            biasLng: _pickupLng ?? _lng,
+                            fieldLabel: S.toLabel,
+                            hintText: S.whereToHint,
+                            initialText: _pendingDestAddress,
+                            showLiveLocationButton: true,
+                            onPicked: (label, lat, lng) {
+                              setState(() {
+                                _pendingDestLat = lat;
+                                _pendingDestLng = lng;
+                                _pendingDestAddress = label;
+                                _activeRouteField = null;
+                              });
+                            },
+                          )
+                        else
+                          _compactRouteRow(
+                            icon: Icons.flag_rounded,
+                            iconColor: AppColors.kmOrange,
+                            label: S.toLabel,
+                            value: _pendingDestAddress.isEmpty
+                                ? S.whereToHint
+                                : _pendingDestAddress,
+                            onTap: () =>
+                                setState(() => _activeRouteField = 'to'),
+                          ),
+                        // ── "Confirm route" — दुवै (pickup + pending
+                        // destination) भइसकेपछि, कुनै फिल्ड सक्रिय नहुँदा ──
+                        if (_activeRouteField == null &&
+                            _pickupLat != null &&
+                            _pendingDestLat != null) ...[
+                          const SizedBox(height: 10),
+                          KmCtaButton(
+                            label: S.confirmRouteCta,
+                            icon: Icons.check_rounded,
+                            onPressed: _confirmPendingRoute,
+                          ),
+                        ],
+                      ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           );
         },
+      ),
       ),
     );
   }
@@ -656,7 +1753,7 @@ class _StepBtn extends StatelessWidget {
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
         ),
-        child: Icon(icon, color: Colors.white, size: 20),
+        child: Icon(icon, color: AppColors.kmText, size: 20),
       ),
     );
   }
@@ -672,6 +1769,7 @@ class _WorkerChip extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   const _WorkerChip({
+    super.key,
     required this.uid,
     required this.name,
     required this.distanceKm,
@@ -695,7 +1793,7 @@ class _WorkerChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppRadius.md),
           border: Border.all(
               color: selected
-                  ? Colors.white
+                  ? AppColors.kmText
                   : Colors.white.withValues(alpha: 0.35),
               width: selected ? 2 : 1),
         ),
@@ -714,7 +1812,7 @@ class _WorkerChip extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                  color: selected ? AppColors.igViolet : Colors.white,
+                  color: selected ? AppColors.kmOrange : AppColors.kmText,
                   fontSize: 11,
                   fontWeight: FontWeight.w700),
             ),
@@ -724,8 +1822,8 @@ class _WorkerChip extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                   color: selected
-                      ? AppColors.igViolet.withValues(alpha: 0.7)
-                      : Colors.white70,
+                      ? AppColors.kmOrange.withValues(alpha: 0.7)
+                      : AppColors.kmMuted,
                   fontSize: 9.5),
             ),
           ],
@@ -736,76 +1834,665 @@ class _WorkerChip extends StatelessWidget {
 }
 
 // ── दायरा filter bar (map माथि) ──────────────────────────────────────────────
-class _RadiusBar extends StatelessWidget {
-  final int? radiusKm;
-  final int onlineCount;
-  final String serviceType;
-  final ValueChanged<int?> onPick;
-  const _RadiusBar({
-    required this.radiusKm,
-    required this.onlineCount,
-    required this.serviceType,
-    required this.onPick,
+/// Pin Drop — बीचको झन्डाले ठ्याक्कै छोपेको ठाउँको ठेगाना देखाउने floating
+/// card (location_picker_page.dart कै उस्तै भाषा) — प्रयोगकर्ताले नक्सा
+/// pan गर्दा कुन ठाउँ छानिँदै छ भनेर स्पष्ट देखियोस्।
+class _PinAddressCard extends StatelessWidget {
+  final String address;
+  final bool loading;
+  final String? hint;
+  // झन्डाको ठ्याक्कै माथि tap गर्दा देखिने बक्स — भित्रको यो ">" बटनले
+  // तल्लो "N providers nearby" प्यानललाई एकैचोटि पूरा (expanded) अवस्थामा
+  // खोल्छ।
+  final VoidCallback onOpenProviders;
+  const _PinAddressCard({
+    required this.address,
+    required this.loading,
+    required this.onOpenProviders,
+    this.hint,
   });
 
   @override
   Widget build(BuildContext context) {
-    Widget chip(String label, bool active, VoidCallback onTap) =>
-        GestureDetector(
-          onTap: onTap,
+    // सधैँ सानो/छोटो (compact) रहोस् — पूरै स्क्रिन-चौडाइ नओगटोस्, त्यसैले
+    // maxWidth कडाइका साथ सीमित; ठेगाना लामो भए एक लाइनमा नअटाई २
+    // लाइनसम्म wrap हुन्छ (truncate होइन), अझ बढी भए मात्र ellipsis।
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 168),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(9, 6, 5, 6),
+        decoration: BoxDecoration(
+          // तल्लो प्यानलसँगै मिल्ने गाढा glass surface।
+          color: AppColors.kmVoid2.withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          boxShadow: const [
+            BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                loading
+                    ? S.fetchingAddress
+                    : (address.isEmpty ? (hint ?? S.moveMapHint) : address),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: AppColors.kmText, fontWeight: FontWeight.w600, fontSize: 11.5, height: 1.25),
+              ),
+            ),
+            if (loading) ...[
+              const SizedBox(width: 6),
+              const SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppColors.kmText),
+              ),
+            ],
+            const SizedBox(width: 4),
+            _OpenProvidersButton(onTap: onOpenProviders),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "N providers nearby" प्यानल पूरा (expanded) अवस्थामा खोल्ने सानो ">"
+/// (chevron) बटन — [_PinAddressCard] भित्र।
+class _OpenProvidersButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _OpenProvidersButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        width: 26,
+        height: 26,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.10),
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.chevron_right_rounded,
+            size: 18, color: AppColors.kmText),
+      ),
+    );
+  }
+}
+
+/// "Where & for how much?" — तल्लो "N providers nearby" प्यानलको ठ्याक्कै
+/// माथिको संक्षिप्त (collapsed) बटन, थिच्दा [_DestinationSearchBar] खुल्छ।
+class _WhereAndHowMuchButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _WhereAndHowMuchButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.pill),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.kmVoid2.withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+          boxShadow: const [
+            BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+          ],
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        child: Row(
+          children: [
+            const Icon(Icons.search_rounded, color: AppColors.kmOrange, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                S.whereToAndHowMuch,
+                style: const TextStyle(
+                    color: AppColors.kmMuted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13.5),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// InDrive-style सवारी छान्ने horizontal chip पट्टी — Bike/Car मात्र (अरू
+/// (Moto One Click/Comfort/Delivery) जस्ता category हरू worker registration/
+/// Firestore schema नै बदल्नुपर्ने भएकाले हाललाई थपिएका छैनन्)। अर्को chip
+/// थिच्दा यही स्क्रिनलाई नयाँ serviceType सहित pop+push गरेर बदलिन्छ (`widget.
+/// serviceType` `final` भएकाले in-place बदल्न मिल्दैन)।
+class _VehicleChipRow extends StatelessWidget {
+  final String current;
+  final double initialLat;
+  final double initialLng;
+  const _VehicleChipRow({
+    required this.current,
+    required this.initialLat,
+    required this.initialLng,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    Widget chip(String type, IconData icon, String label) {
+      final active = type == current;
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          onTap: active
+              ? null
+              : () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ServiceMapScreen(
+                        serviceType: type,
+                        initialLat: initialLat,
+                        initialLng: initialLng,
+                      ),
+                    ),
+                  );
+                },
           child: Container(
-            margin: const EdgeInsets.only(right: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
             decoration: BoxDecoration(
-              color: active ? AppColors.igViolet : Colors.white,
+              gradient: active ? AppColors.kmCtaGradient : null,
+              color: active ? null : Colors.white.withValues(alpha: 0.10),
               borderRadius: BorderRadius.circular(AppRadius.pill),
-              boxShadow: const [
-                BoxShadow(
-                    color: Colors.black26, blurRadius: 6, offset: Offset(0, 2)),
+              border: Border.all(
+                  color: active
+                      ? Colors.transparent
+                      : Colors.white.withValues(alpha: 0.18)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon,
+                    size: 17,
+                    color: active ? AppColors.kmInk : Colors.white),
+                const SizedBox(width: 6),
+                Text(label,
+                    style: TextStyle(
+                        color: active ? AppColors.kmInk : Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5)),
               ],
             ),
-            child: Text(label,
-                style: TextStyle(
-                    color: active ? Colors.white : Colors.black87,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12)),
           ),
-        );
+        ),
+      );
+    }
 
-    return Column(
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          chip('Bike', Icons.two_wheeler_rounded, S.bikeWord),
+          chip('Car', Icons.local_taxi_rounded, S.carWord),
+        ],
+      ),
+    );
+  }
+}
+
+/// InDrive-style भरपर्दो/सुरक्षा सन्देश पट्टी — साँचो promo/discount प्रणाली
+/// नभएकाले नक्कली छुट (जस्तै "15% off") दाबी गर्नुको सट्टा, सधैँ सत्य रहने
+/// एउटा तटस्थ trust banner।
+class _TrustBanner extends StatelessWidget {
+  const _TrustBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.kmTeal.withValues(alpha: 0.18),
+            AppColors.kmPurple.withValues(alpha: 0.18),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.verified_rounded, size: 16, color: AppColors.kmTeal),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(S.verifiedRidersBanner,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Ride-Hailing — गन्तव्य confirm भइसकेपछि माथिको live pin address कार्डको
+/// ठाउँमा देखिने pickup→destination सारांश (route फेला परेसम्म "Finding
+/// route…", फेरि छान्ने चाहिए "Change" लिंक)।
+class _RideSummaryCard extends StatelessWidget {
+  final String pickupAddress;
+  final String destAddress;
+  final bool routeLoading;
+  final VoidCallback onEditPickup;
+  final VoidCallback onChangeDestination;
+  const _RideSummaryCard({
+    required this.pickupAddress,
+    required this.destAddress,
+    required this.routeLoading,
+    required this.onEditPickup,
+    required this.onChangeDestination,
+  });
+
+  Widget _row(IconData icon, Color dot, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(AppRadius.pill),
-            boxShadow: const [
-              BoxShadow(
-                  color: Colors.black26, blurRadius: 8, offset: Offset(0, 3)),
-            ],
+          margin: const EdgeInsets.only(top: 3),
+          width: 9,
+          height: 9,
+          decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            value.isEmpty ? label : value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                color: AppColors.kmText, fontWeight: FontWeight.w600, fontSize: 12.5),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.kmVoid2.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        boxShadow: const [
+          BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── दुवै पंक्ति tap गर्न मिल्ने — pickup वा destination जुनसुकै
+          // पुनः खोजेर/सम्पादन गर्न माथिको "Enter your route" कार्ड फेरि
+          // खोल्छ (InDrive-शैली — यात्रा सुरु नभएसम्म जहिल्यै सम्पादन योग्य)।
+          GestureDetector(
+            onTap: onEditPickup,
+            behavior: HitTestBehavior.opaque,
+            child: _row(
+                Icons.circle, AppColors.kmTealBlue, S.pickupLabel, pickupAddress),
+          ),
+          const Padding(
+            padding: EdgeInsets.only(left: 4),
+            child: SizedBox(
+              height: 10,
+              child: VerticalDivider(color: AppColors.kmMuted, thickness: 1.4),
+            ),
+          ),
+          GestureDetector(
+            onTap: onChangeDestination,
+            behavior: HitTestBehavior.opaque,
+            child: _row(
+                Icons.circle, AppColors.kmOrange, S.destinationLabel, destAddress),
+          ),
+          const SizedBox(height: 6),
+          Row(
             children: [
-              const Icon(Icons.circle, size: 9, color: AppColors.success),
+              Icon(
+                  routeLoading
+                      ? Icons.hourglass_top_rounded
+                      : Icons.alt_route_rounded,
+                  size: 14,
+                  color: AppColors.kmMuted),
               const SizedBox(width: 6),
-              Text(
-                '$onlineCount ${S.serviceName(serviceType)} ${S.providersNearby}',
-                style: const TextStyle(
-                    fontWeight: FontWeight.w800, fontSize: 12.5),
+              Expanded(
+                child: Text(
+                  routeLoading ? S.findingRoute : '',
+                  style: const TextStyle(color: AppColors.kmMuted, fontSize: 11.5),
+                ),
+              ),
+              GestureDetector(
+                onTap: onChangeDestination,
+                child: Text(S.changeDestination,
+                    style: const TextStyle(
+                        color: AppColors.kmText,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        decoration: TextDecoration.underline)),
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Ride-Hailing — "Where to?" खोज बक्स (Nominatim forward-geocoding,
+/// `location_util.dart::searchPlaces`)। नतिजामध्ये एउटा tap गर्दा पिन
+/// सिधै त्यहाँ जान्छ — manual drag गर्नु नपरोस् भनेर, तर अझै drag पनि
+/// उत्तिकै काम गर्छ (दुवै उही `_lat`/`_lng` लाई नै लक्षित)।
+class _DestinationSearchBar extends StatefulWidget {
+  final double? biasLat;
+  final double? biasLng;
+  final void Function(String label, double lat, double lng) onPicked;
+  // InDrive-शैली — "From"/"To" प्रस्ट लेबल (बक्सको माथि) + हालको GPS
+  // लाइभ-लोकेसन एकै-ट्याप बटन (दुवै वैकल्पिक — नयाँ, पहिलेका अरू कल-साइट
+  // (जस्तै साधारण सेवाको "Where to?") ले नपास गरे पनि उस्तै काम गर्छन्)।
+  final String? fieldLabel;
+  final String? hintText;
+  final bool showLiveLocationButton;
+  final String? initialText;
+  const _DestinationSearchBar({
+    super.key,
+    required this.biasLat,
+    required this.biasLng,
+    required this.onPicked,
+    this.fieldLabel,
+    this.hintText,
+    this.showLiveLocationButton = false,
+    this.initialText,
+  });
+
+  @override
+  State<_DestinationSearchBar> createState() => _DestinationSearchBarState();
+}
+
+class _DestinationSearchBarState extends State<_DestinationSearchBar> {
+  late final _controller = TextEditingController(text: widget.initialText ?? '');
+  final _focusNode = FocusNode();
+  Timer? _debounce;
+  List<({String label, double lat, double lng})> _results = const [];
+  bool _loading = false;
+  // खोजी एकपटक पूरा भइसक्यो (नतिजा भेटियोस् वा नभेटियोस्) भनेर — "अझै
+  // टाइप गर्दै" र "खोजियो तर केही भेटिएन" बीच छुट्याउन।
+  bool _searched = false;
+  // Stale-Response Guard — पहिलेको (ढिलो) खोजी नतिजा नेटवर्कमा अझै
+  // बाँकी छँदै प्रयोगकर्ताले फेरि नयाँ शब्द टाइप गरे, र त्यो पुरानो जवाफ
+  // नयाँ खोजी सुरु भइसकेपछि मात्र आइपुगे — `_debounce.cancel()` ले टाइमर
+  // (सुरु नै नभएको request) रोक्न सक्छ, तर पहिल्यै सुरु भइसकेको network
+  // call कहिल्यै रोक्न सक्दैन। यही generation counter ले त्यो ढिलो/पुरानो
+  // जवाफ चिन्छ र बेवास्ता गर्छ — नत्र "Kathmandu" खोज्दा अघिल्लो (जस्तै
+  // टेस्ट गरिएको बेग्लै मुलुकको) प्रस्ताव देखिने गलत बग आउँथ्यो।
+  int _searchGeneration = 0;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  // Pin ↔ Input Sync — नक्सामा पिन तानेर छोड्दा (`onCameraIdle` →
+  // `_reverseGeocodePin` → parent setState) `widget.initialText` बाहिरैबाट
+  // बदलिन्छ। प्रयोगकर्ता आफैं यहीं टाइप गर्दै नभएसम्म (`!_focusNode.hasFocus`)
+  // मात्र त्यो नयाँ मान यहाँ देखाउने — नत्र टाइप गर्दागर्दै cursor/text बीचमै
+  // बाहिरबाट ओभरराइट हुने बग आउँथ्यो।
+  @override
+  void didUpdateWidget(covariant _DestinationSearchBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final next = widget.initialText;
+    if (next != null &&
+        next.isNotEmpty &&
+        next != oldWidget.initialText &&
+        next != _controller.text &&
+        !_focusNode.hasFocus) {
+      _controller.text = next;
+    }
+  }
+
+  void _onChanged(String q) {
+    _debounce?.cancel();
+    if (q.trim().length < 2) {
+      _searchGeneration++;
+      setState(() {
+        _results = const [];
+        _searched = false;
+      });
+      return;
+    }
+    final myGeneration = ++_searchGeneration;
+    // टाइप गर्दागर्दै (नयाँ खोजी अझै पर्खिँदै) पुरानो नतिजा स्क्रिनमा
+    // टाँसिएर नबसोस् भनेर तुरुन्तै खाली — Loading spinner देखिने, कहिल्यै
+    // अघिल्लो (अब अप्रासंगिक) शब्दको नतिजा होइन।
+    setState(() {
+      _results = const [];
+      _loading = true;
+    });
+    _debounce = Timer(const Duration(milliseconds: 450), () async {
+      if (!mounted || myGeneration != _searchGeneration) return;
+      final r = await searchPlaces(q,
+          biasLat: widget.biasLat, biasLng: widget.biasLng);
+      // यो भन्दा पछि अर्को (नयाँ) खोजी सुरु भइसकेको भए यो (अब पुरानो
+      // भइसकेको) जवाफ लागू नगर्ने।
+      if (!mounted || myGeneration != _searchGeneration) return;
+      setState(() {
+        _results = r;
+        _loading = false;
+        _searched = true;
+      });
+    });
+  }
+
+  /// एउटा नतिजा (tap वा Enter/Search key दुवैबाट) छान्ने साझा तरिका।
+  void _selectResult(({String label, double lat, double lng}) r) {
+    FocusScope.of(context).unfocus();
+    _controller.text = r.label;
+    setState(() => _results = const []);
+    widget.onPicked(r.label, r.lat, r.lng);
+  }
+
+  /// GPS आइकन — हालको लाइभ स्थान सिधै (search नगरी) यो बक्सको मूल्यको
+  /// रूपमा एकैचोटि छान्ने। सामान्य `_selectResult` कै उही `onPicked` बाटो
+  /// प्रयोग गर्छ — बाहिरबाट हेर्दा खोजी-नतिजा नै छानेको जस्तै व्यवहार हुन्छ।
+  Future<void> _useLiveLocation() async {
+    FocusScope.of(context).unfocus();
+    setState(() => _loading = true);
+    try {
+      final p = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+      ).timeout(const Duration(seconds: 8));
+      final addr = await reverseGeocode(p.latitude, p.longitude);
+      if (!mounted) return;
+      final label = addr.isNotEmpty ? addr : S.moveMapHint;
+      _controller.text = label;
+      setState(() {
+        _loading = false;
+        _results = const [];
+      });
+      widget.onPicked(label, p.latitude, p.longitude);
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// किबोर्डको Search/Enter थिच्दा — inDrive-style, सूचीबाट छानेर tap
+  /// गर्नै नपरोस्। अझै debounce पर्खिरहेको (`_results` अझै खाली) भए त्यो
+  /// नपर्खी तुरुन्तै खोजी गरेर पहिलो/उत्तम नतिजा सिधै छान्ने।
+  Future<void> _onSubmitted(String q) async {
+    final query = q.trim();
+    if (query.length < 2) return;
+    if (_results.isNotEmpty) {
+      _selectResult(_results.first);
+      return;
+    }
+    _debounce?.cancel();
+    final myGeneration = ++_searchGeneration;
+    setState(() => _loading = true);
+    final r = await searchPlaces(query,
+        biasLat: widget.biasLat, biasLng: widget.biasLng);
+    if (!mounted || myGeneration != _searchGeneration) return;
+    if (r.isEmpty) {
+      setState(() {
+        _loading = false;
+        _searched = true;
+      });
+      return;
+    }
+    setState(() => _loading = false);
+    _selectResult(r.first);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // InDrive-शैली — बक्सको ठ्याक्कै माथि प्रस्ट "From"/"To" लेबल, ताकि
+        // प्रयोगकर्ताले कुन बक्स कुन हो भनेर एकनजरमै छुट्याउन सकून्।
+        if (widget.fieldLabel != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 4),
+            child: Text(widget.fieldLabel!,
+                style: const TextStyle(
+                    color: AppColors.kmMuted,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    letterSpacing: 0.3)),
+          ),
+        Container(
+          decoration: BoxDecoration(
+            color: AppColors.kmVoid2.withValues(alpha: 0.95),
+            borderRadius: BorderRadius.circular(AppRadius.pill),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+            boxShadow: const [
+              BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+            ],
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            children: [
+              const Icon(Icons.search_rounded, color: AppColors.kmOrange),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  focusNode: _focusNode,
+                  autofocus: true,
+                  onChanged: _onChanged,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: _onSubmitted,
+                  style: const TextStyle(color: AppColors.kmText),
+                  cursorColor: AppColors.kmOrange,
+                  decoration: InputDecoration(
+                    // ऐप-व्यापी `inputDecorationTheme` (light मोडमा सेतो/
+                    // हल्का fill + रङ्गीन border दिने) यहाँ लागू नहोस् भनेर
+                    // सबै border अवस्था + filled/fillColor स्पष्ट रूपमै
+                    // हटाइएको — नत्र (light theme मा) सेतो पृष्ठभूमिमाथि
+                    // हाम्रै सेतो/हल्का `kmText` अक्षर देखिँदैनथ्यो (typed
+                    // text "invisible" देखिने बग यही कारणले थियो)।
+                    filled: false,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    errorBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    focusedErrorBorder: InputBorder.none,
+                    hintText: widget.hintText ?? S.searchDestinationHint,
+                    hintStyle: const TextStyle(color: AppColors.kmMuted),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+              if (widget.showLiveLocationButton && !_loading) ...[
+                const SizedBox(width: 4),
+                InkWell(
+                  borderRadius: BorderRadius.circular(999),
+                  onTap: _useLiveLocation,
+                  child: const Padding(
+                    padding: EdgeInsets.all(6),
+                    child: Icon(Icons.my_location_rounded,
+                        size: 19, color: AppColors.kmTeal),
+                  ),
+                ),
+              ],
+              if (_loading)
+                const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppColors.kmOrange)),
+            ],
+          ),
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            chip(S.isNepali ? 'सबै' : 'All', radiusKm == null,
-                () => onPick(null)),
-            for (final km in [5, 10, 15])
-              chip(S.kmRadius(km), radiusKm == km, () => onPick(km)),
-          ],
-        ),
+        if (_results.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(top: 6),
+            constraints: const BoxConstraints(maxHeight: 260),
+            decoration: BoxDecoration(
+              color: AppColors.kmVoid2.withValues(alpha: 0.97),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+              boxShadow: const [
+                BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+              ],
+            ),
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: _results.length,
+              separatorBuilder: (_, __) =>
+                  Divider(height: 1, color: Colors.white.withValues(alpha: 0.1)),
+              itemBuilder: (context, i) {
+                final r = _results[i];
+                return ListTile(
+                  dense: true,
+                  leading:
+                      const Icon(Icons.place_rounded, color: AppColors.kmOrange),
+                  title: Text(r.label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: AppColors.kmText)),
+                  onTap: () => _selectResult(r),
+                );
+              },
+            ),
+          )
+        else if (_searched && !_loading && _controller.text.trim().length >= 2)
+          Container(
+            margin: const EdgeInsets.only(top: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppColors.kmVoid2.withValues(alpha: 0.95),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+              boxShadow: const [
+                BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+              ],
+            ),
+            child: Text(S.noSearchResults,
+                style: const TextStyle(color: AppColors.kmMuted, fontSize: 12.5)),
+          ),
       ],
     );
   }
@@ -838,25 +2525,19 @@ class _ProviderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final name = (data['name'] ?? '—').toString();
-    final rating = (data['rating'] ?? '5.0').toString();
+    // '5.0' default हटाइयो — नयाँ worker सुरुमा साँच्चै ०/कुनै review
+    // नभएको देखिनुपर्छ, admin approve गर्दै लेख्ने मान अब '0.0' नै हो।
+    final rating = (data['rating'] ?? '0.0').toString();
     final price = (data['price'] ?? 'Rs. 500').toString();
     final experience = (data['experience'] ?? '').toString();
     final online = data['isOnline'] != false;
+    const bodySmall = TextStyle(color: AppColors.kmMuted, fontSize: 12.5);
 
-    return Container(
+    return GlassPanel(
+      radius: AppRadius.lg,
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 16,
-              offset: const Offset(0, 6)),
-        ],
-      ),
+      fill: AppColors.kmVoid2.withValues(alpha: 0.97),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -877,7 +2558,7 @@ class _ProviderCard extends StatelessWidget {
                       right: 0,
                       bottom: 0,
                       child: CircleAvatar(
-                          radius: 6, backgroundColor: AppColors.success),
+                          radius: 6, backgroundColor: AppColors.kmTeal),
                     ),
                 ],
               ),
@@ -888,17 +2569,21 @@ class _ProviderCard extends StatelessWidget {
                   children: [
                     Text(name,
                         style: const TextStyle(
-                            fontWeight: FontWeight.w800, fontSize: 15.5)),
+                            color: AppColors.kmText,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15.5)),
                     Row(
                       children: [
                         const Icon(Icons.star_rounded,
-                            size: 15, color: AppColors.igYellow),
+                            size: 15, color: AppColors.kmAmber),
                         const SizedBox(width: 2),
                         Text(rating,
                             style: const TextStyle(
-                                fontWeight: FontWeight.w700, fontSize: 12.5)),
+                                color: AppColors.kmText,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12.5)),
                         Text('   ${S.serviceName(serviceType)}',
-                            style: theme.textTheme.bodySmall),
+                            style: bodySmall),
                       ],
                     ),
                     Text(
@@ -907,43 +2592,47 @@ class _ProviderCard extends StatelessWidget {
                           S.distanceLabel(distanceKm),
                           S.fromPrice(price),
                         ].join('  ·  '),
-                        style: theme.textTheme.bodySmall),
+                        style: bodySmall),
                   ],
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.close_rounded, size: 20),
+                icon: const Icon(Icons.close_rounded,
+                    size: 20, color: AppColors.kmMuted),
                 onPressed: onClose,
               ),
             ],
           ),
           if (routeLoading || route != null) ...[
-            const Divider(height: 18),
+            Divider(height: 18, color: Colors.white.withValues(alpha: 0.1)),
             if (routeLoading)
               Row(
                 children: [
                   const SizedBox(
                       width: 14,
                       height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2)),
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppColors.kmOrange)),
                   const SizedBox(width: 8),
-                  Text(S.findingRoute, style: theme.textTheme.bodySmall),
+                  Text(S.findingRoute, style: bodySmall),
                 ],
               )
             else
               Row(
                 children: [
                   const Icon(Icons.route_rounded,
-                      size: 16, color: Color(0xFF111111)),
+                      size: 16, color: AppColors.kmOrange),
                   const SizedBox(width: 6),
                   Text(
                     '${route!.km.toStringAsFixed(route!.km < 10 ? 1 : 0)} km  ·  ${S.minutesShort(route!.minutes)}',
                     style: const TextStyle(
-                        fontWeight: FontWeight.w800, fontSize: 12.5),
+                        color: AppColors.kmText,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12.5),
                   ),
                   const SizedBox(width: 6),
                   Text(route!.real ? S.roadRoute : S.approxRoute,
-                      style: theme.textTheme.bodySmall),
+                      style: bodySmall),
                 ],
               ),
           ],
@@ -964,14 +2653,16 @@ class _ProviderCard extends StatelessWidget {
                         'price': price,
                         'document': (data['document'] ?? '').toString(),
                         'phone': (data['phone'] ?? '').toString(),
+                        'vehicleDetails':
+                            (data['vehicleDetails'] ?? '').toString(),
                       }),
                     ),
                   ),
                   icon: const Icon(Icons.person_rounded, size: 16),
                   label: const Text('Profile'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.igViolet,
-                    side: const BorderSide(color: AppColors.igViolet),
+                    foregroundColor: AppColors.kmOrange,
+                    side: const BorderSide(color: AppColors.kmOrange),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                 ),
@@ -979,7 +2670,7 @@ class _ProviderCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 flex: 2,
-                child: PrimaryButton(
+                child: KmCtaButton(
                   label: S.offerYourPrice,
                   icon: Icons.gavel_rounded,
                   onPressed: () => showOfferSheet(
@@ -1010,6 +2701,12 @@ class _PostedJob {
   final double lat;
   final double lng;
   final int budget;
+  // Ride-Hailing (Bike/Car) मात्र — गन्तव्य (destination) विवरण, अरू
+  // सेवाहरूमा सधैँ null।
+  final String? destAddress;
+  final double? destLat;
+  final double? destLng;
+  final bool autoOffer;
   const _PostedJob({
     required this.title,
     required this.description,
@@ -1019,6 +2716,10 @@ class _PostedJob {
     required this.lat,
     required this.lng,
     required this.budget,
+    this.destAddress,
+    this.destLat,
+    this.destLng,
+    this.autoOffer = false,
   });
 }
 
@@ -1026,14 +2727,29 @@ class _PostJobSheet extends StatefulWidget {
   final String serviceType;
   final double lat;
   final double lng;
+  // Parent screen (pin drop) ले पहिल्यै geocode गरिसकेको ठेगाना — दिइएको
+  // (खाली नभएको) भए यहाँ फेरि छुट्टै network call नगरी सिधै प्रयोग हुन्छ।
+  final String initialAddress;
   final int initialBudget;
   final int nearbyCount;
+  // Ride-Hailing — pickup पहिल्यै भइसकेको, गन्तव्य पनि confirm भइसकेको ride
+  // भए मात्र true। यो true हुँदा date/slot/title जस्ता scheduled-job field
+  // हरू देखिँदैनन् (राइड तुरुन्तै हो, कुनै भविष्यको मिति चाहिँदैन)।
+  final bool isRide;
+  final String destinationAddress;
+  final double? destLat;
+  final double? destLng;
   const _PostJobSheet({
     required this.serviceType,
     required this.lat,
     required this.lng,
+    required this.initialAddress,
     required this.initialBudget,
     required this.nearbyCount,
+    this.isRide = false,
+    this.destinationAddress = '',
+    this.destLat,
+    this.destLng,
   });
 
   @override
@@ -1049,13 +2765,24 @@ class _PostJobSheetState extends State<_PostJobSheet> {
   late int _budget = widget.initialBudget;
   bool _loadingAddr = true;
   String? _error;
+  // Ride-Hailing मात्र — on भए पहिलो आउने driver प्रस्ताव आफैं accept हुन्छ
+  // (RequestTrackingScreen कै `_Searching` ले पढ्छ)।
+  bool _autoOffer = false;
 
   static const _step = 50;
 
   @override
   void initState() {
     super.initState();
-    _fillAddress();
+    if (widget.initialAddress.trim().isNotEmpty) {
+      // Parent ले पहिल्यै geocode गरिसकेको — फेरि नगर्ने, तुरुन्तै देखिने।
+      _addr.text = widget.initialAddress.trim();
+      _loadingAddr = false;
+    } else {
+      // Parent कै geocode अझै नआएको/असफल भएको दुर्लभ अवस्थामा मात्र यहाँ
+      // आफ्नै छुट्टै कोसिस (safety net) — नत्र यो field सधैंलाई खाली रहन्थ्यो।
+      _fillAddress();
+    }
   }
 
   @override
@@ -1094,32 +2821,38 @@ class _PostJobSheetState extends State<_PostJobSheet> {
   }
 
   void _submit() {
-    if (_desc.text.trim().isEmpty) {
-      setState(() => _error = S.describeJobFirst);
-      return;
-    }
-    if (_date == null) {
-      setState(() => _error = S.pickDateFirst);
-      return;
+    // Ride-Hailing — तुरुन्तै हो, कुनै मिति/शीर्षक/वर्णन अनिवार्य छैन।
+    if (!widget.isRide) {
+      if (_desc.text.trim().isEmpty) {
+        setState(() => _error = S.describeJobFirst);
+        return;
+      }
+      if (_date == null) {
+        setState(() => _error = S.pickDateFirst);
+        return;
+      }
     }
     Navigator.pop(
       context,
       _PostedJob(
-        title: _title.text.trim(),
+        title: widget.isRide ? S.requestRide : _title.text.trim(),
         description: _desc.text.trim(),
-        date: _date!,
+        date: _date ?? DateTime.now(),
         slot: _slot,
         address: _addr.text.trim(),
         lat: widget.lat,
         lng: widget.lng,
         budget: _budget,
+        destAddress: widget.isRide ? widget.destinationAddress : null,
+        destLat: widget.isRide ? widget.destLat : null,
+        destLng: widget.isRide ? widget.destLng : null,
+        autoOffer: widget.isRide && _autoOffer,
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
     return Padding(
@@ -1129,11 +2862,21 @@ class _PostJobSheetState extends State<_PostJobSheet> {
         // pointer नपुगोस् (नक्साका gesture पनि sheet खुला हुँदा बन्द छन्)।
         behavior: HitTestBehavior.opaque,
         onTap: () {},
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: AppColors.igGradient,
+        child: ClipRRect(
+          borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+            child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.kmSurface.withValues(alpha: 0.94),
             borderRadius:
-                BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+                const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+            border: Border(
+              top: BorderSide(color: AppColors.kmGlassBorder),
+              left: BorderSide(color: AppColors.kmGlassBorder),
+              right: BorderSide(color: AppColors.kmGlassBorder),
+            ),
           ),
           padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
           child: SingleChildScrollView(
@@ -1147,49 +2890,125 @@ class _PostJobSheetState extends State<_PostJobSheet> {
                     height: 4,
                     margin: const EdgeInsets.only(bottom: 14),
                     decoration: BoxDecoration(
-                      color: Colors.white70,
+                      color: Colors.white.withValues(alpha: 0.22),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
                 ),
                 Row(
                   children: [
-                    Icon(serviceIconFor(widget.serviceType),
-                        color: Colors.white),
-                    const SizedBox(width: 8),
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: const BoxDecoration(
+                        gradient: AppColors.kmCtaGradient,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                          widget.isRide
+                              ? Icons.local_taxi_rounded
+                              : serviceIconFor(widget.serviceType),
+                          color: AppColors.kmInk, size: 19),
+                    ),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                              '${S.jobConfirmTitle} — ${S.serviceName(widget.serviceType)}',
+                              widget.isRide
+                                  ? '${S.confirmRideTitle} — ${S.serviceName(widget.serviceType)}'
+                                  : '${S.jobConfirmTitle} — ${S.serviceName(widget.serviceType)}',
                               style: const TextStyle(
-                                  color: Colors.white,
+                                  color: AppColors.kmText,
                                   fontSize: 15,
                                   fontWeight: FontWeight.w800)),
                           Text(
                               '${widget.nearbyCount} ${S.serviceName(widget.serviceType)} ${S.providersNearby}',
                               style: const TextStyle(
-                                  color: Colors.white70, fontSize: 11)),
+                                  color: AppColors.kmMuted, fontSize: 11)),
                         ],
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 14),
-                _WhiteField(
-                  controller: _title,
-                  label: S.jobTitleLabel,
-                  hint: S.jobTitleHint,
-                ),
-                const SizedBox(height: 12),
-                _WhiteField(
-                  controller: _desc,
-                  label: S.jobDescription,
-                  hint: S.jobDescriptionHint,
-                  maxLines: 3,
-                ),
-                const SizedBox(height: 12),
+                if (widget.isRide) ...[
+                  // ── Pickup/Destination — यी दुवै पहिल्यै pin-drop बाट
+                  // confirm भइसकेका हुन्, यहाँ फेरि सम्पादन गर्न मिल्दैन
+                  // (सामान्य कामको सूची/मिति/वर्णन जस्तो केही चाहिँदैन)।
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(AppRadius.md),
+                      border: Border.all(color: AppColors.kmGlassBorder),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.my_location_rounded,
+                                color: AppColors.kmMuted, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${S.pickupLabel}: ${widget.initialAddress}',
+                                style: const TextStyle(
+                                    color: AppColors.kmText,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 3),
+                          child: SizedBox(
+                            height: 8,
+                            child: VerticalDivider(
+                                color: Colors.white.withValues(alpha: 0.16),
+                                thickness: 1.2),
+                          ),
+                        ),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.flag_rounded,
+                                color: AppColors.kmMuted, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${S.destinationLabel}: ${widget.destinationAddress}',
+                                style: const TextStyle(
+                                    color: AppColors.kmText,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                ] else ...[
+                  _WhiteField(
+                    controller: _title,
+                    label: S.jobTitleLabel,
+                    hint: S.jobTitleHint,
+                  ),
+                  const SizedBox(height: 12),
+                  _WhiteField(
+                    controller: _desc,
+                    label: S.jobDescription,
+                    hint: S.jobDescriptionHint,
+                    maxLines: 3,
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (!widget.isRide)
                 Row(
                   children: [
                     Expanded(
@@ -1200,21 +3019,20 @@ class _PostJobSheetState extends State<_PostJobSheet> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 14, vertical: 14),
                           decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.16),
+                            color: Colors.white.withValues(alpha: 0.06),
                             borderRadius: BorderRadius.circular(AppRadius.md),
-                            border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.4)),
+                            border: Border.all(color: AppColors.kmGlassBorder),
                           ),
                           child: Row(
                             children: [
                               const Icon(Icons.event_rounded,
-                                  color: Colors.white70, size: 18),
+                                  color: AppColors.kmMuted, size: 18),
                               const SizedBox(width: 8),
                               Text(
                                 _date == null
                                     ? S.preferredDateLabel
                                     : '${_date!.day}/${_date!.month}/${_date!.year}',
-                                style: const TextStyle(color: Colors.white),
+                                style: const TextStyle(color: AppColors.kmText),
                               ),
                             ],
                           ),
@@ -1226,18 +3044,17 @@ class _PostJobSheetState extends State<_PostJobSheet> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.16),
+                          color: Colors.white.withValues(alpha: 0.06),
                           borderRadius: BorderRadius.circular(AppRadius.md),
-                          border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.4)),
+                          border: Border.all(color: AppColors.kmGlassBorder),
                         ),
                         child: DropdownButtonHideUnderline(
                           child: DropdownButton<String>(
                             value: _slot,
                             isExpanded: true,
-                            dropdownColor: AppColors.igViolet,
-                            iconEnabledColor: Colors.white,
-                            style: const TextStyle(color: Colors.white),
+                            dropdownColor: AppColors.kmSurface,
+                            iconEnabledColor: AppColors.kmMuted,
+                            style: const TextStyle(color: AppColors.kmText),
                             items: const [
                               'anytime',
                               'morning',
@@ -1255,35 +3072,37 @@ class _PostJobSheetState extends State<_PostJobSheet> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                _WhiteField(
-                  controller: _addr,
-                  label: S.jobAddressLabel,
-                  hint: _loadingAddr ? S.fetchingAddress : '',
-                  maxLines: 2,
-                  prefix: const Icon(Icons.place_outlined,
-                      color: Colors.white70, size: 18),
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(Icons.gps_fixed_rounded,
-                        color: Colors.white60, size: 12),
-                    const SizedBox(width: 4),
-                    Text(
-                        '${S.pinnedLocation}: ${widget.lat.toStringAsFixed(5)}, ${widget.lng.toStringAsFixed(5)}',
-                        style: const TextStyle(
-                            color: Colors.white60, fontSize: 11)),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(S.serviceAddressNote,
-                    style:
-                        const TextStyle(color: Colors.white60, fontSize: 11)),
+                if (!widget.isRide) ...[
+                  const SizedBox(height: 12),
+                  _WhiteField(
+                    controller: _addr,
+                    label: S.jobAddressLabel,
+                    hint: _loadingAddr ? S.fetchingAddress : '',
+                    maxLines: 2,
+                    prefix: const Icon(Icons.place_outlined,
+                        color: AppColors.kmMuted, size: 18),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.gps_fixed_rounded,
+                          color: AppColors.kmMuted, size: 12),
+                      const SizedBox(width: 4),
+                      Text(
+                          '${S.pinnedLocation}: ${widget.lat.toStringAsFixed(5)}, ${widget.lng.toStringAsFixed(5)}',
+                          style: const TextStyle(
+                              color: AppColors.kmMuted, fontSize: 11)),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(S.serviceAddressNote,
+                      style: const TextStyle(
+                          color: AppColors.kmMuted, fontSize: 11)),
+                ],
                 const SizedBox(height: 14),
-                Text(S.customerBudget,
+                Text(widget.isRide ? S.fareOfferLabel : S.customerBudget,
                     style: const TextStyle(
-                        color: Colors.white,
+                        color: AppColors.kmText,
                         fontSize: 12,
                         fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
@@ -1297,7 +3116,7 @@ class _PostJobSheetState extends State<_PostJobSheet> {
                     const SizedBox(width: 18),
                     Text('Rs. $_budget',
                         style: const TextStyle(
-                            color: Colors.white,
+                            color: AppColors.kmText,
                             fontSize: 24,
                             fontWeight: FontWeight.w800)),
                     const SizedBox(width: 18),
@@ -1307,31 +3126,44 @@ class _PostJobSheetState extends State<_PostJobSheet> {
                             _budget = (_budget + _step).clamp(_step, 1000000))),
                   ],
                 ),
+                if (widget.isRide) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(S.autoOffer,
+                            style: const TextStyle(
+                                color: AppColors.kmText,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600)),
+                      ),
+                      Switch(
+                        value: _autoOffer,
+                        activeThumbColor: AppColors.kmOrange,
+                        activeTrackColor: AppColors.kmOrange.withValues(alpha: 0.4),
+                        onChanged: (v) => setState(() => _autoOffer = v),
+                      ),
+                    ],
+                  ),
+                ],
                 if (_error != null) ...[
                   const SizedBox(height: 10),
                   Text(_error!,
-                      style: TextStyle(
-                          color: theme.colorScheme.error == Colors.transparent
-                              ? Colors.white
-                              : const Color(0xFFFFE0E0),
+                      style: const TextStyle(
+                          color: AppColors.kmRose,
                           fontSize: 12.5)),
                 ],
                 const SizedBox(height: 16),
-                ElevatedButton.icon(
+                KmCtaButton(
                   onPressed: _submit,
-                  icon: const Icon(Icons.campaign_rounded),
-                  label: Text(S.confirmBroadcast,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: AppColors.igViolet,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppRadius.pill)),
-                  ),
+                  icon: widget.isRide
+                      ? Icons.local_taxi_rounded
+                      : Icons.campaign_rounded,
+                  label: widget.isRide ? S.findOffer : S.confirmBroadcast,
                 ),
               ],
+            ),
+          ),
             ),
           ),
         ),
@@ -1359,22 +3191,22 @@ class _WhiteField extends StatelessWidget {
     return TextField(
       controller: controller,
       maxLines: maxLines,
-      style: const TextStyle(color: Colors.white),
+      style: const TextStyle(color: AppColors.kmText),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: Colors.white70),
+        labelStyle: const TextStyle(color: AppColors.kmMuted),
         hintText: hint,
-        hintStyle: const TextStyle(color: Colors.white54),
+        hintStyle: const TextStyle(color: AppColors.kmMuted),
         prefixIcon: prefix,
         filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.16),
+        fillColor: Colors.white.withValues(alpha: 0.06),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(AppRadius.md),
-          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+          borderSide: BorderSide(color: AppColors.kmGlassBorder),
         ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          borderSide: const BorderSide(color: Colors.white, width: 1.4),
+        focusedBorder: const OutlineInputBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.md)),
+          borderSide: BorderSide(color: AppColors.kmOrange, width: 1.4),
         ),
       ),
     );

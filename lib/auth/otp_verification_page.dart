@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 import 'dev_login.dart';
 
 class OtpVerificationPage extends StatefulWidget {
@@ -24,6 +24,14 @@ class OtpVerificationPage extends StatefulWidget {
   /// यो नम्बरसँग पहिले account छ (login) कि नयाँ (signup)?
   final bool existingAccount;
 
+  /// Android SMS auto-retrieval ले `verifyPhoneNumber()`'s
+  /// `verificationCompleted` मार्फत आफैं तयार पारेको credential — दिइएको भए
+  /// यो पेज खुल्नेबित्तिकै आफैं verify गर्छ (प्रयोगकर्ताले केही टाइप गर्नु
+  /// पर्दैन)। स्थायी नियम: sign-in "पूरा भयो, home फर्कने" भन्ने अन्तिम
+  /// निर्णय सधैँ यही पेजले मात्र गर्छ — `phone_input_page.dart` ले कहिल्यै
+  /// आफैं सिधै sign-in/pop गर्दैन (देख्नुहोस् त्यहाँको `_goOtp` doc-comment)।
+  final PhoneAuthCredential? autoCredential;
+
   const OtpVerificationPage({
     super.key,
     required this.phone,
@@ -31,6 +39,7 @@ class OtpVerificationPage extends StatefulWidget {
     this.verificationId,
     this.testMode = false,
     this.existingAccount = false,
+    this.autoCredential,
   });
 
   @override
@@ -42,6 +51,18 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
   bool _verifying = false;
 
   @override
+  void initState() {
+    super.initState();
+    final cred = widget.autoCredential;
+    if (cred != null) {
+      // build() भित्रैबाट होइन, पहिलो frame पूरा भएपछि मात्र — context यो
+      // बेलासम्म पूर्ण रूपमा mount भइसकेको ग्यारेन्टी हुन्छ।
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _completeWithCredential(cred));
+    }
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
@@ -50,6 +71,28 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// Android SMS auto-retrieval बाट पहिल्यै तयार भएको credential — यहीं मात्र
+  /// (phone_input_page.dart ले होइन) verify + "home फर्कने" निर्णय गर्ने।
+  Future<void> _completeWithCredential(PhoneAuthCredential cred) async {
+    if (!mounted || _verifying) return;
+    setState(() => _verifying = true);
+    try {
+      await FirebaseAuth.instance.signInWithCredential(cred);
+      if (!mounted) return;
+      // नयाँ KaamMitraApp() नबनाउने — same rootNavigatorKey collision bug
+      // (देख्नुहोस् email_auth_page.dart मा विस्तृत note)।
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _verifying = false);
+      _snack('${S.otpFailed}\n${e.message ?? e.code}');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _verifying = false);
+      _snack('${S.otpFailed}\n$e');
+    }
   }
 
   Future<void> _verify() async {
@@ -108,9 +151,10 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: AppGradientBackground(
-        child: SafeArea(
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
             child: Column(
@@ -118,42 +162,28 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
               children: [
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: IconButton(
-                    onPressed: () => Navigator.maybePop(context),
-                    icon: const Icon(Icons.arrow_back_rounded,
-                        color: Colors.white),
+                  child: GlassIconButton(
+                    icon: Icons.arrow_back_rounded,
+                    onTap: () => Navigator.maybePop(context),
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 16),
                 Text(widget.existingAccount ? S.welcomeBack : S.otpTitle,
                     style: const TextStyle(
-                        color: Colors.white,
+                        color: AppColors.kmText,
                         fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        shadows: [
-                          Shadow(color: Colors.black38, blurRadius: 10)
-                        ])),
+                        fontWeight: FontWeight.w800)),
                 const SizedBox(height: 8),
                 Text(
                     widget.existingAccount
                         ? S.loginToExisting
                         : S.otpSentTo(widget.phone),
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.85),
-                        fontSize: 13)),
+                    style: const TextStyle(
+                        color: AppColors.kmMuted, fontSize: 13)),
                 const SizedBox(height: 24),
-                Container(
+                GlassPanel(
+                  radius: AppRadius.lg,
                   padding: const EdgeInsets.fromLTRB(18, 22, 18, 18),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(AppRadius.lg),
-                    boxShadow: const [
-                      BoxShadow(
-                          color: Colors.black26,
-                          blurRadius: 20,
-                          offset: Offset(0, 8)),
-                    ],
-                  ),
                   child: Column(
                     children: [
                       TextField(
@@ -167,18 +197,17 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
                           LengthLimitingTextInputFormatter(6),
                         ],
                         style: const TextStyle(
+                            color: AppColors.kmText,
                             fontSize: 28,
                             fontWeight: FontWeight.w800,
                             letterSpacing: 12),
-                        decoration: InputDecoration(
-                          counterText: '',
-                          hintText: '••••••',
-                          labelText: S.otpCodeLabel,
-                        ),
+                        decoration: kmInputDecoration(S.otpCodeLabel,
+                                hint: '••••••')
+                            .copyWith(counterText: ''),
                         onSubmitted: (_) => _verify(),
                       ),
                       const SizedBox(height: 18),
-                      PrimaryButton(
+                      KmCtaButton(
                         label: S.verify,
                         icon: Icons.check_rounded,
                         loading: _verifying,
@@ -191,7 +220,7 @@ class _OtpVerificationPageState extends State<OtpVerificationPage> {
                 TextButton(
                   onPressed: () => Navigator.pop(context),
                   child: Text(S.wrongNumber,
-                      style: const TextStyle(color: Colors.white70)),
+                      style: const TextStyle(color: AppColors.kmMuted)),
                 ),
               ],
             ),

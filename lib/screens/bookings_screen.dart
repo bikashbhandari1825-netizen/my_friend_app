@@ -9,6 +9,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
 import '../widgets/complete_job_sheet.dart';
 import '../widgets/counter_offer_card.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/status_badge.dart';
 import 'chat_screen.dart';
 import 'job_actions.dart';
@@ -29,58 +30,53 @@ class BookingsScreen extends StatelessWidget {
   Future<void> _counterOfferToWorker(
       BuildContext context, String docId, num current) async {
     final controller = TextEditingController(text: current.toString());
-    await showDialog(
+    await showKmDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('नयाँ मूल्य प्रस्ताव गर्नुहोस्'),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          autofocus: true,
-          decoration: InputDecoration(
-            labelText: S.yourPriceRs,
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-              _declineRequest(context, docId);
-            },
-            child: Text(S.declineJob,
-                style: const TextStyle(color: AppColors.danger)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text(S.cancel),
-          ),
-          ElevatedButton(
-            style:
-                ElevatedButton.styleFrom(backgroundColor: AppColors.igViolet),
-            onPressed: () async {
-              final newPrice = num.tryParse(controller.text.trim());
-              if (newPrice == null) return;
-              Navigator.of(dialogContext).pop();
-              await FirebaseFirestore.instance
-                  .collection('serviceRequests')
-                  .doc(docId)
-                  .update({
-                'status': 'pending_worker_counter',
-                'employerCounterPrice': newPrice,
-                'counterFrom': 'employer',
-                'employerCounteredAt': FieldValue.serverTimestamp(),
-              });
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(S.counterSentToWorker)),
-              );
-            },
-            child: Text(S.sendNewPrice,
-                style: const TextStyle(color: Colors.white)),
-          ),
-        ],
+      title: 'नयाँ मूल्य प्रस्ताव गर्नुहोस्',
+      icon: Icons.price_change_rounded,
+      content: TextField(
+        controller: controller,
+        keyboardType: TextInputType.number,
+        autofocus: true,
+        style: const TextStyle(color: AppColors.kmText),
+        decoration: kmInputDecoration(S.yourPriceRs),
       ),
+      actions: [
+        KmDialogAction(
+          label: S.declineJob,
+          destructive: true,
+          onPressed: () {
+            Navigator.of(context).pop();
+            _declineRequest(context, docId);
+          },
+        ),
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        KmDialogAction(
+          label: S.sendNewPrice,
+          filled: true,
+          onPressed: () async {
+            final newPrice = num.tryParse(controller.text.trim());
+            if (newPrice == null) return;
+            Navigator.of(context).pop();
+            await FirebaseFirestore.instance
+                .collection('serviceRequests')
+                .doc(docId)
+                .update({
+              'status': 'pending_worker_counter',
+              'employerCounterPrice': newPrice,
+              'counterFrom': 'employer',
+              'employerCounteredAt': FieldValue.serverTimestamp(),
+            });
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(S.counterSentToWorker)),
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -103,26 +99,56 @@ class BookingsScreen extends StatelessWidget {
 
     return DefaultTabController(
       length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('My Bookings & Requests',
-              style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-          // नोट: TabBar (`bottom:`) सँगै `flexibleSpace` gradient DecoratedBox
-          // ले यो device मा AppBar पूरै कालो देखाउँथ्यो (bottom भएको बेला
-          // flexibleSpace सही रूपमा नरेन्डर हुने देखियो) — त्यसैले सोझो ठोस
-          // रङ नै भरपर्दो।
-          backgroundColor: AppColors.igViolet,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          bottom: const TabBar(
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white70,
-            indicatorColor: Colors.white,
-            tabs: [Tab(text: 'Active/Pending'), Tab(text: 'Completed')],
+      child: AuroraBackground(
+        orbs: const [
+          KmOrb(Alignment.topLeft, AppColors.kmPurple),
+          KmOrb(Alignment.bottomRight, AppColors.kmOrangeDeep),
+        ],
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: KmScreenHeader(title: 'My Bookings & Requests'),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                  child: GlassPanel(
+                    radius: 22,
+                    padding: const EdgeInsets.all(4),
+                    child: TabBar(
+                      dividerColor: Colors.transparent,
+                      labelColor: AppColors.kmInk,
+                      unselectedLabelColor: AppColors.kmMuted2,
+                      indicatorSize: TabBarIndicatorSize.tab,
+                      indicator: BoxDecoration(
+                        color: AppColors.kmText,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      labelStyle:
+                          const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                      unselectedLabelStyle:
+                          const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                      tabs: const [
+                        Tab(text: 'Active/Pending'),
+                        Tab(text: 'Completed'),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(child: _bookingsBody(uid)),
+              ],
+            ),
           ),
         ),
-        // दुवै tab (Active/Pending, Completed) ले उही `employerUid == uid`
+      ),
+    );
+  }
+
+  Widget _bookingsBody(String? uid) {
+    // दुवै tab (Active/Pending, Completed) ले उही `employerUid == uid`
         // query हो — पहिले tab-पिच्छे आफ्नै छुट्टै StreamBuilder (आफ्नै
         // छुट्टै live listener + बारम्बार उही पूरा history डाउनलोड) थियो,
         // दुवै सधैँ एकैचोटि subscribe भइरहन्थे (TabBarView ले दुवै tab
@@ -130,8 +156,10 @@ class BookingsScreen extends StatelessWidget {
         // बाहिरी StreamBuilder ले एकपटक मात्र सुन्ने, दुवै tab ले त्यही
         // snapshot बाँड्ने। धेरै हजार user ले एकैचोटि यो खोल्दा Firestore
         // bandwidth/listener गन्ती आधाभन्दा बढी घट्छ।
-        body: uid == null
-            ? const Center(child: Text('Login गर्नुहोस्'))
+        return uid == null
+            ? const Center(
+                child: Text('Login गर्नुहोस्',
+                    style: TextStyle(color: AppColors.kmText)))
             : StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('serviceRequests')
@@ -172,11 +200,11 @@ class BookingsScreen extends StatelessWidget {
                         if (docs.isEmpty) {
                           return const Center(
                               child: Text('No active bookings yet',
-                                  style: TextStyle(color: Colors.grey)));
+                                  style: TextStyle(color: AppColors.kmMuted)));
                         }
 
                         return ListView.builder(
-                          padding: const EdgeInsets.all(16),
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                           itemCount: docs.length,
                           itemBuilder: (context, index) {
                             final data =
@@ -237,11 +265,12 @@ class BookingsScreen extends StatelessWidget {
                             final isActive = status == 'accepted' ||
                                 status == 'confirmed' ||
                                 status == 'in_progress';
-                            return Card(
+                            return Padding(
                               key: ValueKey(docId),
-                              margin: const EdgeInsets.only(bottom: 12),
-                              child: Padding(
-                                padding: const EdgeInsets.all(12),
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: GlassPanel(
+                                radius: 26,
+                                padding: const EdgeInsets.all(16),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -250,13 +279,13 @@ class BookingsScreen extends StatelessWidget {
                                         children: [
                                           const Icon(Icons.bolt_rounded,
                                               size: 15,
-                                              color: AppColors.igViolet),
+                                              color: AppColors.kmOrange),
                                           const SizedBox(width: 4),
                                           Text(S.activeJobTitle,
                                               style: const TextStyle(
                                                   fontSize: 11.5,
                                                   fontWeight: FontWeight.w800,
-                                                  color: AppColors.igViolet)),
+                                                  color: AppColors.kmOrange)),
                                         ],
                                       ),
                                       const SizedBox(height: 6),
@@ -267,6 +296,7 @@ class BookingsScreen extends StatelessWidget {
                                           child: Text(
                                             '${data['workerName'] ?? 'Worker'} (${data['service'] ?? ''})',
                                             style: const TextStyle(
+                                              color: AppColors.kmText,
                                               fontWeight: FontWeight.bold,
                                               fontSize: 16,
                                             ),
@@ -283,15 +313,19 @@ class BookingsScreen extends StatelessWidget {
                                       JobProgressBar(status: status),
                                     ],
                                     const SizedBox(height: 6),
-                                    Text('विवरण: ${data['details'] ?? ''}'),
-                                    Text('सुरुको मूल्य: Rs. $proposedPrice'),
+                                    Text('विवरण: ${data['details'] ?? ''}',
+                                        style: const TextStyle(
+                                            color: AppColors.kmMuted)),
+                                    Text('सुरुको मूल्य: Rs. $proposedPrice',
+                                        style: const TextStyle(
+                                            color: AppColors.kmMuted)),
                                     if (status == 'pending_worker_counter') ...[
                                       Padding(
                                         padding: const EdgeInsets.only(top: 6),
                                         child: Text(
                                           'तपाईंको प्रस्ताव: Rs. ${data['employerCounterPrice']}',
                                           style: const TextStyle(
-                                            color: AppColors.igPink,
+                                            color: AppColors.kmPink,
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
@@ -301,7 +335,8 @@ class BookingsScreen extends StatelessWidget {
                                         child: Text(
                                           S.waitingWorkerCounterReply,
                                           style: const TextStyle(
-                                              color: Colors.grey, fontSize: 12),
+                                              color: AppColors.kmMuted,
+                                              fontSize: 12),
                                         ),
                                       ),
                                     ],
@@ -312,7 +347,7 @@ class BookingsScreen extends StatelessWidget {
                                         child: Text(
                                           'अन्तिम मूल्य: Rs. ${data['finalPrice'] ?? proposedPrice}',
                                           style: const TextStyle(
-                                            color: AppColors.success,
+                                            color: AppColors.kmTeal,
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
@@ -454,18 +489,19 @@ class BookingsScreen extends StatelessWidget {
                         if (docs.isEmpty) {
                           return const Center(
                               child: Text('No completed bookings yet',
-                                  style: TextStyle(color: Colors.grey)));
+                                  style: TextStyle(color: AppColors.kmMuted)));
                         }
                         return ListView(
-                          padding: const EdgeInsets.all(16),
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                           children: [
                             for (final d in docs)
                               Builder(builder: (context) {
                                 final data = d.data() as Map<String, dynamic>;
-                                return Card(
-                                  margin: const EdgeInsets.only(bottom: 12),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12),
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 12),
+                                  child: GlassPanel(
+                                    radius: 26,
+                                    padding: const EdgeInsets.all(16),
                                     child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
@@ -476,6 +512,7 @@ class BookingsScreen extends StatelessWidget {
                                               child: Text(
                                                 '${data['workerName'] ?? 'Worker'} (${data['service'] ?? ''})',
                                                 style: const TextStyle(
+                                                    color: AppColors.kmText,
                                                     fontWeight:
                                                         FontWeight.bold),
                                               ),
@@ -487,7 +524,10 @@ class BookingsScreen extends StatelessWidget {
                                         ),
                                         const SizedBox(height: 4),
                                         Text(
-                                            'अन्तिम मूल्य: Rs. ${data['finalPrice'] ?? data['proposedPrice'] ?? '—'}'),
+                                            'अन्तिम मूल्य: Rs. ${data['finalPrice'] ?? data['proposedPrice'] ?? '—'}',
+                                            style: const TextStyle(
+                                                color: AppColors.kmOrange,
+                                                fontWeight: FontWeight.w700)),
                                       ],
                                     ),
                                   ),
@@ -499,8 +539,6 @@ class BookingsScreen extends StatelessWidget {
                     ],
                   );
                 },
-              ),
-      ),
-    );
+              );
   }
 }

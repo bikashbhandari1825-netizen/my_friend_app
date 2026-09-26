@@ -7,10 +7,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'auth/dev_login.dart';
+import 'driver_registration_flow.dart';
 import 'l10n/strings.dart';
 import 'screens/document_resync_page.dart';
 import 'theme/app_theme.dart';
-import 'widgets/app_ui.dart';
+import 'widgets/glass_ui.dart';
 import 'worker_registration_page.dart';
 
 class WorkerApprovalPendingPage extends StatefulWidget {
@@ -34,11 +35,22 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
-  void _reRegister() {
-    Navigator.pushAndRemoveUntil(
+  void _reRegister({bool driverEntry = false}) {
+    // BUG FIX: पहिले यहाँ `pushAndRemoveUntil(..., (_) => false)` थियो —
+    // यसले Navigator stack का ALL route (यो WorkerApprovalPendingPage पनि
+    // root gate को content नै हो, कुनै push बाट होइन) हटाउँथ्यो — root कै
+    // auth/users-doc StreamBuilder (गेट) सहित। त्यसपछि registration पेजका
+    // `_submit()` हरूले गर्ने `popUntil((route) => route.isFirst)` ले (गेट
+    // route नै नष्ट भइसकेकोले) केही फर्काउन नसकी उपयोगकर्ता उहीँ फारममा
+    // अड्किन्थ्यो/फेरि दर्ता स्क्रिनमै फर्किन्थ्यो (sign-in पछिको navigation
+    // loop)। `push` ले गेट route लाई तल्लो जीवितै राख्छ, ताकि पछि
+    // `popUntil(isFirst)` ले सही तरिकाले गेटमै फर्कोस्।
+    Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const WorkerRegistrationPage()),
-      (_) => false,
+      MaterialPageRoute(
+          builder: (_) => driverEntry
+              ? const DriverRegistrationFlow()
+              : const WorkerRegistrationPage()),
     );
   }
 
@@ -46,21 +58,70 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
-      return const Scaffold(body: Center(child: Text('Login गर्नुहोस्')));
+      return AuroraBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: const Center(
+              child: Text('Login गर्नुहोस्',
+                  style: TextStyle(color: AppColors.kmMuted))),
+        ),
+      );
     }
 
-    return Scaffold(
-      body: AppGradientBackground(
-        child: SafeArea(
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
           child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
             stream: FirebaseFirestore.instance
                 .collection('users')
                 .doc(uid)
                 .snapshots(),
             builder: (context, snapshot) {
-              if (!snapshot.hasData) {
+              if (!snapshot.hasData && !snapshot.hasError) {
                 return const Center(
-                    child: CircularProgressIndicator(color: Colors.white));
+                    child:
+                        CircularProgressIndicator(color: AppColors.kmOrange));
+              }
+
+              // ROBUSTNESS FIX: Firestore listener त्रुटि (network/permission/
+              // offline-with-no-cache) आउँदा पहिले silently `{}` मानेर status
+              // 'pending' देखाइदिन्थ्यो — भर्खरै साँच्चै approved भएको worker
+              // लाई पनि नेटवर्क हिच्किचाउँदा फेरि "pending" देखिन सक्थ्यो। अब
+              // स्पष्ट retry UI।
+              if (snapshot.hasError && !snapshot.hasData) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.cloud_off_rounded,
+                            size: 48, color: AppColors.kmMuted),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'डाटा लोड गर्न सकिएन — इन्टरनेट जाँच्नुहोस्।\nCould not load status — check your connection.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: AppColors.kmText),
+                        ),
+                        const SizedBox(height: 16),
+                        KmCtaButton(
+                          expand: false,
+                          label: 'फेरि प्रयास गर्नुहोस्',
+                          icon: Icons.refresh_rounded,
+                          onPressed: () => setState(() {}),
+                        ),
+                        TextButton.icon(
+                          onPressed: _logout,
+                          icon: const Icon(Icons.logout_rounded,
+                              color: AppColors.kmMuted),
+                          label: const Text('Logout',
+                              style: TextStyle(color: AppColors.kmMuted)),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
               }
 
               final data = snapshot.data!.data() ?? {};
@@ -73,7 +134,13 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
                 return _approved();
               }
               if (status == 'rejected' || status == 'declined') {
-                return _rejected((data['rejectionReason'] ?? '').toString());
+                final existingService = data['service']?.toString();
+                final wasDriver = existingService == 'Bike' ||
+                    existingService == 'Car' ||
+                    existingService == 'Driver';
+                return _rejected(
+                    (data['rejectionReason'] ?? '').toString(),
+                    driverEntry: wasDriver);
               }
               return _pending(docsPending: data['documentsPending'] == true);
             },
@@ -101,33 +168,39 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
             Container(
               width: 104,
               height: 104,
-              decoration: const BoxDecoration(
-                  color: Colors.white, shape: BoxShape.circle),
+              decoration: BoxDecoration(
+                color: AppColors.kmSurface.withValues(alpha: 0.6),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                boxShadow: [
+                  BoxShadow(
+                      color: iconColor.withValues(alpha: 0.35),
+                      blurRadius: 30,
+                      spreadRadius: 1),
+                ],
+              ),
               child: Icon(icon, size: 58, color: iconColor),
             ),
             const SizedBox(height: 26),
             Text(title,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                    color: Colors.white,
+                    color: AppColors.kmText,
                     fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    shadows: [Shadow(color: Colors.black38, blurRadius: 10)])),
+                    fontWeight: FontWeight.w800)),
             const SizedBox(height: 12),
             Text(body,
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.85),
-                    fontSize: 14,
-                    height: 1.45)),
+                style: const TextStyle(
+                    color: AppColors.kmMuted, fontSize: 14, height: 1.45)),
             const SizedBox(height: 28),
             ...extra,
             const SizedBox(height: 10),
             TextButton.icon(
               onPressed: _logout,
-              icon: const Icon(Icons.logout_rounded, color: Colors.white70),
+              icon: const Icon(Icons.logout_rounded, color: AppColors.kmMuted),
               label:
-                  Text(S.logOut, style: const TextStyle(color: Colors.white70)),
+                  Text(S.logOut, style: const TextStyle(color: AppColors.kmMuted)),
             ),
           ],
         ),
@@ -137,7 +210,7 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
 
   Widget _pending({bool docsPending = false}) => _shell(
         icon: Icons.hourglass_top_rounded,
-        iconColor: AppColors.igOrange,
+        iconColor: AppColors.kmAmber,
         title: S.isNepali
             ? 'तपाईंको दर्ता पेश गरियो'
             : 'Your registration is submitted',
@@ -146,30 +219,27 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
             : 'Once the admin reviews and approves, you can start taking jobs. This page will move forward automatically once approved.',
         extra: [
           if (docsPending) ...[
-            Container(
+            GlassPanel(
               padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(AppRadius.md),
-              ),
               child: Column(
                 children: [
                   const Icon(Icons.cloud_off_rounded,
-                      color: AppColors.danger, size: 28),
+                      color: AppColors.kmRose, size: 28),
                   const SizedBox(height: 8),
                   Text(S.docsNotUploadedTitle,
                       textAlign: TextAlign.center,
                       style: const TextStyle(
-                          fontWeight: FontWeight.w800, color: Colors.black87)),
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.kmText)),
                   const SizedBox(height: 6),
                   Text(S.docsNotUploadedBody,
                       textAlign: TextAlign.center,
                       style: const TextStyle(
-                          fontSize: 12.5, color: Colors.black54)),
+                          fontSize: 12.5, color: AppColors.kmMuted)),
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
-                    child: PrimaryButton(
+                    child: KmCtaButton(
                       label: S.reuploadDocuments,
                       icon: Icons.cloud_upload_rounded,
                       onPressed: () => Navigator.push(
@@ -188,14 +258,14 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
               width: 26,
               height: 26,
               child: CircularProgressIndicator(
-                  strokeWidth: 2.6, color: Colors.white),
+                  strokeWidth: 2.6, color: AppColors.kmOrange),
             ),
         ],
       );
 
-  Widget _rejected(String reason) => _shell(
+  Widget _rejected(String reason, {bool driverEntry = false}) => _shell(
         icon: Icons.cancel_rounded,
-        iconColor: AppColors.danger,
+        iconColor: AppColors.kmRose,
         title: S.isNepali
             ? 'तपाईंको दर्ता अस्वीकृत गरियो'
             : 'Your registration was rejected',
@@ -207,10 +277,10 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
         extra: [
           SizedBox(
             width: double.infinity,
-            child: PrimaryButton(
+            child: KmCtaButton(
               label: S.isNepali ? 'फेरि दर्ता गर्नुहोस्' : 'Register again',
               icon: Icons.refresh_rounded,
-              onPressed: _reRegister,
+              onPressed: () => _reRegister(driverEntry: driverEntry),
             ),
           ),
         ],
@@ -234,37 +304,35 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
                     width: 120,
                     height: 120,
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: AppColors.kmSurface.withValues(alpha: 0.6),
                       shape: BoxShape.circle,
+                      border:
+                          Border.all(color: Colors.white.withValues(alpha: 0.14)),
                       boxShadow: [
                         BoxShadow(
-                            color: Colors.white.withValues(alpha: 0.45),
+                            color: AppColors.kmTeal.withValues(alpha: 0.4),
                             blurRadius: 34,
                             spreadRadius: 2),
                       ],
                     ),
                     child: const Icon(Icons.check_circle_rounded,
-                        size: 100, color: AppColors.success),
+                        size: 100, color: AppColors.kmTeal),
                   ),
                   const SizedBox(height: 24),
                   Text(S.isNepali ? 'स्वीकृत भयो!' : 'Approved!',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
-                          color: Colors.white,
+                          color: AppColors.kmText,
                           fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          shadows: [
-                            Shadow(color: Colors.black38, blurRadius: 10)
-                          ])),
+                          fontWeight: FontWeight.w800)),
                   const SizedBox(height: 8),
                   Text(
                       S.isNepali
-                          ? 'तपाईं अब KaamMitra मा काम गर्न सक्नुहुन्छ'
-                          : 'You can now take jobs on KaamMitra',
+                          ? 'तपाईं अब Sahayatri मा काम गर्न सक्नुहुन्छ'
+                          : 'You can now take jobs on Sahayatri',
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          fontSize: 14)),
+                      style: const TextStyle(
+                          color: AppColors.kmMuted, fontSize: 14)),
                 ],
               ),
             ),
@@ -273,17 +341,15 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.verified_user_rounded,
-                    size: 13, color: Colors.white.withValues(alpha: 0.55)),
+                const Icon(Icons.verified_user_rounded,
+                    size: 13, color: AppColors.kmMuted),
                 const SizedBox(width: 5),
                 Flexible(
                   child: Text(
                     S.applicationSafeHelper,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.55),
-                        fontSize: 11,
-                        height: 1.3),
+                    style: const TextStyle(
+                        color: AppColors.kmMuted, fontSize: 11, height: 1.3),
                   ),
                 ),
               ],

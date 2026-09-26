@@ -43,17 +43,24 @@ service firebase.storage {
 
     // ── chats/{requestId}/media/... ─────────────────────────
     // Chat भित्रको फोटो/भिडियो/भ्वाइस — services/chat_media_service.dart।
-    // Firestore कै `chats/{requestId}` rule (firestore.rules) सँगै मिल्ने
-    // उस्तै permissive स्तर (isSignedIn() मात्र, दुई पक्षको membership
-    // यहाँ पनि जाँचिँदैन) — त्यो collection मा पहिल्यै दर्ज गरिएको सोही
-    // डिजाइन निर्णय, यहाँ अलग्गै कडा नबनाई consistent राख्ने।
+    // पहिले यहाँ Firestore कै (अब fix भइसकेको) पुरानो permissive
+    // `chats/{requestId}` rule सँगै जानाजानी मिलाइएको थियो — अब त्यहाँ
+    // participant-मात्र भइसकेकोले यहाँ पनि उस्तै: booking को employer/
+    // worker (वा admin) बाहेक कसैले पनि requestId अनुमान गरेर तेस्रो
+    // पक्षको चैट फोटो/भिडियो सिधै list/read गर्न नपाओस्।
+    function isChatMediaParticipant(requestId) {
+      let r = firestore.get(/databases/(default)/documents/serviceRequests/$(requestId)).data;
+      return r.employerUid == request.auth.uid || r.workerUid == request.auth.uid;
+    }
     match /chats/{requestId}/media/{fileName} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isSignedIn()
+        && (isChatMediaParticipant(requestId) || isAdmin());
     }
     // माथिकै फोल्डर list गर्न (job_actions.dart::_deleteChatMedia — completion/
     // cancellation मा सबै media file सफा गर्न) छुट्टै `list` अनुमति चाहिन्छ।
     match /chats/{requestId}/media {
-      allow list: if isSignedIn();
+      allow list: if isSignedIn()
+        && (isChatMediaParticipant(requestId) || isAdmin());
     }
 
     // बाँकी सबै बन्द।

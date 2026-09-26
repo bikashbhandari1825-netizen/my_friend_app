@@ -62,6 +62,10 @@ class PushNotificationService {
     // जाओस्)।
     FirebaseAuth.instance.authStateChanges().listen((user) {
       if (user != null) _saveTokenForCurrentUser();
+    }, onError: (e) {
+      // push token save मात्र UX polish हो — sign-in/navigation कहिल्यै
+      // यसमा depend गर्दैन, त्यसैले यहाँ log गरेर बस्ने, कुनै crash होइन।
+      debugPrint('PushNotificationService auth listener error: $e');
     });
     if (FirebaseAuth.instance.currentUser != null) {
       await _saveTokenForCurrentUser();

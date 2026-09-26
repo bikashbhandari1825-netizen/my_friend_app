@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'theme/app_theme.dart';
+import 'widgets/glass_ui.dart';
 
 class DocumentVerificationPage extends StatefulWidget {
   const DocumentVerificationPage({super.key});
@@ -81,34 +82,28 @@ class _DocumentVerificationPageState extends State<DocumentVerificationPage> {
   }
 
   void _showUploadOptions() {
-    showModalBottomSheet(
+    showKmSheet(
       context: context,
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading:
-                    const Icon(Icons.camera_alt, color: AppColors.igViolet),
-                title: const Text('क्यामेराबाट फोटो खिच्ने'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickFromCamera();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.folder, color: Colors.blue),
-                title: const Text('फाइलबाट छान्ने'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickDocument();
-                },
-              ),
-            ],
-          ),
-        );
-      },
+      children: [
+        KmSheetOption(
+          icon: Icons.camera_alt_rounded,
+          label: 'क्यामेराबाट फोटो खिच्ने',
+          selected: false,
+          onTap: () {
+            Navigator.pop(context);
+            _pickFromCamera();
+          },
+        ),
+        KmSheetOption(
+          icon: Icons.folder_rounded,
+          label: 'फाइलबाट छान्ने',
+          selected: false,
+          onTap: () {
+            Navigator.pop(context);
+            _pickDocument();
+          },
+        ),
+      ],
     );
   }
 

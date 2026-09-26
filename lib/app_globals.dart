@@ -25,6 +25,16 @@ ValueNotifier<Locale> localeNotifier = ValueNotifier(const Locale('ne'));
 // एप भित्रको notification देखाउने/नदेखाउने (Settings को toggle — session भरि)।
 ValueNotifier<bool> notificationsEnabled = ValueNotifier(true);
 
+// Firestore सर्भरसँग हाल पहुँच छ/छैन — `services/connectivity_service.dart`
+// ले नियमित रूपमा ताजा गर्छ। `true` हुँदा `app.dart` ले सबै स्क्रिनमाथि
+// साझा "अफलाइन — पुरानो डाटा देखाइँदैछ" ब्यानर देखाउँछ (हेर्नुहोस्
+// `widgets/offline_banner.dart`) — [cloud_firestore/unavailable] जस्ता
+// त्रुटि प्रयोगकर्तालाई चुपचाप/डरलाग्दो रूपमा नदेखियोस्, बरु प्रस्ट र
+// शान्त सन्देश देखियोस् भनेर। Firestore persistence पहिल्यै (main.dart)
+// सक्रिय भएकोले, अफलाइनमा पनि पुरानो (cache) डाटा हेर्न/काम गर्न रोकिँदैन —
+// यो ब्यानरले केवल त्यो अवस्था प्रस्ट पार्छ।
+ValueNotifier<bool> isOffline = ValueNotifier(false);
+
 // Profile Photo अस्थायी रूपमा राख्ने (Session भरि मात्र, Firebase Storage आउँदासम्म)
 Uint8List? sessionProfilePhoto;
 

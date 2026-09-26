@@ -2,9 +2,10 @@
 // एपको entry point मात्र। असली widget हरू आ-आफ्नै फाइलमा सारिएका छन् र तल
 // `export` गरिएका छन्, ताकि `import 'main.dart';` गर्ने पुराना फाइलहरू नबिग्रियोस्।
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart' show kReleaseMode, debugPrint;
+import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode, debugPrint;
 import 'package:flutter/material.dart';
 
 import 'app.dart';
@@ -12,6 +13,8 @@ import 'app_globals.dart';
 import 'firebase_options.dart';
 import 'prefs.dart';
 import 'services/app_update_service.dart';
+import 'services/connectivity_service.dart';
+import 'services/device_integrity_service.dart';
 import 'services/push_notification_service.dart';
 
 // साझा State/Helper र सबै स्क्रिन — पुराना relative import सँग compatibility को लागि
@@ -30,7 +33,6 @@ export 'screens/notification_screen.dart';
 export 'screens/owner_dashboard_screen.dart';
 export 'screens/payment_methods_screen.dart';
 export 'screens/profile_screen.dart';
-export 'screens/saved_workers_screen.dart';
 export 'screens/worker_list_screen.dart';
 export 'screens/worker_profile_screen.dart';
 export 'screens/worker_register_screen.dart';
@@ -85,6 +87,23 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
+  // Google Sign-In (web) — `signInWithRedirect` ले पूरै पेज Google मा लगेर
+  // फर्काउँछ (popup होइन), त्यसैले Chrome को popup-blocker ले कहिल्यै
+  // silently रोक्दैन (`signInWithPopup` को ज्ञात Flutter-web समस्या — क्लिक
+  // र popup खोल्ने बीचको async gap ले कतिपय browser मा "trusted user
+  // gesture" हराउँछ, अनि popup कुनै पनि error/exception नदेखाई चुपचाप
+  // ब्लक हुन्छ)। redirect पछि फर्किंदा यो चाहिन्छ — नत्र Firebase Auth SDK
+  // ले फर्केको token लाई कहिल्यै "consume" गर्दैन। सफल भए auth state आफैं
+  // बदलिन्छ (root कै authStateChanges() StreamBuilder ले पक्रिहाल्छ);
+  // यहाँ त केवल असफल भए debug-console मा log गर्नु मात्र हो।
+  if (kIsWeb) {
+    try {
+      await FirebaseAuth.instance.getRedirectResult();
+    } catch (e) {
+      debugPrint('getRedirectResult error: $e');
+    }
+  }
+
   // background/terminated state मा FCM message आउँदा चलाउने handler — Firebase
   // ले यसलाई एउटा छुट्टै isolate मा चलाउने भएकोले `runApp` भन्दा अघि, र
   // top-level function नै (class भित्र होइन) दर्ता गर्नुपर्छ।
@@ -103,6 +122,7 @@ void main() async {
   }
 
   await Prefs.load(); // save गरेको theme/भाषा/notification setting फेरि लोड
+  ConnectivityService.start();
   runApp(const KaamMitraApp());
 
   // App startup मा एकपटक — auto-update जाँच्ने। Login भए/नभए दुवै अवस्थामा
@@ -119,7 +139,10 @@ void main() async {
   WidgetsBinding.instance.addPostFrameCallback((_) {
     Future.delayed(const Duration(seconds: 2), () {
       final ctx = rootNavigatorKey.currentContext;
-      if (ctx != null) AppUpdateService.checkForUpdate(ctx);
+      if (ctx != null) {
+        AppUpdateService.checkForUpdate(ctx);
+        DeviceIntegrityService.checkOnce(ctx);
+      }
     });
   });
 }

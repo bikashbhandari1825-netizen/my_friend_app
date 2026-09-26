@@ -1,4 +1,5 @@
 // auth_page.dart
+import 'dart:async' show TimeoutException;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -7,12 +8,8 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import 'config/app_config.dart' show kGoogleWebClientId;
 import 'l10n/strings.dart';
-
-// Web OAuth client ID — यो lib/firebase_options.dart कै project (504837034251 /
-// kaammitra-87e38) को हुनुपर्छ। मोबाइलमा मात्र google_sign_in लाई चाहिन्छ।
-const String kGoogleWebClientId =
-    '504837034251-h3ol9ehaksf1biicqgig2o5hn6fv14u2.apps.googleusercontent.com';
 
 class AuthPage extends StatefulWidget {
   const AuthPage({super.key});
@@ -38,6 +35,8 @@ class _AuthPageState extends State<AuthPage> {
   static final RegExp _emailPattern =
       RegExp(r'^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$');
 
+  static const _timeout = Duration(seconds: 20);
+
   /// Sign-in/sign-up Future सफल भएपछि पनि, root (`app.dart`) कै
   /// `StreamBuilder<User?>` ले `authStateChanges()` बाट नयाँ user event
   /// नपाएसम्म अझै "signed-out" screen नै देखाइरहेको हुन सक्छ — विशेष गरी
@@ -57,7 +56,20 @@ class _AuthPageState extends State<AuthPage> {
   /// पर्खिरहन्छ — अन्ततः पूरै timeout बर्बाद गर्थ्यो। बरु सानो, bounded
   /// delay दिएर root लाई आफ्नै गतिमा rebuild हुन मौका दिने।
   Future<void> _waitForRootAuthSync(String uid) async {
-    await Future.delayed(const Duration(milliseconds: 300));
+    // पहिले यो सिधै ३००ms थियो — इमेल/पासवर्ड लगइनका लागि प्रायः पुग्थ्यो,
+    // तर Google sign-in (popup/redirect + native GoogleSignIn round-trip +
+    // token exchange, धेरै बढी async hop) मा त्यति छोटो समयमा root कै
+    // `authStateChanges()` StreamBuilder ले rebuild गर्ने अवसर नपाई यो पेज
+    // pop भइहाल्थ्यो — मुनि अझै पुरानो (signed-out/भिन्न) screen नै देखिने,
+    // "Google बाट sign up गर्दा/admin login गर्दा app आफैं पछाडि फर्कियो"
+    // भन्ने गुनासोको साँचो कारण। पहिले केही frame नै कुरेर (root को rebuild
+    // pipeline लाई कम्तिमा पूरा हुने मौका दिएर), अनि अलि लामो bounded delay
+    // दिने — अझै guarantee होइन (नयाँ subscription ले replay टिप्दैन भन्ने
+    // माथिकै सीमा उस्तै कायम छ), तर धेरै बढी भरपर्दो।
+    for (var i = 0; i < 3; i++) {
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    await Future.delayed(const Duration(milliseconds: 700));
   }
 
   Future<void> _submit() async {
@@ -77,10 +89,12 @@ class _AuthPageState extends State<AuthPage> {
       if (_isLoginMode) {
         // LOGIN: verify मात्र — कहिल्यै नयाँ खाता बनाउँदैन।
         await FirebaseAuth.instance
-            .signInWithEmailAndPassword(email: email, password: pass);
+            .signInWithEmailAndPassword(email: email, password: pass)
+            .timeout(_timeout);
       } else {
         await FirebaseAuth.instance
-            .createUserWithEmailAndPassword(email: email, password: pass);
+            .createUserWithEmailAndPassword(email: email, password: pass)
+            .timeout(_timeout);
       }
 
       if (!mounted) return;
@@ -114,6 +128,13 @@ class _AuthPageState extends State<AuthPage> {
         _ => '${e.message ?? e.code}  (${e.code})',
       };
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(S.isNepali
+              ? 'सर्भरबाट जवाफ आएन — फेरि प्रयास गर्नुहोस्'
+              : 'No response from the server — try again')));
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -139,7 +160,9 @@ class _AuthPageState extends State<AuthPage> {
     }
     setState(() => _busy = true);
     try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      await FirebaseAuth.instance
+          .sendPasswordResetEmail(email: email)
+          .timeout(_timeout);
       if (!mounted) return;
       setState(() => _busy = false);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -151,6 +174,13 @@ class _AuthPageState extends State<AuthPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.message ?? e.code)),
       );
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(S.isNepali
+              ? 'सर्भरबाट जवाफ आएन — फेरि प्रयास गर्नुहोस्'
+              : 'No response from the server — try again')));
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -161,9 +191,19 @@ class _AuthPageState extends State<AuthPage> {
   }
 
   // Google बाट लगइन।
-  //  - Web: Firebase को signInWithPopup प्रयोग गर्छ। यसले Firebase auth domain
-  //    (kaammitra-87e38.firebaseapp.com) लाई OAuth origin बनाउँछ, जुन Firebase ले
-  //    आफै authorize गर्छ — त्यसैले `origin_mismatch` (400) आउँदैन।
+  //  - Web: पहिले popup नै प्रयास (उत्तम UX, पूरा पेज अर्कै लगेर फर्काउनु
+  //    पर्दैन)। समस्या यत्ति हो: browser ले कहिलेकाहीं popup लाई कुनै
+  //    error/exception नै नदेखाई चुपचाप ब्लक गर्छ (क्लिक र popup खोल्ने
+  //    बीचको async gap ले कतिपय browser मा "trusted user gesture" हराउने
+  //    ज्ञात Flutter-web समस्या) — त्यसैले ब्लक भएको प्रस्ट थाहा भएमा मात्र
+  //    (popup-blocked/popup-closed-by-user/cancelled-popup-request) redirect
+  //    मा fallback गर्ने। साँच्चै silently अड्किए पनि तलको `.timeout()` ले
+  //    अन्ततः स्पष्ट सन्देश देखाउँछ, अनन्त कालसम्म अड्किँदैन। redirect ले
+  //    फर्किएपछिको काम (main.dart::getRedirectResult() + root को
+  //    authStateChanges()) ले आफैं गर्छन्। यसले पनि Firebase auth domain
+  //    (kaammitra-87e38.firebaseapp.com) लाई नै OAuth origin बनाउँछ, जुन
+  //    Firebase ले आफै authorize गर्छ — त्यसैले `origin_mismatch` (400)
+  //    आउँदैन।
   //  - Mobile: google_sign_in प्लगिन प्रयोग गर्छ।
   Future<void> _signInWithGoogle() async {
     if (_busy) return;
@@ -171,7 +211,27 @@ class _AuthPageState extends State<AuthPage> {
     try {
       if (kIsWeb) {
         final provider = GoogleAuthProvider();
-        await FirebaseAuth.instance.signInWithPopup(provider);
+        try {
+          await FirebaseAuth.instance
+              .signInWithPopup(provider)
+              .timeout(const Duration(seconds: 12));
+        } on FirebaseAuthException catch (e) {
+          // 'popup-closed-by-user'/'cancelled-popup-request' ले प्रयोगकर्ता
+          // आफैंले cancel गरेको जनाउन सक्छ — त्यो अवस्थामा redirect मा
+          // नलैजाने (तलको outer catch ले चुपचाप ठीकै handle गर्छ)।
+          // 'popup-blocked' मात्र browser ले नै रोकेको प्रस्ट संकेत हो।
+          if (e.code == 'popup-blocked') {
+            await FirebaseAuth.instance.signInWithRedirect(provider);
+            return;
+          }
+          rethrow;
+        } on TimeoutException {
+          // असली silent-block लक्षण: कुनै exception नै नआई popup चुपचाप
+          // अड्किरहन्छ। छोटो timeout पछि यहीं redirect मा fallback गर्ने —
+          // ९० सेकेन्ड नपर्खी।
+          await FirebaseAuth.instance.signInWithRedirect(provider);
+          return;
+        }
       } else {
         // Android मा `clientId` param बेवास्ता हुन्छ — `serverClientId`
         // (Firebase Web client ID) ले मात्र सही audience भएको idToken दिन्छ।
@@ -332,7 +392,7 @@ class _AuthPageState extends State<AuthPage> {
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    'KaamMitra',
+                    'सहयात्री',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 30,

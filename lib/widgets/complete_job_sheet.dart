@@ -29,7 +29,11 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../config/app_config.dart' show kCommissionRate;
 import '../l10n/strings.dart';
 import '../screens/job_actions.dart'
-    show myWorkerName, purgeSensitiveDataOnCompletion, releaseWorkerActiveJob;
+    show
+        myWorkerName,
+        purgeSensitiveDataOnCompletion,
+        releaseWorkerActiveJob,
+        syncWorkerRatingToRegisteredWorkers;
 import '../theme/app_theme.dart';
 import 'app_ui.dart';
 import 'success_feedback.dart';
@@ -191,6 +195,22 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
         'requestId': widget.docId,
         'createdAt': FieldValue.serverTimestamp(),
       });
+      // Rating-Based Order Allocation — worker को साँचो auto-गणना हुने
+      // रेटिङ (`ratingSum`/`ratingCount`, `job_actions.dart::
+      // monthlyOrderQuotaForRating` ले पढ्ने) यही review सँगै अपडेट। यो
+      // increment हो (commutative) भएकोले batch मै सुरक्षित — transaction
+      // चाहिँदैन।
+      batch.set(
+        FirebaseFirestore.instance.collection('users').doc(widget.workerUid),
+        {
+          'ratingSum': FieldValue.increment(_rating),
+          'ratingCount': FieldValue.increment(1),
+          // Passenger को offer-card मा "N rides completed" देखाउन — हरेक
+          // completion मा यही एक counter simple increment।
+          'completedRidesCount': FieldValue.increment(1),
+        },
+        SetOptions(merge: true),
+      );
       batch.update(
         FirebaseFirestore.instance
             .collection('serviceRequests')
@@ -213,6 +233,10 @@ class _CompleteJobSheetState extends State<_CompleteJobSheet> {
       // Single Active Job Restriction — काम completed भएपछि worker फेरि
       // अर्को नयाँ काम accept गर्न मिल्ने बनाउने (पोइन्टर खाली)।
       unawaited(releaseWorkerActiveJob(widget.workerUid, widget.docId));
+      // माथिकै ratingSum/ratingCount increment पछि nearby-list कै cached
+      // `rating`/`reviews` (registeredWorkers) पनि ताजा राख्ने — नत्र
+      // साँचो review जति आए पनि त्यहाँ कहिल्यै नबदलिने।
+      unawaited(syncWorkerRatingToRegisteredWorkers(widget.workerUid));
       playSuccessFeedback();
       if (!mounted) return;
       Navigator.pop(context);

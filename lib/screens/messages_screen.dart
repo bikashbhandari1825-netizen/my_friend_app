@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/spring_tap.dart';
 import 'chat_screen.dart';
 
@@ -51,104 +52,115 @@ class _MessagesScreenState extends State<MessagesScreen> {
   Widget build(BuildContext context) {
     final uid = _uid;
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        title: Text(S.messages,
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w800)),
+    return AuroraBackground(
+      orbs: const [
+        KmOrb(Alignment.topRight, AppColors.kmPurple),
+        KmOrb(Alignment.bottomLeft, AppColors.kmOrangeDeep),
+      ],
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.buttonGradient),
-        ),
-      ),
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppColors.igGradient),
-        child: SafeArea(
-          child: uid == null
-              ? const Center(
-                  child: Text('Login गर्नुहोस्',
-                      style: TextStyle(color: Colors.white)))
-              : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                  stream: _userStream,
-                  builder: (context, userSnap) {
-                    final role = (userSnap.data?.data()?['role'] ?? 'employer')
-                        .toString();
-                    final field =
-                        role == 'worker' ? 'workerUid' : 'employerUid';
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: KmScreenHeader(title: S.messages),
+              ),
+              Expanded(
+                child: uid == null
+                    ? const Center(
+                        child: Text('Login गर्नुहोस्',
+                            style: TextStyle(color: AppColors.kmText)))
+                    : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                        stream: _userStream,
+                        builder: (context, userSnap) {
+                          final role =
+                              (userSnap.data?.data()?['role'] ?? 'employer')
+                                  .toString();
+                          final field =
+                              role == 'worker' ? 'workerUid' : 'employerUid';
 
-                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: _requestsStream(field),
-                      builder: (context, snap) {
-                        if (!snap.hasData) {
-                          return const Center(
-                              child: CircularProgressIndicator(
-                                  color: Colors.white));
-                        }
-                        final rows = (snap.data?.docs ?? []).where((d) {
-                          return _chatStatuses
-                              .contains((d.data()['status'] ?? '').toString());
-                        }).toList()
-                          ..sort((a, b) {
-                            final ta = a.data()['lastMessageAt'] ??
-                                a.data()['createdAt'];
-                            final tb = b.data()['lastMessageAt'] ??
-                                b.data()['createdAt'];
-                            if (ta is Timestamp && tb is Timestamp) {
-                              return tb.compareTo(ta);
-                            }
-                            return 0;
-                          });
+                          return StreamBuilder<
+                              QuerySnapshot<Map<String, dynamic>>>(
+                            stream: _requestsStream(field),
+                            builder: (context, snap) {
+                              if (!snap.hasData) {
+                                return const Center(
+                                    child: CircularProgressIndicator(
+                                        color: AppColors.kmTeal));
+                              }
+                              final rows = (snap.data?.docs ?? []).where((d) {
+                                return _chatStatuses.contains(
+                                    (d.data()['status'] ?? '').toString());
+                              }).toList()
+                                ..sort((a, b) {
+                                  final ta = a.data()['lastMessageAt'] ??
+                                      a.data()['createdAt'];
+                                  final tb = b.data()['lastMessageAt'] ??
+                                      b.data()['createdAt'];
+                                  if (ta is Timestamp && tb is Timestamp) {
+                                    return tb.compareTo(ta);
+                                  }
+                                  return 0;
+                                });
 
-                        if (rows.isEmpty) {
-                          return _empty();
-                        }
+                              if (rows.isEmpty) {
+                                return _empty();
+                              }
 
-                        return ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(10, 10, 10, 24),
-                          itemCount: rows.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 8),
-                          itemBuilder: (context, i) {
-                            final d = rows[i].data();
-                            final id = rows[i].id;
-                            final name = (role == 'worker'
-                                    ? (d['employerName'] ?? 'Customer')
-                                    : (d['workerName'] ?? 'Worker'))
-                                .toString();
-                            final rowStatus = (d['status'] ?? '').toString();
-                            final last =
-                                (d['lastMessage'] ?? d['service'] ?? '')
-                                    .toString();
-                            final unread =
-                                (d['lastSenderUid'] ?? '').toString() != uid &&
-                                    (d['lastMessage'] ?? '')
-                                        .toString()
-                                        .isNotEmpty;
-                            return _ChatRow(
-                              name: name,
-                              snippet: last,
-                              time: _fmt(d['lastMessageAt'] ?? d['createdAt']),
-                              unread: unread,
-                              onTap: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => ChatScreen(
-                                      requestId: id,
-                                      workerName: name,
-                                      initialStatus: rowStatus),
-                                ),
-                              ),
-                              onDelete: () => _deleteChat(context, id),
-                            );
-                          },
-                        );
-                      },
-                    );
-                  },
-                ),
+                              return ListView.separated(
+                                padding: const EdgeInsets.fromLTRB(
+                                    16, 14, 16, 24),
+                                itemCount: rows.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 10),
+                                itemBuilder: (context, i) {
+                                  final d = rows[i].data();
+                                  final id = rows[i].id;
+                                  final name = (role == 'worker'
+                                          ? (d['employerName'] ?? 'Customer')
+                                          : (d['workerName'] ?? 'Worker'))
+                                      .toString();
+                                  final rowStatus =
+                                      (d['status'] ?? '').toString();
+                                  final last = (d['lastMessage'] ??
+                                          d['service'] ??
+                                          '')
+                                      .toString();
+                                  final unread =
+                                      (d['lastSenderUid'] ?? '').toString() !=
+                                              uid &&
+                                          (d['lastMessage'] ?? '')
+                                              .toString()
+                                              .isNotEmpty;
+                                  return _ChatRow(
+                                    name: name,
+                                    snippet: last,
+                                    time: _fmt(
+                                        d['lastMessageAt'] ?? d['createdAt']),
+                                    unread: unread,
+                                    bg: KmListTile.gradients[
+                                        i % KmListTile.gradients.length],
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChatScreen(
+                                            requestId: id,
+                                            workerName: name,
+                                            initialStatus: rowStatus),
+                                      ),
+                                    ),
+                                    onDelete: () => _deleteChat(context, id),
+                                  );
+                                },
+                              );
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -159,16 +171,16 @@ class _MessagesScreenState extends State<MessagesScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(Icons.chat_bubble_outline_rounded,
-                size: 60, color: Colors.white70),
+                size: 60, color: AppColors.kmMuted),
             const SizedBox(height: 14),
             Text(S.noConversationsYet,
                 style: const TextStyle(
-                    color: Colors.white,
+                    color: AppColors.kmText,
                     fontSize: 15,
                     fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
             Text(S.startTheConversation,
-                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                style: const TextStyle(color: AppColors.kmMuted, fontSize: 12)),
           ],
         ),
       );
@@ -190,21 +202,24 @@ class _MessagesScreenState extends State<MessagesScreen> {
   }
 
   Future<void> _deleteChat(BuildContext context, String requestId) async {
-    final ok = await showDialog<bool>(
+    final ok = await showKmDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(S.deleteChat),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(S.cancel)),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(S.delete, style: const TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
+      title: S.deleteChat,
+      icon: Icons.delete_outline_rounded,
+      iconBg: const LinearGradient(
+          colors: [AppColors.kmRose, AppColors.kmPinkDeep]),
+      actions: [
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        KmDialogAction(
+          label: S.delete,
+          destructive: true,
+          filled: true,
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
     );
     if (ok != true) return;
     final msgs = await FirebaseFirestore.instance
@@ -232,6 +247,7 @@ class _ChatRow extends StatelessWidget {
   final String snippet;
   final String time;
   final bool unread;
+  final Gradient bg;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
@@ -240,6 +256,7 @@ class _ChatRow extends StatelessWidget {
     required this.snippet,
     required this.time,
     required this.unread,
+    required this.bg,
     required this.onTap,
     required this.onDelete,
   });
@@ -254,8 +271,8 @@ class _ChatRow extends StatelessWidget {
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 24),
         decoration: BoxDecoration(
-          color: AppColors.danger.withValues(alpha: 0.9),
-          borderRadius: BorderRadius.circular(16),
+          color: AppColors.kmPink.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(26),
         ),
         child: const Icon(Icons.delete_rounded, color: Colors.white),
       ),
@@ -266,29 +283,23 @@ class _ChatRow extends StatelessWidget {
       child: SpringTap(
         onTap: onTap,
         pressedScale: 0.97,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
+        child: GlassPanel(
+          radius: 26,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: Row(
             children: [
               Container(
-                width: 50,
-                height: 50,
+                width: 56,
+                height: 56,
                 alignment: Alignment.center,
-                decoration: const BoxDecoration(
-                  gradient: AppColors.buttonGradient,
-                  shape: BoxShape.circle,
-                ),
+                decoration: BoxDecoration(gradient: bg, shape: BoxShape.circle),
                 child: Text(initial,
                     style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 19)),
+                        color: AppColors.kmInk,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 20)),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 13),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -300,22 +311,22 @@ class _ChatRow extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 15,
-                                  color: Colors.black87)),
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                  color: AppColors.kmText)),
                         ),
                         Text(time,
                             style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 12,
                                 color: unread
-                                    ? AppColors.igViolet
-                                    : Colors.black45,
+                                    ? AppColors.kmOrange
+                                    : AppColors.kmMuted,
                                 fontWeight: unread
                                     ? FontWeight.w700
                                     : FontWeight.w500)),
                       ],
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 4),
                     Row(
                       children: [
                         Expanded(
@@ -323,11 +334,12 @@ class _ChatRow extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                  fontSize: 12.5,
-                                  color:
-                                      unread ? Colors.black87 : Colors.black54,
+                                  fontSize: 13,
+                                  color: unread
+                                      ? AppColors.kmText
+                                      : AppColors.kmMuted,
                                   fontWeight: unread
-                                      ? FontWeight.w700
+                                      ? FontWeight.w600
                                       : FontWeight.w400)),
                         ),
                         if (unread)
@@ -336,7 +348,7 @@ class _ChatRow extends StatelessWidget {
                             height: 9,
                             margin: const EdgeInsets.only(left: 6),
                             decoration: const BoxDecoration(
-                                gradient: AppColors.buttonGradient,
+                                gradient: AppColors.kmCtaGradient,
                                 shape: BoxShape.circle),
                           ),
                       ],

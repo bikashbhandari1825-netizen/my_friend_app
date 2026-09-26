@@ -32,6 +32,12 @@ class PresenceService {
       _beat(user.uid);
       _heartbeat =
           Timer.periodic(const Duration(seconds: 25), (_) => _beat(user.uid));
+    }, onError: (_) {
+      // auth stream आफैं कहिल्यै error दिँदैन (व्यवहारमा), तर यहाँ पनि
+      // बेस्ट-इफर्ट सुरक्षा — presence मात्र UX polish हो, कहिल्यै crash
+      // नगरोस् वा unhandled zone error नबनोस्।
+      _heartbeat?.cancel();
+      _heartbeat = null;
     });
   }
 

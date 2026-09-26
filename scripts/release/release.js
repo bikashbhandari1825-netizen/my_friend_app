@@ -51,6 +51,14 @@ const APK_PATH = path.join(
   'app-release.apk',
 );
 const STORAGE_BUCKET = 'kaammitra-87e38.firebasestorage.app';
+// Obfuscated release बाट crash stack trace पढ्न चाहिने symbol map — यहाँ
+// build number अनुसार छुट्टाछुट्टै (कुनै release ले पुरानो overwrite
+// नगरोस्) राखिन्छ। `build/` पहिल्यै .gitignore मा छ (त्यसैले यो auto-
+// excluded), तर `flutter clean` ले यो फोल्डर नै मेटाइदिन्छ — त्यसैले हरेक
+// release पछि यो फोल्डर (कम्तिमा त्यही versionCode कै) कतै सुरक्षित
+// छुट्टै (जस्तै private cloud storage) backup राख्नुपर्छ, नत्र भविष्यमा
+// त्यो build कै crash log कहिल्यै de-obfuscate गर्न सकिँदैन।
+const DEBUG_INFO_ROOT = path.join(REPO_ROOT, 'build', 'debug-info');
 
 function parseArgs(argv) {
   const args = { notes: '', force: false, bump: null, dryRun: false, serviceAccount: null };
@@ -92,12 +100,22 @@ function bumpPubspecVersion(bump) {
   return { versionCode: code, versionName };
 }
 
-function buildReleaseApk() {
-  console.log('\n▶ flutter build apk --release');
-  execSync('flutter build apk --release', { cwd: REPO_ROOT, stdio: 'inherit' });
+function buildReleaseApk(versionCode) {
+  // `--obfuscate` ले Dart bytecode भित्रको class/method/field नाम अर्थहीन
+  // (a, b, c...) बनाइदिन्छ — reverse-engineering गर्न (jadx/apktool जस्ता
+  // tool ले decompile गरे पनि) धेरै गाह्रो बनाउँछ। यसैसँगै
+  // `--split-debug-info` अनिवार्य छ — नत्र production crash हुँदा stack
+  // trace पनि उस्तै obfuscated/अर्थहीन आउँछ, debug गर्नै नसकिने।
+  const debugInfoDir = path.join(DEBUG_INFO_ROOT, String(versionCode));
+  fs.mkdirSync(debugInfoDir, { recursive: true });
+  const cmd = `flutter build apk --release --obfuscate --split-debug-info="${debugInfoDir}"`;
+  console.log(`\n▶ ${cmd}`);
+  execSync(cmd, { cwd: REPO_ROOT, stdio: 'inherit' });
   if (!fs.existsSync(APK_PATH)) {
     throw new Error(`Build finished but APK not found at ${APK_PATH}`);
   }
+  console.log(`  → debug symbols saved to ${debugInfoDir}`);
+  console.log('    (back this folder up somewhere safe — needed to read crash logs from this build)');
 }
 
 function loadServiceAccount(explicitPath) {
@@ -162,7 +180,7 @@ async function main() {
     return;
   }
 
-  buildReleaseApk();
+  buildReleaseApk(versionCode);
 
   const serviceAccountPath = loadServiceAccount(args.serviceAccount);
   const apkUrl = await uploadApkAndPublish({

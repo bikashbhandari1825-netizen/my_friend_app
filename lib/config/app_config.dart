@@ -1,6 +1,7 @@
 // config/app_config.dart
 // App owner ले बदल्न सक्ने setting हरू (Firestore `config` collection मा)।
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show kReleaseMode;
 
 /// ── टेस्टिङ चरण auth toggle ──────────────────────────────────────────────
 /// Google Sign-In फेरि सक्रिय गरिएको छ — physical device मा live SHA-1 +
@@ -29,7 +30,39 @@ const bool kEnablePhoneAuth = true;
 /// bypass प्रयोग हुन्छ। प्रोडक्सनमा साँचो SMS चाहिएपछि यसलाई मात्र `true`
 /// पार्नुहोस् (Firebase Console मा Phone sign-in enable + SHA-1/domain
 /// setup पूरा भएपछि) — बाँकी कोड उस्तै रहन्छ।
-const bool kUseRealPhoneSms = false;
+///
+/// ── SECURITY: release-build safety net ──────────────────────────────
+/// यो `false` ले test-mode OTP (जुनसुकै नम्बर + सार्वजनिक रूपमा देखिने
+/// code 123456, dev_login.dart::kTestCode) सक्रिय गर्छ — फोन नम्बर मात्र
+/// थाहा भए (real SMS नै नचाहिने) अर्को कसैको पहिल्यैको खाता कब्जा गर्न
+/// दिन्छ (dev_login.dart ले उही नम्बरको पुरानो profile/provider doc
+/// auto-migrate/claim गर्छ)। यो manually production-release अघि `true`
+/// पार्नुपर्ने थियो, तर बिर्सिहाले (वा debug APK नै साँचो प्रयोगकर्तालाई
+/// बाँडिहाले) यो खतरनाक hole चुपचाप live रहन्थ्यो। अब `kReleaseMode` मा
+/// जहिले पनि जबरजस्ती `true` — release build मा तलको `false` जे भए पनि
+/// साँचो SMS नै अनिवार्य हुन्छ, debug/profile build (development/testing)
+/// मा मात्र सस्तो test-code bypass चल्छ।
+const bool _kUseRealPhoneSmsDebugToggle = false;
+bool get kUseRealPhoneSms => kReleaseMode || _kUseRealPhoneSmsDebugToggle;
+
+/// ── Hidden Admin Gateway ─────────────────────────────────────────────────
+/// एउटै ठाउँमा (single source of truth) — `app.dart` (कसलाई Owner Dashboard
+/// देखाउने) र `auth/admin_gate_page.dart` (Google sign-in पछि यही इमेल
+/// नमिले तुरुन्तै sign-out) दुवैले यहीँबाट पढ्छन्, कतै हार्डकोड दोहोरिँदैन।
+const String kAdminEmail = 'bikashbhandari1825@gmail.com';
+
+/// सामान्य "Continue with phone" फिल्डमै यो ठ्याक्कै नम्बर (कुनै पनि देश
+/// कोडसँग, राष्ट्रिय अंक मात्र तुलना गरिन्छ) हाले मात्र गुप्त Admin Gate
+/// खुल्छ — UI मा कतै यसको संकेत/लिङ्क/बटन देखिँदैन। हेर्नुहोस्
+/// `auth/phone_input_page.dart::_continue()`।
+const String kAdminSecretPhoneDigits = '9848391825';
+
+// Web OAuth client ID — यो lib/firebase_options.dart कै project
+// (504837034251 / kaammitra-87e38) को हुनुपर्छ। मोबाइलमा मात्र
+// google_sign_in लाई चाहिन्छ। auth_page.dart र auth/admin_gate_page.dart
+// दुवैले यहीँबाट प्रयोग गर्छन् — दोहोरिँदैन।
+const String kGoogleWebClientId =
+    '504837034251-h3ol9ehaksf1biicqgig2o5hn6fv14u2.apps.googleusercontent.com';
 
 /// KaamMitra ले हरेक पूरा भएको कामबाट लिने कमिसन (०.१० = १०%)।
 /// एउटै ठाउँमा — earnings/wallet हिसाब यहीँबाट आउँछ।
@@ -60,6 +93,48 @@ class SupportConfig {
   /// Admin ले नम्बर सेट/अपडेट गर्ने।
   static Future<void> setPhone(String phone) => _doc.set(
         {'phone': phone.trim(), 'updatedAt': FieldValue.serverTimestamp()},
+        SetOptions(merge: true),
+      );
+}
+
+/// Help & Support screen का लामो text (Service Standard, Privacy Policy,
+/// Data Security, FAQ) — Firestore: config/helpContent। पहिले यी सबै
+/// `content/legal_text.dart` मा hardcoded थिए (बदल्न नयाँ app release
+/// चाहिने) — अब SupportConfig कै उस्तै ढाँचामा admin ले Owner Dashboard
+/// बाटै, कुनै नयाँ release बिनै, तुरुन्तै सम्पादन गर्न सक्छ। कुनै field
+/// खाली/नसेट भए (पहिलोपटक कहिल्यै सम्पादन नगरे पनि) `LegalText` कै मूल
+/// (default) copy नै देखिन्छ — help_support_screen.dart मा हेर्नुहोस्।
+class HelpContentConfig {
+  HelpContentConfig._();
+
+  static final _doc =
+      FirebaseFirestore.instance.collection('config').doc('helpContent');
+
+  static Stream<Map<String, dynamic>> stream() =>
+      _doc.snapshots().map((s) => s.data() ?? const {});
+
+  static Future<Map<String, dynamic>> once() async {
+    final s = await _doc.get();
+    return s.data() ?? const {};
+  }
+
+  /// एउटा text field (जस्तै 'serviceStandardEn') सेट/अपडेट गर्ने।
+  static Future<void> setField(String key, String value) => _doc.set(
+        {key: value, 'updatedAt': FieldValue.serverTimestamp()},
+        SetOptions(merge: true),
+      );
+
+  /// FAQ सूची पूरै (add/edit/delete सबै) एकैचोटि replace गर्ने — प्रत्येक
+  /// entry: {qEn, qNe, aEn, aNe}।
+  static Future<void> setFaq(List<Map<String, String>> faq) => _doc.set(
+        {'faq': faq, 'updatedAt': FieldValue.serverTimestamp()},
+        SetOptions(merge: true),
+      );
+
+  /// Editor screen कै "Save All" — सबै text field + FAQ एकैचोटि एउटै
+  /// write मा।
+  static Future<void> saveAll(Map<String, dynamic> fields) => _doc.set(
+        {...fields, 'updatedAt': FieldValue.serverTimestamp()},
         SetOptions(merge: true),
       );
 }

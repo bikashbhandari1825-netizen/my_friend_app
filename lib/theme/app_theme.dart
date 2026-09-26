@@ -83,6 +83,50 @@ class AppColors {
   static const success = Color(0xFFE1306C);
   static const warning = Color(0xFFFFB020);
   static const danger = Color(0xFFFF5A5F);
+
+  // ── "KaamMitra 2050" — glassmorphic aurora redesign (visual tokens only) ──
+  // यी tokens मात्र नयाँ design (dark glass card + orb gradients) प्रयोग
+  // गर्ने screen हरूका लागि — auth/OTP/admin-login screen हरूले माथिकै पुरानो
+  // Instagram-gradient tokens (छोइएका छैनन्) निरन्तर प्रयोग गर्छन्।
+  static const kmVoid = Color(0xFF07060D); // गहिरो पृष्ठभूमि
+  static const kmVoid2 = Color(0xFF0B0916); // decorative-art पृष्ठभूमि
+  static const kmInk = Color(0xFF12091F); // gradient माथिको गाढा text
+  static const kmSurface = Color(0xFF150F28); // avatar/ring भित्री circle
+  static const kmText = Color(0xFFF5F2FF); // primary text (off-white lavender)
+  static const kmMuted = Color(0xFFA9A3C4); // muted/caption text
+  static const kmMuted2 = Color(0xFFB9B2D6); // अझ हल्का muted (inactive icon)
+
+  static const kmTeal = Color(0xFF5CFFD1);
+  static const kmTealBlue = Color(0xFF22B8FF);
+  static const kmPurple = Color(0xFF8B5CFF);
+  static const kmPurpleDeep = Color(0xFF5B3BD6);
+  static const kmLilac = Color(0xFFC4B5FF);
+  static const kmOrange = Color(0xFFFFB13D);
+  static const kmOrangeDeep = Color(0xFFFF6A2B);
+  static const kmAmber = Color(0xFFFFD66B);
+  static const kmPink = Color(0xFFFF3D7A);
+  static const kmPinkDeep = Color(0xFFB8215A);
+  static const kmRose = Color(0xFFFF8FB1);
+  static const kmRoseSoft = Color(0xFFFF6B8E);
+
+  /// Primary CTA button fill — pill/rounded बटनमा। पुरानो orange→pink
+  /// gradient हटाइयो (धेरै जाज्वल्यमान/"blinding" देखिन्थ्यो) — अब शुद्ध
+  /// frosted-glass सेतो sheen मात्र, बाँकी glass panel हरू (kmGlassFill/
+  /// kmGlass2Fill) सँग एकैनासको translucent-glass भाषामा।
+  static const kmCtaGradient = LinearGradient(
+    begin: Alignment(-0.6, -1),
+    end: Alignment(0.6, 1),
+    colors: [Color(0xF2FFFFFF), Color(0xD9FFFFFF)],
+  );
+
+  /// पातलो "glass" card — .gl (हल्का, list/card background)।
+  static Color kmGlassFill = Colors.white.withValues(alpha: 0.06);
+  static Color kmGlassFillStrong = Colors.white.withValues(alpha: 0.07);
+  static Color kmGlassBorder = Colors.white.withValues(alpha: 0.12);
+
+  /// गाढा "glass" — .g2 (bottom nav/sheet जस्ता माथि-तैरने पट्टी)।
+  static Color kmGlass2Fill = const Color(0xFF16112A).withValues(alpha: 0.76);
+  static Color kmGlass2Border = Colors.white.withValues(alpha: 0.14);
 }
 
 /// साझा border-radius मानहरू।

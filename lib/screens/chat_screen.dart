@@ -6,25 +6,29 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' show ImageFilter;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:image_picker/image_picker.dart';
 
 import '../app_globals.dart';
 import '../l10n/strings.dart';
 import '../services/chat_media_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/online_badge.dart';
 import '../widgets/spring_tap.dart';
 import '../widgets/voice_recorder_bar.dart';
 import 'call_screen.dart';
 import 'image_preview_screen.dart';
-import 'job_actions.dart' show isCommunicationUnlocked, kActiveJobStatuses;
+import 'job_actions.dart' show isCommunicationUnlocked;
 import 'video_preview_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -55,11 +59,10 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scroll = ScrollController();
   bool _recordingVoice = false;
   bool _canSend = false;
-  // requestId कै live status — worker साँच्चै employer को स्थानमा आइपुगेर
-  // "On Arrival" पुष्टि नगरेसम्म (status अझै `in_progress` नभएसम्म) —
-  // स्वीकृति भइसकेको भए पनि — call/message दुवै लक्ड रहन्छन्; काम completed
-  // भइसकेपछि पनि फेरि लक्ड। पहिलो snapshot नआएसम्म पनि (सुरक्षित default)
-  // लक्ड नै मानिन्छ। हेर्नुहोस् `isCommunicationUnlocked` (job_actions.dart)।
+  // requestId कै live status — स्वीकृति (`accepted`/`confirmed`/
+  // `in_progress`) भएकै क्षणदेखि call/message खुल्ला रहन्छन्; काम completed
+  // भइसकेपछि फेरि लक्ड। पहिलो snapshot नआएसम्म पनि (सुरक्षित default) लक्ड
+  // नै मानिन्छ। हेर्नुहोस् `isCommunicationUnlocked` (job_actions.dart)।
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statusSub;
   late String? _requestStatus = widget.initialStatus;
   bool get _chatActive => isCommunicationUnlocked(_requestStatus);
@@ -77,11 +80,34 @@ class _ChatScreenState extends State<ChatScreen> {
   // round-trip) लाग्ने भएकोले प्रयोगकर्तालाई प्रस्ट "पठाउँदै..." संकेत चाहियो।
   bool _sendingMedia = false;
 
+  // `_jumpToBottom()` पहिले messages-list का हरेक rebuild मा (नयाँ सन्देश
+  // आउँदा मात्र होइन, अर्को पक्षको "seen"/readBy अपडेट हुँदा पनि — किनकि
+  // त्यो पनि यही StreamBuilder भित्रै फेरि चलाउँछ) दोहोरिँदै चल्थ्यो — पहिल्यै
+  // तल पुगिसकेको list लाई फेरि-फेरि उही scroll-animation दिँदा प्रस्ट देखिने
+  // jitter/flicker हुन्थ्यो। अब पछिल्लो सन्देशको id पहिले नै जम्प गरिसकेको
+  // भन्दा फरक भए मात्र (साँच्चै नयाँ/मेटिएको सन्देश) जम्प गर्ने।
+  String? _lastJumpedDocId;
+
   DocumentReference<Map<String, dynamic>> get _chatDoc =>
       FirebaseFirestore.instance.collection('chats').doc(widget.requestId);
 
   CollectionReference<Map<String, dynamic>> get _messages =>
       _chatDoc.collection('messages');
+
+  // यी दुवै Stream एकपटक मात्र (initState मै) बनाइन्छ — `messages_screen.dart`
+  // कै उस्तै कारण: `_chatDoc.snapshots()`/`_messages....snapshots()` लाई
+  // सिधै build() भित्रै (हरेक पटक नयाँ Stream instance दिने गरी) बोलाए,
+  // ChatScreen को जुनसुकै अरू setState (टाइप गर्दा `_canSend`, फोटो/भिडियो
+  // पठाउँदा `_sendingMedia`, आदि) ले पनि StreamBuilder लाई "stream नै बदलियो"
+  // भन्ठान्न लगाउँथ्यो (Stream मा साधारण `==` object-identity तुलना हुन्छ) —
+  // त्यसैले पुरानो/पहिल्यै-लोड भएको data देखाइरहेको बीचैमा एकैछिनको लागि
+  // फेरि "waiting" state (spinner) मा फर्केर देखिने, ठ्याक्कै "chat/media
+  // फ्लिकर हुन्छ" गुनासोको साँचो जड। अब build() ले यिनै स्थिर field मात्र
+  // पढ्छ, नयाँ Stream कहिल्यै दोहोरिँदैन।
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _chatDocStream =
+      _chatDoc.snapshots();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _messagesStream =
+      _messages.orderBy('createdAt', descending: false).limitToLast(50).snapshots();
 
   @override
   void initState() {
@@ -101,7 +127,16 @@ class _ChatScreenState extends State<ChatScreen> {
         .snapshots()
         .listen((snap) {
       if (!mounted) return;
-      setState(() => _requestStatus = (snap.data()?['status'])?.toString());
+      // `serviceRequests/{requestId}` मा status बाहेक अरू जुनसुकै field
+      // बदलिँदा पनि (live worker-location अपडेट, हरेक सन्देशपछिको
+      // lastMessage/lastMessageAt stamp, आदि — यी सबैले यही doc लाई नै
+      // touch गर्छन्) यो listener फायर हुन्छ। status साँच्चै नबदलिए setState
+      // नै नगर्ने — नत्र हरेक त्यस्तो असम्बन्धित लेखाइले पनि पूरै ChatScreen
+      // (AppBar कै कल बटन सहित) व्यर्थै फेरि rebuild गर्थ्यो, जुन "कल
+      // सकिएपछि/मिडिया पठाएपछि आइकन बटन झिम्किन्छ" गुनासोको अर्को (यही
+      // फाइलभित्रकै) जड थियो।
+      final status = (snap.data()?['status'])?.toString();
+      if (status != _requestStatus) setState(() => _requestStatus = status);
     });
   }
 
@@ -128,7 +163,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final n = (u.data()?['name'] ?? '').toString().trim();
       if (n.isNotEmpty) name = n;
     } catch (_) {}
-    if (mounted) setState(() => _myName = name.isEmpty ? 'KaamMitra' : name);
+    if (mounted) setState(() => _myName = name.isEmpty ? 'सहयात्री' : name);
   }
 
   /// अर्को पक्षको uid — `serviceRequests/{requestId}` बाट। Notification
@@ -264,8 +299,11 @@ class _ChatScreenState extends State<ChatScreen> {
       _snack(S.messageTooLong);
       return;
     }
-    // सफल भएपछि मात्र field खाली — नत्र network/त्रुटि भएमा प्रयोगकर्ताले
-    // टाइप गरेको सन्देश नै हराउँथ्यो (पहिले सिधै पठाउनुअघि नै clear हुन्थ्यो)।
+    // Messenger-जस्तै तुरुन्तै feel दिन input एकैचोटि खाली (Firestore को
+    // आफ्नै offline-cache ले सन्देश bubble पनि लगत्तै देखाउँछ, server ack
+    // को पर्खाइ पर्दैन) — तर पुरानो बग (सन्देश हराउने) नदोहोरियोस् भनेर
+    // असफल भएमा `catch` ले उही पाठ फिर्ता ल्याइदिन्छ, डेटा कहिल्यै हराउँदैन।
+    _controller.clear();
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
       await _messages.add({
@@ -274,9 +312,9 @@ class _ChatScreenState extends State<ChatScreen> {
         'text': text,
         'createdAt': FieldValue.serverTimestamp(),
       });
-      _controller.clear();
       unawaited(_stampLast(text));
     } catch (e) {
+      if (mounted) _controller.text = text;
       _snack('${S.errorWord}: $e');
     }
   }
@@ -297,7 +335,7 @@ class _ChatScreenState extends State<ChatScreen> {
       });
       _stampLast('📷 ${S.photo}');
     } catch (e) {
-      _snack('${S.errorWord}: ${ChatMediaService.describeUploadError(e)}');
+      _snack(ChatMediaService.friendlyUploadError(e));
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }
@@ -325,7 +363,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } on VideoTooLargeException {
       _snack(S.videoTooLarge);
     } catch (e) {
-      _snack('${S.errorWord}: ${ChatMediaService.describeUploadError(e)}');
+      _snack(ChatMediaService.friendlyUploadError(e));
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }
@@ -344,13 +382,29 @@ class _ChatScreenState extends State<ChatScreen> {
     if (confirmed == true) await _sendImage(bytes);
   }
 
+  /// Camera/gallery/video-picker बाट आएको OS-level त्रुटि — Android/iOS ले
+  /// क्यामेरा/फोटो अनुमति नदिँदा `PlatformException` (code जस्तै
+  /// `camera_access_denied`/`photo_access_denied`) throw गर्छ, जुन raw
+  /// रूपमा देखाउँदा प्रयोगकर्तालाई किन/के गर्ने केही थाहा हुँदैन। यस्तो
+  /// अवस्थामा मात्र स्पष्ट "Settings मा गएर अनुमति दिनुहोस्" सन्देश, बाँकी
+  /// (rare/unexpected) त्रुटिमा साधारण fallback।
+  void _snackPickError(Object e) {
+    if (e is PlatformException &&
+        (e.code == 'camera_access_denied' ||
+            e.code == 'photo_access_denied')) {
+      _snack(S.mediaPermissionNeeded);
+      return;
+    }
+    _snack('${S.errorWord}: $e');
+  }
+
   Future<void> _pickCamera() async {
     try {
       final XFile? p = await ImagePicker()
           .pickImage(source: ImageSource.camera, imageQuality: 85);
       if (p != null) await _previewThenSend(await p.readAsBytes());
     } catch (e) {
-      _snack('${S.errorWord}: $e');
+      _snackPickError(e);
     }
   }
 
@@ -359,7 +413,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final file = await FilePicker.pickFile(type: FileType.image);
       if (file != null) await _previewThenSend(await file.readAsBytes());
     } catch (e) {
-      _snack('${S.errorWord}: $e');
+      _snackPickError(e);
     }
   }
 
@@ -390,7 +444,7 @@ class _ChatScreenState extends State<ChatScreen> {
         await _previewVideoThenSend(await v.readAsBytes(), _extOf(v.path));
       }
     } catch (e) {
-      _snack('${S.errorWord}: $e');
+      _snackPickError(e);
     }
   }
 
@@ -404,7 +458,7 @@ class _ChatScreenState extends State<ChatScreen> {
         await _previewVideoThenSend(await v.readAsBytes(), _extOf(v.path));
       }
     } catch (e) {
-      _snack('${S.errorWord}: $e');
+      _snackPickError(e);
     }
   }
 
@@ -415,10 +469,9 @@ class _ChatScreenState extends State<ChatScreen> {
       backgroundColor: Colors.transparent,
       builder: (sheetContext) => Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          borderRadius: const BorderRadius.vertical(
-              top: Radius.circular(AppRadius.lg)),
+        decoration: const BoxDecoration(
+          color: AppColors.kmSurface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
         ),
         child: SafeArea(
           top: false,
@@ -428,17 +481,19 @@ class _ChatScreenState extends State<ChatScreen> {
               if (ChatMediaService.videoRecordingSupported)
                 ListTile(
                   leading: const Icon(Icons.videocam_rounded,
-                      color: AppColors.igViolet),
-                  title: Text(S.recordVideo),
+                      color: AppColors.kmTealBlue),
+                  title: Text(S.recordVideo,
+                      style: const TextStyle(color: AppColors.kmText)),
                   onTap: () {
                     Navigator.pop(sheetContext);
                     _recordVideoCamera();
                   },
                 ),
               ListTile(
-                leading:
-                    const Icon(Icons.video_library_rounded, color: AppColors.igPink),
-                title: Text(S.chooseFromGallery),
+                leading: const Icon(Icons.video_library_rounded,
+                    color: AppColors.kmPink),
+                title: Text(S.chooseFromGallery,
+                    style: const TextStyle(color: AppColors.kmText)),
                 onTap: () {
                   Navigator.pop(sheetContext);
                   _pickVideoGallery();
@@ -454,7 +509,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Voice-note recorder bar (widgets/voice_recorder_bar.dart) ले नै रेकर्ड
   /// + waveform + preview सबै सम्हाल्छ — यहाँ त प्रयोगकर्ताले Send थिचेपछि
   /// आएको bytes मात्र साँच्चै Firestore मा लेख्ने।
-  Future<void> _sendVoiceBytes(Uint8List bytes) async {
+  Future<void> _sendVoiceBytes(Uint8List bytes, String ext) async {
     setState(() {
       _recordingVoice = false;
       _sendingMedia = true;
@@ -463,6 +518,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final url = await ChatMediaService.uploadChatVoice(
         requestId: widget.requestId,
         bytes: bytes,
+        ext: ext,
       );
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
       await _messages.add({
@@ -473,7 +529,7 @@ class _ChatScreenState extends State<ChatScreen> {
       });
       _stampLast('🎤 ${S.voiceMessage}');
     } catch (e) {
-      _snack('${S.errorWord}: ${ChatMediaService.describeUploadError(e)}');
+      _snack(ChatMediaService.friendlyUploadError(e));
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }
@@ -500,13 +556,25 @@ class _ChatScreenState extends State<ChatScreen> {
         ? '?'
         : widget.workerName.trim()[0].toUpperCase();
 
-    return Scaffold(
-      appBar: AppBar(
+    return AuroraBackground(
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
+        extendBodyBehindAppBar: true,
+        appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        foregroundColor: AppColors.kmText,
         elevation: 0,
-        flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.buttonGradient),
+        flexibleSpace: ClipRRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.kmSurface.withValues(alpha: 0.7),
+                border: Border(
+                    bottom: BorderSide(color: AppColors.kmGlassBorder)),
+              ),
+            ),
+          ),
         ),
         titleSpacing: 0,
         title: Row(
@@ -516,10 +584,10 @@ class _ChatScreenState extends State<ChatScreen> {
               height: 36,
               alignment: Alignment.center,
               decoration: const BoxDecoration(
-                  color: Colors.white24, shape: BoxShape.circle),
+                  gradient: AppColors.kmCtaGradient, shape: BoxShape.circle),
               child: Text(initial,
                   style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.w800)),
+                      color: AppColors.kmInk, fontWeight: FontWeight.w800)),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -530,13 +598,13 @@ class _ChatScreenState extends State<ChatScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          color: Colors.white,
+                          color: AppColors.kmText,
                           fontWeight: FontWeight.w800,
                           fontSize: 15)),
                   _otherUid.isEmpty
                       ? Text(S.activeRecently,
                           style: const TextStyle(
-                              color: Colors.white70, fontSize: 11))
+                              color: AppColors.kmMuted, fontSize: 11))
                       : OnlineBadge(uid: _otherUid, onDark: true),
                 ],
               ),
@@ -563,6 +631,8 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
+          SizedBox(
+              height: MediaQuery.of(context).padding.top + kToolbarHeight),
           Expanded(
             // Read-receipt tick मार्क हरूका लागि chat-level `readBy` एकपटक
             // मात्र (सबै सन्देशले साझा गर्ने) — हरेक सन्देश-bubble ले आफ्नै
@@ -571,14 +641,16 @@ class _ChatScreenState extends State<ChatScreen> {
             // दोहोर्‍याएर सुन्नु मात्र होइन, थुप्रै सन्देश भएको लामो chat मा
             // वास्तविक jank/lag पनि दिन्थ्यो।
             child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: _chatDoc.snapshots(),
+              stream: _chatDocStream,
               builder: (context, chatSnap) {
                 final readBy =
                     chatSnap.data?.data()?['readBy'] as Map<String, dynamic>?;
                 return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: _messages
-                      .orderBy('createdAt', descending: false)
-                      .snapshots(),
+                  // `limitToLast` — नत्र लामो chat मा हरेक snapshot (नयाँ
+                  // सन्देश वा कुनै readBy अपडेट) ले सुरुदेखिकै सबै सन्देश
+                  // पुनः-fetch/diff गर्थ्यो, जति लामो chat त्यति नै भारी
+                  // (120fps स्मूथनेसमा सिधै असर)।
+                  stream: _messagesStream,
                   builder: (context, snap) {
                     if (snap.connectionState == ConnectionState.waiting) {
                       return const Center(child: CircularProgressIndicator());
@@ -589,18 +661,20 @@ class _ChatScreenState extends State<ChatScreen> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.forum_rounded,
-                                size: 54,
-                                color: theme.colorScheme.onSurfaceVariant),
+                            const Icon(Icons.forum_rounded,
+                                size: 54, color: AppColors.kmMuted),
                             const SizedBox(height: 10),
                             Text(S.startTheConversation,
-                                style: TextStyle(
-                                    color: theme.colorScheme.onSurfaceVariant)),
+                                style: const TextStyle(
+                                    color: AppColors.kmMuted)),
                           ],
                         ),
                       );
                     }
-                    _jumpToBottom();
+                    if (docs.last.id != _lastJumpedDocId) {
+                      _lastJumpedDocId = docs.last.id;
+                      _jumpToBottom();
+                    }
                     // अर्को पक्षले नयाँ सन्देश पठायो र म यो chat हेर्दै नै छु भने
                     // तुरुन्तै "पढेको" म्हार्क गर्ने — Messenger जस्तै live "Seen"।
                     final lastDoc = docs.last;
@@ -645,14 +719,20 @@ class _ChatScreenState extends State<ChatScreen> {
                             otherReadAt is Timestamp &&
                             !otherReadAt.toDate().isBefore(createdAt.toDate());
 
-                        return Dismissible(
+                        // हरेक bubble आफ्नै छुट्टै repaint layer — नत्र
+                        // सूचीमा एउटा मात्र item बदलिँदा (नयाँ सन्देश थपिँदा,
+                        // वा readBy tick अपडेट हुँदा) पूरै ListView कै सबै
+                        // bubble फेरि repaint हुन्थ्यो, लामो chat मा jank।
+                        return RepaintBoundary(
+                          key: ValueKey('rb_$id'),
+                          child: Dismissible(
                           key: Key(id),
                           direction: DismissDirection.endToStart,
                           background: Container(
                             alignment: Alignment.centerRight,
                             padding: const EdgeInsets.only(right: 20),
                             child: const Icon(Icons.delete_outline_rounded,
-                                color: AppColors.danger),
+                                color: AppColors.kmRose),
                           ),
                           confirmDismiss: (_) => _confirmDelete(),
                           onDismissed: (_) => _messages.doc(id).delete(),
@@ -665,18 +745,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                 alignment: isMe
                                     ? Alignment.centerRight
                                     : Alignment.centerLeft,
-                                child: TweenAnimationBuilder<double>(
+                                child: _MessageEntrance(
                                   key: ValueKey(id),
-                                  tween: Tween(begin: 0, end: 1),
-                                  duration: const Duration(milliseconds: 220),
-                                  curve: Curves.easeOut,
-                                  builder: (context, t, child) => Opacity(
-                                    opacity: t,
-                                    child: Transform.translate(
-                                      offset: Offset(0, (1 - t) * 8),
-                                      child: child,
-                                    ),
-                                  ),
                                   child: _Bubble(
                                     isMe: isMe,
                                     showTail: isLastOfGroup,
@@ -691,6 +761,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               ),
                             ],
                           ),
+                          ),
                         );
                       },
                     );
@@ -702,40 +773,43 @@ class _ChatScreenState extends State<ChatScreen> {
           _chatActive ? _inputBar(theme) : _lockedBanner(theme),
         ],
       ),
+      ),
     );
   }
 
-  /// Request active नरहेको बेला (Accept हुनुअघि, स्वीकृत भए पनि worker
-  /// अझै नआइपुगेको बेला, वा काम completed भइसकेपछि) इनपुट/कल दुवैको सट्टा
-  /// देखिने read-only सूचना पट्टी — तीन फरक कारणका लागि तीन फरक सन्देश।
+  /// Request active नरहेको बेला (Accept हुनुअघि, वा काम completed
+  /// भइसकेपछि) इनपुट/कल दुवैको सट्टा देखिने read-only सूचना पट्टी — दुई फरक
+  /// कारणका लागि दुई फरक सन्देश। स्वीकृति भएकै क्षणदेखि चैट सधैँ सक्रिय हुने
+  /// भएकोले यो banner ती दुई अवस्थामा मात्र देखिन्छ।
   Widget _lockedBanner(ThemeData theme) {
     final completed = _requestStatus == 'completed';
-    final acceptedNotYetArrived = kActiveJobStatuses.contains(_requestStatus);
-    final caption = completed
-        ? S.chatLockedCompleted
-        : (acceptedNotYetArrived
-            ? S.contactLockedAwaitingArrival
-            : S.contactLockedCaption);
-    return Container(
-      padding: EdgeInsets.fromLTRB(
-          16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border(top: BorderSide(color: theme.dividerColor)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.lock_outline_rounded,
-              size: 18, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              caption,
-              style: TextStyle(
-                  fontSize: 12.5, color: theme.colorScheme.onSurfaceVariant),
-            ),
+    final caption =
+        completed ? S.chatLockedCompleted : S.contactLockedCaption;
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          padding: EdgeInsets.fromLTRB(
+              16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
+          decoration: BoxDecoration(
+            color: AppColors.kmSurface.withValues(alpha: 0.75),
+            border: Border(top: BorderSide(color: AppColors.kmGlassBorder)),
           ),
-        ],
+          child: Row(
+            children: [
+              const Icon(Icons.lock_outline_rounded,
+                  size: 18, color: AppColors.kmMuted),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  caption,
+                  style:
+                      const TextStyle(fontSize: 12.5, color: AppColors.kmMuted),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -744,7 +818,7 @@ class _ChatScreenState extends State<ChatScreen> {
       String type, Map<String, dynamic> data, bool isMe, ThemeData theme) {
     if (type == 'call') {
       final video = (data['mode'] ?? 'audio').toString() == 'video';
-      final fg = isMe ? Colors.white : theme.colorScheme.onSurface;
+      final fg = isMe ? AppColors.kmInk : AppColors.kmText;
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -763,24 +837,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (url.isNotEmpty) {
         return ClipRRect(
           borderRadius: BorderRadius.circular(14),
-          child: CachedNetworkImage(
-            imageUrl: url,
-            width: 200,
-            fit: BoxFit.cover,
-            placeholder: (_, __) => const SizedBox(
-              width: 200,
-              height: 150,
-              child: Center(
-                  child:
-                      CircularProgressIndicator(strokeWidth: 2.2)),
-            ),
-            errorWidget: (_, __, ___) => const SizedBox(
-              width: 200,
-              height: 150,
-              child: Center(
-                  child: Icon(Icons.broken_image_outlined, color: Colors.grey)),
-            ),
-          ),
+          child: _ChatImage(url: url),
         );
       }
       if (data['imageBase64'] != null) {
@@ -832,93 +889,109 @@ class _ChatScreenState extends State<ChatScreen> {
       style: TextStyle(
         fontSize: 14.5,
         height: 1.3,
-        color: isMe ? Colors.white : theme.colorScheme.onSurface,
+        color: isMe ? AppColors.kmInk : AppColors.kmText,
       ),
     );
   }
 
-  Future<bool?> _confirmDelete() => showDialog<bool>(
+  Future<bool?> _confirmDelete() => showKmDialog<bool>(
         context: context,
-        builder: (_) => AlertDialog(
-          title: Text(S.delete),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text(S.cancel)),
-            ElevatedButton(
-              style:
-                  ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-              onPressed: () => Navigator.pop(context, true),
-              child:
-                  Text(S.delete, style: const TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
+        title: S.delete,
+        icon: Icons.delete_outline_rounded,
+        iconBg: const LinearGradient(
+            colors: [AppColors.kmRose, AppColors.kmPinkDeep]),
+        actions: [
+          KmDialogAction(
+            label: S.cancel,
+            onPressed: () => Navigator.pop(context, false),
+          ),
+          KmDialogAction(
+            label: S.delete,
+            destructive: true,
+            filled: true,
+            onPressed: () => Navigator.pop(context, true),
+          ),
+        ],
       );
 
   Widget _inputBar(ThemeData theme) {
     if (_recordingVoice) {
-      return Container(
-        padding: EdgeInsets.fromLTRB(
-            8, 6, 8, 6 + MediaQuery.of(context).padding.bottom),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          border: Border(top: BorderSide(color: theme.dividerColor)),
-        ),
-        child: VoiceRecorderBar(
-          onSend: _sendVoiceBytes,
-          onCancel: () => setState(() => _recordingVoice = false),
+      return ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            padding: EdgeInsets.fromLTRB(
+                8, 6, 8, 6 + MediaQuery.of(context).padding.bottom),
+            decoration: BoxDecoration(
+              color: AppColors.kmSurface.withValues(alpha: 0.75),
+              border: Border(top: BorderSide(color: AppColors.kmGlassBorder)),
+            ),
+            child: VoiceRecorderBar(
+              onSend: _sendVoiceBytes,
+              onCancel: () => setState(() => _recordingVoice = false),
+            ),
+          ),
         ),
       );
     }
     if (_sendingMedia) {
-      return Container(
-        height: 52,
-        padding: EdgeInsets.fromLTRB(
-            16, 6, 16, 6 + MediaQuery.of(context).padding.bottom),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          border: Border(top: BorderSide(color: theme.dividerColor)),
-        ),
-        child: Row(
-          children: [
-            const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2.2)),
-            const SizedBox(width: 12),
-            Text(S.sendingMedia,
-                style: TextStyle(
-                    fontSize: 13, color: theme.colorScheme.onSurfaceVariant)),
-          ],
+      return ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            height: 52,
+            padding: EdgeInsets.fromLTRB(
+                16, 6, 16, 6 + MediaQuery.of(context).padding.bottom),
+            decoration: BoxDecoration(
+              color: AppColors.kmSurface.withValues(alpha: 0.75),
+              border: Border(top: BorderSide(color: AppColors.kmGlassBorder)),
+            ),
+            child: Row(
+              children: [
+                const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.2, color: AppColors.kmOrange)),
+                const SizedBox(width: 12),
+                Text(S.sendingMedia,
+                    style: const TextStyle(
+                        fontSize: 13, color: AppColors.kmMuted)),
+              ],
+            ),
+          ),
         ),
       );
     }
-    return Container(
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
       padding: EdgeInsets.fromLTRB(
           8, 6, 8, 6 + MediaQuery.of(context).padding.bottom),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border(top: BorderSide(color: theme.dividerColor)),
+        color: AppColors.kmSurface.withValues(alpha: 0.75),
+        border: Border(top: BorderSide(color: AppColors.kmGlassBorder)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           IconButton(
-            icon:
-                const Icon(Icons.camera_alt_rounded, color: AppColors.igViolet),
+            icon: const Icon(Icons.camera_alt_rounded,
+                color: AppColors.kmOrange),
             onPressed: _pickCamera,
           ),
           IconButton(
-            icon: const Icon(Icons.image_rounded, color: AppColors.igPink),
+            icon: const Icon(Icons.image_rounded, color: AppColors.kmPink),
             onPressed: _pickGallery,
           ),
           IconButton(
-            icon: const Icon(Icons.videocam_rounded, color: AppColors.igOrange),
+            icon: const Icon(Icons.videocam_rounded,
+                color: AppColors.kmTealBlue),
             onPressed: _showVideoSourceSheet,
           ),
           IconButton(
-            icon: const Icon(Icons.mic_rounded, color: AppColors.igOrange),
+            icon: const Icon(Icons.mic_rounded, color: AppColors.kmTealBlue),
             onPressed: () => setState(() => _recordingVoice = true),
           ),
           Expanded(
@@ -927,14 +1000,13 @@ class _ChatScreenState extends State<ChatScreen> {
               minLines: 1,
               maxLines: 4,
               textCapitalization: TextCapitalization.sentences,
-              style:
-                  TextStyle(color: theme.colorScheme.onSurface, fontSize: 14.5),
-              cursorColor: AppColors.igViolet,
+              style: const TextStyle(color: AppColors.kmText, fontSize: 14.5),
+              cursorColor: AppColors.kmOrange,
               decoration: InputDecoration(
                 hintText: S.typeMessage,
-                hintStyle: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                hintStyle: const TextStyle(color: AppColors.kmMuted),
                 filled: true,
-                fillColor: theme.colorScheme.surfaceContainerHighest,
+                fillColor: Colors.white.withValues(alpha: 0.06),
                 isDense: true,
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -954,14 +1026,13 @@ class _ChatScreenState extends State<ChatScreen> {
               width: 42,
               height: 42,
               decoration: BoxDecoration(
-                gradient: _canSend ? AppColors.buttonGradient : null,
-                color:
-                    _canSend ? null : theme.colorScheme.surfaceContainerHighest,
+                gradient: _canSend ? AppColors.kmCtaGradient : null,
+                color: _canSend ? null : Colors.white.withValues(alpha: 0.08),
                 shape: BoxShape.circle,
                 boxShadow: _canSend
                     ? [
                         BoxShadow(
-                            color: AppColors.igPink.withValues(alpha: 0.4),
+                            color: AppColors.kmPink.withValues(alpha: 0.4),
                             blurRadius: 12,
                             offset: const Offset(0, 4)),
                       ]
@@ -969,12 +1040,12 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               child: Icon(Icons.send_rounded,
                   size: 20,
-                  color: _canSend
-                      ? Colors.white
-                      : theme.colorScheme.onSurfaceVariant),
+                  color: _canSend ? AppColors.kmInk : AppColors.kmMuted),
             ),
           ),
         ],
+      ),
+        ),
       ),
     );
   }
@@ -1002,9 +1073,138 @@ class _CallBtn extends StatelessWidget {
           alignment: Alignment.center,
           decoration:
               const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-          child: Icon(icon, size: 20, color: AppColors.igViolet),
+          child: Icon(icon, size: 20, color: AppColors.kmPurpleDeep),
         ),
       ),
+    );
+  }
+}
+
+/// नयाँ सन्देश आउनेबित्तिकै एकपटक मात्र (fade + थोरै माथिबाट स्लाइड) —
+/// `TweenAnimationBuilder(tween: Tween(...))` अघि यहाँ प्रयोग हुन्थ्यो, तर
+/// त्यसले हरेक build मा नयाँ `Tween` instance बनाउँदा (`begin`/`end` उस्तै
+/// भए पनि, reference फरक भएकोले) TweenAnimationBuilder ले "tween बदलियो"
+/// ठानेर animation शुरुबाटै (`value = 0`) फेरि चलाउँथ्यो। यो chat screen
+/// को दुई-तहको `StreamBuilder` (messages + readBy) ले धेरै (हरेक नयाँ
+/// सन्देश, हरेक "seen" mark, हरेक अर्को पक्षको readBy अपडेट) पटक पूरै
+/// `ListView` rebuild गर्छ — त्यसैले पहिल्यै देखिसकेका सबै bubble
+/// (फोटो/भ्वाइस-नोट सहित) पनि हरेकपटक फेरि फेड-इन हुँदै "फ्लिकर/ग्लिच"
+/// जस्तो देखिन्थ्यो, जुन विशेष गरी image/audio bubble मा प्रस्ट देखिन्थ्यो।
+/// अब आफ्नै `AnimationController` (`initState` मा एकपटक मात्र `forward()`)
+/// प्रयोग गरिन्छ — parent जति पटक rebuild भए पनि (यही `ValueKey(id)` ले
+/// element/State जोगिने भएकोले) `initState` दोहोरिँदैन, त्यसैले एकपटक
+/// देखिसकेको सन्देश फेरि कहिल्यै फेड-इन हुँदैन।
+class _MessageEntrance extends StatefulWidget {
+  final Widget child;
+  const _MessageEntrance({required super.key, required this.child});
+
+  @override
+  State<_MessageEntrance> createState() => _MessageEntranceState();
+}
+
+class _MessageEntranceState extends State<_MessageEntrance>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  )..forward();
+  late final Animation<double> _curved =
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _curved,
+      child: widget.child,
+      builder: (context, child) => Opacity(
+        opacity: _curved.value,
+        child: Transform.translate(
+          offset: Offset(0, (1 - _curved.value) * 8),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+/// Chat भित्रको फोटो bubble — mobile/desktop (native) मा `CachedNetworkImage`
+/// (disk-cache फाइदाजनक), तर Flutter Web मा त्यसको मुनिको `flutter_cache_manager`
+/// disk cache layer कै वास्तविक filesystem नभएकोले लामो समयदेखि अविश्वसनीय
+/// छ (कहिलेकाहीं सफलतापूर्वक अपलोड भइसकेको फोटो पनि broken-image icon सहित
+/// देखिने/नदेखिने) — ठ्याक्कै "worker को स्क्रिनमा फोटो देखिँदैन" गुनासो
+/// यही थियो। Web मा त्यो cache layer नै नचली Flutter को आफ्नै (व्यापक रूपमा
+/// भरपर्दो) `Image.network` प्रयोग गर्ने — cache-control header (upload गर्दा
+/// नै सेट गरिएको, `chat_media_service.dart` हेर्नुहोस्) ब्राउजरको आफ्नै HTTP
+/// cache ले यसै पनि सम्हाल्छ, अलग plugin-level cache चाहिँदैन।
+class _ChatImage extends StatelessWidget {
+  final String url;
+  const _ChatImage({required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    if (kIsWeb) {
+      return Image.network(
+        url,
+        key: ValueKey(url),
+        width: 200,
+        fit: BoxFit.cover,
+        // `gaplessPlayback` नभए ListView item recycle/parent rebuild
+        // हुनेबित्तिकै यो widget को ImageStream फेरि resolve हुन्छ — त्यो
+        // क्षणभर (पुरानो frame मेटिएर नयाँ नआउँदासम्म) खाली/झिप्किएको
+        // देखिन्छ, ठ्याक्कै "फोटो लोड हुँदा झिपिक-झिपिक" गुनासोको कारण।
+        gaplessPlayback: true,
+        loadingBuilder: (_, child, progress) => progress == null
+            ? child
+            : const SizedBox(
+                width: 200,
+                height: 150,
+                child: Center(
+                    child: CircularProgressIndicator(strokeWidth: 2.2)),
+              ),
+        errorBuilder: (_, error, ___) {
+          // TEMP DIAGNOSTIC — यो चाहिँ स्थायी हुनु हुँदैन, तर अहिले साँच्चै
+          // कारण के हो (network, decode, वा अर्कै) पत्ता लगाउन आवश्यक।
+          debugPrint('CHAT_IMG_LOAD_FAILED url=$url error=$error');
+          return const SizedBox(
+            width: 200,
+            height: 150,
+            child: Center(
+                child: Icon(Icons.broken_image_outlined, color: Colors.grey)),
+          );
+        },
+      );
+    }
+    return CachedNetworkImage(
+      key: ValueKey(url),
+      imageUrl: url,
+      width: 200,
+      fit: BoxFit.cover,
+      // default cross-fade (~500ms) ले rebuild हुनेबित्तिकै (जस्तै readBy
+      // अपडेट हुँदा) पहिल्यै-लोड भइसकेको फोटो पनि देखिने-गरी-फेरि-fade हुन्छ
+      // — त्यही "झिपिक-झिपिक" प्रभाव। शून्य राख्दा already-cached फोटो
+      // तुरुन्तै/स्थिर देखिन्छ, Messenger जस्तै।
+      fadeInDuration: Duration.zero,
+      fadeOutDuration: Duration.zero,
+      placeholder: (_, __) => const SizedBox(
+        width: 200,
+        height: 150,
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2.2)),
+      ),
+      errorWidget: (_, __, error) {
+        debugPrint('CHAT_IMG_LOAD_FAILED url=$url error=$error');
+        return const SizedBox(
+          width: 200,
+          height: 150,
+          child: Center(
+              child: Icon(Icons.broken_image_outlined, color: Colors.grey)),
+        );
+      },
     );
   }
 }
@@ -1035,15 +1235,17 @@ class _Bubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Container(
       margin: EdgeInsets.only(top: topMargin, bottom: 1),
       constraints:
           BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
       padding: const EdgeInsets.fromLTRB(12, 9, 12, 7),
       decoration: BoxDecoration(
-        gradient: isMe ? AppColors.buttonGradient : null,
-        color: isMe ? null : theme.colorScheme.surfaceContainerHighest,
+        gradient: isMe ? AppColors.kmCtaGradient : null,
+        color: isMe ? null : Colors.white.withValues(alpha: 0.08),
+        border: isMe
+            ? null
+            : Border.all(color: AppColors.kmGlassBorder),
         borderRadius: BorderRadius.only(
           topLeft: const Radius.circular(18),
           topRight: const Radius.circular(18),
@@ -1065,14 +1267,16 @@ class _Bubble extends StatelessWidget {
                     style: TextStyle(
                         fontSize: 9.5,
                         color: isMe
-                            ? Colors.white70
-                            : theme.colorScheme.onSurfaceVariant)),
+                            ? AppColors.kmInk.withValues(alpha: 0.65)
+                            : AppColors.kmMuted)),
                 if (seen != null) ...[
                   const SizedBox(width: 3),
                   Icon(
                     seen! ? Icons.done_all_rounded : Icons.done_rounded,
                     size: 13,
-                    color: seen! ? AppColors.igYellow : Colors.white70,
+                    color: seen!
+                        ? AppColors.kmTealBlue
+                        : AppColors.kmInk.withValues(alpha: 0.65),
                   ),
                 ],
               ],
@@ -1132,8 +1336,7 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
 
   @override
   Widget build(BuildContext context) {
-    final fg =
-        widget.isMe ? Colors.white : Theme.of(context).colorScheme.onSurface;
+    final fg = widget.isMe ? AppColors.kmInk : AppColors.kmText;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [

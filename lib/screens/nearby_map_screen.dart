@@ -10,7 +10,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/worker_avatar.dart';
 import 'nearby_common.dart';
 import 'nearby_screen.dart';
@@ -153,25 +153,13 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
-      appBar: AppBar(
-        title: Text(S.nearbyTitle),
-        actions: [
-          IconButton(
-            tooltip: 'List',
-            icon: const Icon(Icons.view_list_rounded),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const NearbyScreen()),
-            ),
-          ),
-        ],
-      ),
+      backgroundColor: AppColors.kmVoid,
       floatingActionButton: _ready
           ? FloatingActionButton.small(
               onPressed: _recentre,
+              backgroundColor: AppColors.kmSurface,
+              foregroundColor: AppColors.kmText,
               child: const Icon(Icons.my_location_rounded),
             )
           : null,
@@ -180,9 +168,10 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const CircularProgressIndicator(),
+                  const CircularProgressIndicator(color: AppColors.kmOrange),
                   const SizedBox(height: 16),
-                  Text(S.enableLocation, style: theme.textTheme.bodyMedium),
+                  Text(S.enableLocation,
+                      style: const TextStyle(color: AppColors.kmMuted)),
                 ],
               ),
             )
@@ -216,30 +205,77 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                         _selData = null;
                       }),
                     ),
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: SafeArea(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: GlassPanel2(
+                            radius: 18,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 6),
+                            child: Row(
+                              children: [
+                                GlassIconButton(
+                                  icon: Icons.arrow_back_ios_new_rounded,
+                                  onTap: () => Navigator.of(context).maybePop(),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(S.nearbyTitle,
+                                      style: const TextStyle(
+                                          color: AppColors.kmText,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700)),
+                                ),
+                                GlassIconButton(
+                                  icon: Icons.view_list_rounded,
+                                  tooltip: 'List',
+                                  onTap: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) => const NearbyScreen()),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                     if (_approx)
                       Positioned(
-                        top: 12,
+                        top: 76,
                         left: 16,
                         right: 16,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 14, vertical: 10),
                           decoration: BoxDecoration(
-                            color: AppColors.lime.withValues(alpha: 0.16),
+                            color: AppColors.kmOrange.withValues(alpha: 0.16),
                             borderRadius: BorderRadius.circular(AppRadius.md),
+                            border: Border.all(
+                                color:
+                                    AppColors.kmOrange.withValues(alpha: 0.35)),
                           ),
                           child: Row(
                             children: [
                               const Icon(Icons.location_off,
-                                  size: 16, color: AppColors.lime),
+                                  size: 16, color: AppColors.kmOrange),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(S.approxLocation,
-                                    style: const TextStyle(fontSize: 12.5)),
+                                    style: const TextStyle(
+                                        color: AppColors.kmText,
+                                        fontSize: 12.5)),
                               ),
                               TextButton(
                                   onPressed: _initLocation,
-                                  child: Text(S.enableLocation)),
+                                  child: Text(S.enableLocation,
+                                      style: const TextStyle(
+                                          color: AppColors.kmOrange))),
                             ],
                           ),
                         ),
@@ -249,16 +285,11 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                         left: 16,
                         right: 16,
                         bottom: 20,
-                        child: Container(
+                        child: GlassPanel(
                           padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.surface,
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                            border: Border.all(color: theme.dividerColor),
-                          ),
                           child: Text(S.noWorkersNearby,
                               textAlign: TextAlign.center,
-                              style: theme.textTheme.bodyMedium),
+                              style: const TextStyle(color: AppColors.kmText)),
                         ),
                       ),
                     if (_selData != null)
@@ -305,25 +336,15 @@ class _WorkerSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final name = (data['name'] ?? '—').toString();
     final service = (data['service'] ?? '').toString();
-    final rating = (data['rating'] ?? '5.0').toString();
+    // '5.0' default हटाइयो — नयाँ worker सुरुमा साँच्चै ०/कुनै review
+    // नभएको देखिनुपर्छ, admin approve गर्दै लेख्ने मान अब '0.0' नै हो।
+    final rating = (data['rating'] ?? '0.0').toString();
     final price = (data['price'] ?? 'Rs. 500').toString();
 
-    return Container(
+    return GlassPanel(
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        border: Border.all(color: theme.dividerColor),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 16,
-              offset: const Offset(0, 6)),
-        ],
-      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -338,23 +359,26 @@ class _WorkerSheet extends StatelessWidget {
                   children: [
                     Text(name,
                         style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 15.5)),
+                            color: AppColors.kmText,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15.5)),
                     Text('${S.serviceName(service)}  ·  ⭐ $rating',
-                        style: theme.textTheme.bodySmall),
+                        style: const TextStyle(color: AppColors.kmMuted)),
                     Text(
                         '${S.distanceLabel(distanceKm)}  ·  ${S.fromPrice(price)}',
-                        style: theme.textTheme.bodySmall),
+                        style: const TextStyle(color: AppColors.kmMuted)),
                   ],
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.close_rounded, size: 20),
-                onPressed: onClose,
+              GlassIconButton(
+                icon: Icons.close_rounded,
+                size: 36,
+                onTap: onClose,
               ),
             ],
           ),
           const SizedBox(height: 10),
-          PrimaryButton(
+          KmCtaButton(
             label: S.offerYourPrice,
             icon: Icons.gavel_rounded,
             onPressed: () => showOfferSheet(

@@ -9,7 +9,7 @@ import 'l10n/strings.dart';
 import 'location_picker_page.dart';
 import 'screens/home_work_route_screen.dart';
 import 'theme/app_theme.dart';
-import 'widgets/app_ui.dart';
+import 'widgets/glass_ui.dart';
 
 class SavedPlacesScreen extends StatelessWidget {
   const SavedPlacesScreen({super.key});
@@ -19,9 +19,26 @@ class SavedPlacesScreen extends StatelessWidget {
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
     if (uid == null) {
-      return Scaffold(
-        appBar: AppBar(title: Text(S.savedPlacesTitle)),
-        body: const Center(child: Text('Login गर्नुहोस्')),
+      return AuroraBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  KmScreenHeader(title: S.savedPlacesTitle),
+                  const Expanded(
+                    child: Center(
+                        child: Text('Login गर्नुहोस्',
+                            style: TextStyle(color: AppColors.kmMuted))),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       );
     }
 
@@ -48,7 +65,7 @@ class SavedPlacesScreen extends StatelessWidget {
             const SizedBox(width: 8),
             Expanded(child: Text(m)),
           ]),
-          backgroundColor: ok ? AppColors.success : AppColors.danger,
+          backgroundColor: ok ? AppColors.kmTeal : AppColors.kmRose,
         ));
 
     /// एउटा merge write — असफल भए कारण देखाउने।
@@ -61,9 +78,18 @@ class SavedPlacesScreen extends StatelessWidget {
       }
     }
 
-    return Scaffold(
-      appBar: AppBar(title: Text(S.savedPlacesTitle)),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: KmScreenHeader(title: S.savedPlacesTitle),
+              ),
+              Expanded(
+                child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: userRef.snapshots(),
         builder: (context, snap) {
           final data = snap.data?.data() ?? {};
@@ -163,6 +189,11 @@ class SavedPlacesScreen extends StatelessWidget {
             ],
           );
         },
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -185,15 +216,22 @@ class _PlaceTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final address = (place?['address'] ?? '').toString();
 
-    return AppCard(
+    return GlassPanel(
       padding: const EdgeInsets.all(14),
       onTap: onTap,
       child: Row(
         children: [
-          LimeIconBadge(icon),
+          Container(
+            width: 42,
+            height: 42,
+            decoration: const BoxDecoration(
+              gradient: AppColors.kmCtaGradient,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: AppColors.kmInk, size: 20),
+          ),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -201,12 +239,14 @@ class _PlaceTile extends StatelessWidget {
               children: [
                 Text(title,
                     style: const TextStyle(
-                        fontWeight: FontWeight.w700, fontSize: 15)),
+                        color: AppColors.kmText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15)),
                 Text(
                   address.isEmpty ? S.notSetYet : address,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall,
+                  style: const TextStyle(color: AppColors.kmMuted),
                 ),
               ],
             ),
@@ -214,12 +254,11 @@ class _PlaceTile extends StatelessWidget {
           if (onDelete != null && address.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_outline_rounded,
-                  size: 20, color: AppColors.danger),
+                  size: 20, color: AppColors.kmRose),
               onPressed: onDelete,
             )
           else
-            Icon(Icons.chevron_right_rounded,
-                color: theme.colorScheme.onSurfaceVariant),
+            const Icon(Icons.chevron_right_rounded, color: AppColors.kmMuted),
         ],
       ),
     );
@@ -234,7 +273,7 @@ class _RouteCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        gradient: AppColors.igGradient,
+        gradient: AppColors.kmCtaGradient,
         borderRadius: BorderRadius.circular(AppRadius.lg),
       ),
       child: Material(
@@ -247,7 +286,7 @@ class _RouteCard extends StatelessWidget {
             child: Row(
               children: [
                 const Icon(Icons.alt_route_rounded,
-                    color: Colors.white, size: 26),
+                    color: AppColors.kmInk, size: 26),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -255,17 +294,18 @@ class _RouteCard extends StatelessWidget {
                     children: [
                       Text(S.homeToWorkRoute,
                           style: const TextStyle(
-                              color: Colors.white,
+                              color: AppColors.kmInk,
                               fontWeight: FontWeight.w800,
                               fontSize: 14.5)),
                       const SizedBox(height: 2),
                       Text(S.viewRoute,
-                          style: const TextStyle(
-                              color: Colors.white70, fontSize: 12)),
+                          style: TextStyle(
+                              color: AppColors.kmInk.withValues(alpha: 0.7),
+                              fontSize: 12)),
                     ],
                   ),
                 ),
-                const Icon(Icons.chevron_right_rounded, color: Colors.white),
+                const Icon(Icons.chevron_right_rounded, color: AppColors.kmInk),
               ],
             ),
           ),
@@ -281,20 +321,30 @@ class _AddTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AppCard(
+    return GlassPanel(
       padding: const EdgeInsets.all(14),
       onTap: onTap,
       child: Row(
         children: [
-          const LimeIconBadge(Icons.add_rounded, solid: true),
+          Container(
+            width: 42,
+            height: 42,
+            decoration: const BoxDecoration(
+              gradient: AppColors.kmCtaGradient,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.add_rounded,
+                color: AppColors.kmInk, size: 22),
+          ),
           const SizedBox(width: 14),
           Expanded(
             child: Text(S.addAnotherPlace,
-                style:
-                    const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                style: const TextStyle(
+                    color: AppColors.kmText,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15)),
           ),
-          Icon(Icons.chevron_right_rounded,
-              color: Theme.of(context).colorScheme.onSurfaceVariant),
+          const Icon(Icons.chevron_right_rounded, color: AppColors.kmMuted),
         ],
       ),
     );

@@ -21,6 +21,7 @@ import '../services/presence_service.dart';
 import '../theme/app_theme.dart';
 import '../watchlist_screen.dart';
 import '../widgets/active_job_bar.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/job_alert_sound.dart';
 import '../widgets/spring_tap.dart';
 import '../worker_requests_page.dart';
@@ -124,7 +125,7 @@ class _MainContainerState extends State<MainContainer> {
       final n = (u.data()?['name'] ?? '').toString().trim();
       if (n.isNotEmpty) name = n;
     } catch (_) {}
-    _myName = name.isEmpty ? 'KaamMitra' : name;
+    _myName = name.isEmpty ? 'सहयात्री' : name;
   }
 
   /// सक्रिय काम (जति वटा भए पनि) को सेटसँग मिलाएर `calls/{id}` watcher
@@ -221,22 +222,22 @@ class _MainContainerState extends State<MainContainer> {
       final status = await Permission.locationAlways.status;
       if (status.isGranted) return;
       if (!mounted) return;
-      final proceed = await showDialog<bool>(
+      final proceed = await showKmDialog<bool>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text(S.backgroundLocationRationaleTitle),
-          content: Text(S.backgroundLocationRationaleBody),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: Text(S.notNow),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: Text(S.allowWord),
-            ),
-          ],
-        ),
+        title: S.backgroundLocationRationaleTitle,
+        message: S.backgroundLocationRationaleBody,
+        icon: Icons.location_on_rounded,
+        actions: [
+          KmDialogAction(
+            label: S.notNow,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          KmDialogAction(
+            label: S.allowWord,
+            filled: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
       );
       if (proceed == true) {
         await Permission.locationAlways.request();
@@ -270,7 +271,7 @@ class _MainContainerState extends State<MainContainer> {
             foregroundNotificationConfig: ForegroundNotificationConfig(
               notificationTitle: S.locationTrackingNotifTitle,
               notificationText: S.locationTrackingNotifBody,
-              notificationChannelName: 'KaamMitra Location',
+              notificationChannelName: 'सहयात्री Location',
               // app कै आफ्नै launcher icon — कुनै तेस्रो-पक्षको branding/
               // default Android icon होइन (white-label)।
               notificationIcon:
@@ -588,32 +589,25 @@ class _BottomBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border(top: BorderSide(color: theme.dividerColor)),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 12,
-              offset: const Offset(0, -2)),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 64,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              for (var i = 0; i < items.length; i++)
-                _NavTab(
-                  item: items[i],
-                  selected: i == currentIndex,
-                  onTap: () => onTap(i),
-                ),
-            ],
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
+        child: GlassPanel2(
+          radius: 26,
+          child: SizedBox(
+            height: 68,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                for (var i = 0; i < items.length; i++)
+                  _NavTab(
+                    item: items[i],
+                    selected: i == currentIndex,
+                    onTap: () => onTap(i),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -633,7 +627,7 @@ class _NavTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    const muted = AppColors.kmMuted2;
     return SpringTap(
       onTap: onTap,
       pressedScale: 0.86,
@@ -643,12 +637,12 @@ class _NavTab extends StatelessWidget {
         padding:
             EdgeInsets.symmetric(horizontal: selected ? 16 : 12, vertical: 9),
         decoration: BoxDecoration(
-          gradient: selected ? AppColors.buttonGradient : null,
-          borderRadius: BorderRadius.circular(AppRadius.pill),
+          gradient: selected ? AppColors.kmCtaGradient : null,
+          borderRadius: BorderRadius.circular(999),
           boxShadow: selected
               ? [
                   BoxShadow(
-                    color: AppColors.igPink.withValues(alpha: 0.40),
+                    color: Colors.black.withValues(alpha: 0.3),
                     blurRadius: 16,
                     offset: const Offset(0, 5),
                   ),
@@ -663,7 +657,8 @@ class _NavTab extends StatelessWidget {
               children: [
                 TweenAnimationBuilder<Color?>(
                   duration: const Duration(milliseconds: 240),
-                  tween: ColorTween(end: selected ? Colors.white : muted),
+                  tween: ColorTween(
+                      end: selected ? AppColors.kmInk : muted),
                   builder: (_, c, __) => Icon(item.icon, size: 23, color: c),
                 ),
                 if (item.badgeCount > 0)
@@ -674,10 +669,12 @@ class _NavTab extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 4.5, vertical: 1.5),
                       decoration: BoxDecoration(
-                        color: AppColors.igPink,
-                        borderRadius: BorderRadius.circular(AppRadius.pill),
+                        color: AppColors.kmPink,
+                        borderRadius: BorderRadius.circular(999),
                         border: Border.all(
-                            color: selected ? Colors.white : Colors.transparent,
+                            color: selected
+                                ? AppColors.kmInk
+                                : Colors.transparent,
                             width: 1.4),
                       ),
                       constraints:
@@ -707,7 +704,7 @@ class _NavTab extends StatelessWidget {
                         style: const TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
-                          color: Colors.white,
+                          color: AppColors.kmInk,
                         ),
                       ),
                     )

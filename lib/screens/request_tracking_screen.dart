@@ -6,6 +6,8 @@
 //                                        polyline = कामदारको लाइभ स्थान/बाटो)
 //                                        + Call/Message (Arrival-Gated)
 //  • status declined/cancelled        → समाप्त सन्देश
+import 'dart:ui' show ImageFilter;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -16,7 +18,9 @@ import '../l10n/strings.dart';
 import '../location_util.dart';
 import '../theme/app_theme.dart';
 import '../widgets/counter_offer_card.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/status_badge.dart';
+import '../widgets/worker_avatar.dart';
 import 'chat_screen.dart';
 import 'job_actions.dart';
 import 'nearby_common.dart';
@@ -97,10 +101,14 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
   }
 
   Future<void> _cancel() async {
+    // किन cancel गर्दै भन्ने छोटो कारण — sheet बन्द गरे (null) भने cancel
+    // नै नगर्ने, यही स्क्रिनमै बसिरहने।
+    final reason = await pickCancellationReason(context);
+    if (reason == null || !mounted) return;
     // Cancelled Bookings Cleanup — status मात्र बदल्ने होइन, पूरै मेट्ने
     // (कुनै अवशेष history नरहोस्)। यो चरणमा (broadcasting/pending_worker)
     // अझै कुनै worker assign नभएकोले workerUid दिनु पर्दैन।
-    await deleteCancelledBooking(widget.requestId);
+    await deleteCancelledBooking(widget.requestId, reason: reason);
     if (mounted) Navigator.pop(context);
   }
 
@@ -117,7 +125,7 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
     await _ref.update({'status': 'declined'});
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(S.decline), backgroundColor: AppColors.danger),
+      SnackBar(content: Text(S.decline), backgroundColor: AppColors.kmRose),
     );
     Navigator.pop(context);
   }
@@ -126,55 +134,50 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
   /// पठाउँछ, वा अनुरोध अस्वीकार गर्छ।
   Future<void> _counterBackToWorker(num current) async {
     final controller = TextEditingController(text: current.toString());
-    await showDialog(
+    await showKmDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(S.counterBack),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          autofocus: true,
-          decoration: InputDecoration(
-            labelText: S.yourPriceRs,
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-              _declineWorkerCounter();
-            },
-            child: Text(S.declineJob,
-                style: const TextStyle(color: AppColors.danger)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text(S.cancel),
-          ),
-          ElevatedButton(
-            style:
-                ElevatedButton.styleFrom(backgroundColor: AppColors.igViolet),
-            onPressed: () async {
-              final newPrice = num.tryParse(controller.text.trim());
-              if (newPrice == null) return;
-              Navigator.of(dialogContext).pop();
-              await _ref.update({
-                'status': 'pending_worker_counter',
-                'employerCounterPrice': newPrice,
-                'counterFrom': 'employer',
-                'employerCounteredAt': FieldValue.serverTimestamp(),
-              });
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(S.counterSentToWorker)),
-              );
-            },
-            child: Text(S.sendNewPrice,
-                style: const TextStyle(color: Colors.white)),
-          ),
-        ],
+      title: S.counterBack,
+      icon: Icons.price_change_rounded,
+      content: TextField(
+        controller: controller,
+        keyboardType: TextInputType.number,
+        autofocus: true,
+        style: const TextStyle(color: AppColors.kmText),
+        decoration: kmInputDecoration(S.yourPriceRs),
       ),
+      actions: [
+        KmDialogAction(
+          label: S.declineJob,
+          destructive: true,
+          onPressed: () {
+            Navigator.of(context).pop();
+            _declineWorkerCounter();
+          },
+        ),
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        KmDialogAction(
+          label: S.sendNewPrice,
+          filled: true,
+          onPressed: () async {
+            final newPrice = num.tryParse(controller.text.trim());
+            if (newPrice == null) return;
+            Navigator.of(context).pop();
+            await _ref.update({
+              'status': 'pending_worker_counter',
+              'employerCounterPrice': newPrice,
+              'counterFrom': 'employer',
+              'employerCounteredAt': FieldValue.serverTimestamp(),
+            });
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(S.counterSentToWorker)),
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -190,14 +193,14 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
       backgroundColor: AppColors.mapPlaceholderBg,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
+        foregroundColor: AppColors.kmText,
         elevation: 0,
-        flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.buttonGradient),
+        flexibleSpace: DecoratedBox(
+          decoration: BoxDecoration(color: AppColors.kmVoid.withValues(alpha: 0.82)),
         ),
         title: Text(S.trackOnMap,
             style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w800)),
+                color: AppColors.kmText, fontWeight: FontWeight.w800)),
       ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: _ref.snapshots(),
@@ -218,11 +221,13 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
 
           if (status == 'declined' ||
               status == 'cancelled' ||
+              status == 'cancelled_by_admin' ||
               status == 'no_provider') {
+            final isRide = (data['isRide'] ?? false) == true;
             return _Ended(
               icon: Icons.cancel_outlined,
               title: status == 'declined'
-                  ? S.noProviderAccepted
+                  ? (isRide ? S.noDriverAccepted : S.noProviderAccepted)
                   : S.requestCancelled,
               onBack: () => Navigator.pop(context),
             );
@@ -236,9 +241,12 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
                 (data['lng'] as num?)?.toDouble() ??
                 fallbackLng;
             return _Searching(
+              requestId: widget.requestId,
               service: (data['service'] ?? '').toString(),
               center: LatLng(myLat, myLng),
               onCancel: _cancel,
+              isRide: (data['isRide'] ?? false) == true,
+              autoOffer: (data['autoOffer'] ?? false) == true,
             );
           }
 
@@ -254,8 +262,7 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
                 (data['proposedPrice'] as num?) ??
                 0;
             final counter = (data['workerCounterPrice'] as num?) ?? prev;
-            return Container(
-              decoration: const BoxDecoration(gradient: AppColors.igGradient),
+            return AuroraBackground(
               child: SafeArea(
                 child: Center(
                   child: SingleChildScrollView(
@@ -280,11 +287,22 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
           // accepted / confirmed / pending_worker_counter →
           // काम पुष्टि — स्थिर job site (flag) + कामदारको लाइभ स्थान (worker ले
           // JobRouteScreen मार्फत पठाएको) बीच कालो live route polyline।
+          //
+          // Ride (Bike/Car) मा राइड 'in_progress' भइसकेपछि (OTP मिलेर सुरु
+          // भएपछि) "flag" अब pickup होइन — driver अब गन्तव्य (destinationLat/
+          // Lng) तर्फ जाँदैछ, त्यसैले नक्साको स्थिर बिन्दु पनि त्यतै सर्नुपर्छ।
+          final isRideJob = (data['isRide'] ?? false) == true;
+          final destLat = (data['destinationLat'] as num?)?.toDouble();
+          final destLng = (data['destinationLng'] as num?)?.toDouble();
           final empLat = (data['employerLat'] as num?)?.toDouble();
           final empLng = (data['employerLng'] as num?)?.toDouble();
-          final site = (empLat != null && empLng != null)
-              ? LatLng(empLat, empLng)
-              : const LatLng(fallbackLat, fallbackLng);
+          final useDestination =
+              isRideJob && status == 'in_progress' && destLat != null && destLng != null;
+          final site = useDestination
+              ? LatLng(destLat, destLng)
+              : (empLat != null && empLng != null)
+                  ? LatLng(empLat, empLng)
+                  : const LatLng(fallbackLat, fallbackLng);
 
           final wLat = (data['workerLat'] as num?)?.toDouble();
           final wLng = (data['workerLng'] as num?)?.toDouble();
@@ -314,8 +332,11 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
                 originLabel:
                     (data['workerName'] ?? S.workerRoleWord).toString(),
                 destination: site,
-                destinationLabel: S.jobLocationTitle,
-                destinationAddress: (data['address'] ?? '').toString(),
+                destinationLabel:
+                    useDestination ? S.destinationLabel : S.jobLocationTitle,
+                destinationAddress: useDestination
+                    ? (data['destinationAddress'] ?? '').toString()
+                    : (data['address'] ?? '').toString(),
                 route: _liveRoute,
                 travelMode: travelMode,
                 // employer यहाँ आफैं कतै जाँदैन — worker कहाँ पुग्दैछ भनेर हेर्ने
@@ -349,13 +370,21 @@ class _RequestTrackingScreenState extends State<RequestTrackingScreen> {
 
 // ── Searching — live नक्सा पृष्ठभूमि + InDrive-style radar overlay ────────────
 class _Searching extends StatefulWidget {
+  final String requestId;
   final String service;
   final LatLng center;
   final VoidCallback onCancel;
+  // Ride-Hailing (Bike/Car) मात्र — driver प्रस्तावहरूको live list पनि
+  // यहीँ देखिन्छ (नत्र सामान्य सेवाको उही पुरानो radar-मात्र UI)।
+  final bool isRide;
+  final bool autoOffer;
   const _Searching({
+    required this.requestId,
     required this.service,
     required this.center,
     required this.onCancel,
+    this.isRide = false,
+    this.autoOffer = false,
   });
 
   @override
@@ -369,6 +398,9 @@ class _SearchingState extends State<_Searching>
         ..repeat();
   GoogleMapController? _map;
   BitmapDescriptor? _meIcon;
+  // Auto-Offer — पहिलो pending प्रस्ताव आउनेबित्तिकै एकपटक मात्र auto-accept
+  // गर्न — StreamBuilder हरेक अपडेटमा फेरि बन्ने भएकोले दोहोरिन नदिन guard।
+  bool _autoAccepting = false;
 
   // झन्डाकै फेदमुनिको radar-wave — छुट्टै Flutter overlay/getScreenCoordinate
   // ट्र्याकिङ होइन, झन्डाकै ठ्याक्कै उही `position` मा अर्को native Marker
@@ -377,13 +409,19 @@ class _SearchingState extends State<_Searching>
   // transform बाट सँगसँगै कोर्छ।
   List<BitmapDescriptor>? _waveFrames;
 
+  // Ride-Hailing — प्रस्ताव पठाउँदा driver-ले snapshot गरेको स्थान
+  // (`job_actions.dart::submitRideOffer`) बाट बनेका marker — offers
+  // StreamBuilder ले अद्यावधिक गर्छ (नयाँ/हटेको प्रस्ताव आए यही set फेरि
+  // बन्छ, GoogleMap ले तुरुन्तै देखाउँछ)।
+  Set<Marker> _driverMarkers = const {};
+
   @override
   void initState() {
     super.initState();
     destinationFlagPin().then((b) {
       if (mounted) setState(() => _meIcon = b);
     });
-    radarWaveFrames(AppColors.igPink).then((frames) {
+    radarWaveFrames(AppColors.kmPink).then((frames) {
       if (mounted) setState(() => _waveFrames = frames);
     });
   }
@@ -397,8 +435,21 @@ class _SearchingState extends State<_Searching>
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Stack(
+    return PopScope(
+      // Back Navigation (Ride-Hailing मात्र) — यो widget सधैँ status
+      // 'broadcasting'/'pending_worker' हुँदा मात्र देखिन्छ (parent कै
+      // StreamBuilder ले नै त्यही बेला यसलाई देखाउने निर्णय गर्छ), त्यसैले
+      // `widget.isRide` लाई नै पर्याप्त/सधैँ ताजा जाँच मान्न सकिन्छ — कुनै
+      // stale-outer-build जोखिम छैन (यो State आफैं हरेक snapshot मा ताजा
+      // widget property पाउँछ)। सिधै pop हुन नदिई पहिले खोजी नै cancel
+      // गर्ने (`onCancel` आफैंले pop पनि गर्छ), नत्र यो request Firestore
+      // मा orphan "broadcasting" भई बसिरहन्थ्यो।
+      canPop: !widget.isRide,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        widget.onCancel();
+      },
+      child: Stack(
       children: [
         // ── प्रत्यक्ष Google Map पृष्ठभूमि — radar-wave frame छान्ने काम
         // यहीँ `AnimatedBuilder` भित्रै मात्र (पहिले जस्तो State-level
@@ -444,6 +495,7 @@ class _SearchingState extends State<_Searching>
                     anchor: FlagPinGeometry.markerAnchorFraction,
                     zIndexInt: 2,
                   ),
+                ..._driverMarkers,
               },
             );
           },
@@ -456,18 +508,9 @@ class _SearchingState extends State<_Searching>
           bottom: 20,
           child: SafeArea(
             top: false,
-            child: Container(
+            child: GlassPanel(
               padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                boxShadow: const [
-                  BoxShadow(
-                      color: Colors.black26,
-                      blurRadius: 20,
-                      offset: Offset(0, 6)),
-                ],
-              ),
+              radius: AppRadius.lg,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -478,7 +521,7 @@ class _SearchingState extends State<_Searching>
                         height: 22,
                         child: CircularProgressIndicator(
                           strokeWidth: 2.6,
-                          valueColor: AlwaysStoppedAnimation(AppColors.igPink),
+                          valueColor: AlwaysStoppedAnimation(AppColors.kmPink),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -486,12 +529,13 @@ class _SearchingState extends State<_Searching>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(S.findingProviders,
+                            Text(widget.isRide ? S.findingDrivers : S.findingProviders,
                                 style: const TextStyle(
+                                    color: AppColors.kmText,
                                     fontWeight: FontWeight.w800, fontSize: 15)),
                             const SizedBox(height: 2),
-                            Text(S.waitingAccept,
-                                style: theme.textTheme.bodySmall),
+                            Text(widget.isRide ? S.waitingDriverAccept : S.waitingAccept,
+                                style: const TextStyle(color: AppColors.kmMuted)),
                           ],
                         ),
                       ),
@@ -505,8 +549,8 @@ class _SearchingState extends State<_Searching>
                       icon: const Icon(Icons.close_rounded, size: 18),
                       label: Text(S.cancelRequest),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.danger,
-                        side: const BorderSide(color: AppColors.danger),
+                        foregroundColor: AppColors.kmRose,
+                        side: const BorderSide(color: AppColors.kmRose),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                     ),
@@ -516,7 +560,277 @@ class _SearchingState extends State<_Searching>
             ),
           ),
         ),
+
+        // ── Ride-Hailing (Bike/Car) — driver प्रस्तावहरूको live list ──
+        if (widget.isRide)
+          Positioned(
+            left: 16,
+            right: 16,
+            top: MediaQuery.of(context).padding.top + 12,
+            bottom: 200,
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('serviceRequests')
+                  .doc(widget.requestId)
+                  .collection('rideOffers')
+                  .where('status', whereIn: ['pending', 'passenger_countered'])
+                  .snapshots(),
+              builder: (context, snap) {
+                final offers = snap.data?.docs ?? const [];
+                // Driver marker — हरेक प्रस्तावको snapshot स्थान (माथि
+                // class-doc हेर्नुहोस्)। यो नेस्टेड StreamBuilder फेरि build
+                // हुँदैमा parent `_SearchingState` (माथिको GoogleMap जसले
+                // `_driverMarkers` पढ्छ) आफैं भने फेरि build हुँदैन — त्यसैले
+                // सिधै field मात्र बदल्नुको सट्टा अर्को frame मा explicit
+                // `setState` तानिनुपर्छ (यही build को बीचमा setState गर्न
+                // मिल्दैन)।
+                final newMarkers = {
+                  for (final d in offers)
+                    if ((d.data()['workerLat'] as num?) != null &&
+                        (d.data()['workerLng'] as num?) != null)
+                      Marker(
+                        markerId: MarkerId('driver_${d.id}'),
+                        position: LatLng(
+                            (d.data()['workerLat'] as num).toDouble(),
+                            (d.data()['workerLng'] as num).toDouble()),
+                        icon: BitmapDescriptor.defaultMarkerWithHue(
+                            BitmapDescriptor.hueViolet),
+                        anchor: const Offset(0.5, 0.5),
+                        zIndexInt: 3,
+                        infoWindow: InfoWindow(
+                            title: (d.data()['workerName'] ?? '').toString()),
+                      ),
+                };
+                if (newMarkers.length != _driverMarkers.length ||
+                    !newMarkers.containsAll(_driverMarkers)) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) setState(() => _driverMarkers = newMarkers);
+                  });
+                }
+                // Auto-Offer — पहिलो साँच्चै 'pending' (negotiate भइरहेको
+                // होइन) प्रस्ताव आउनेबित्तिकै एकपटक मात्र auto-accept।
+                final pendingOnly = offers
+                    .where((d) => (d.data()['status'] ?? '') == 'pending')
+                    .toList();
+                if (widget.autoOffer && !_autoAccepting && pendingOnly.isNotEmpty) {
+                  _autoAccepting = true;
+                  final first = pendingOnly.first;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      acceptRideOffer(
+                          context, widget.requestId, first.id, first.data());
+                    }
+                  });
+                }
+                if (offers.isEmpty) return const SizedBox.shrink();
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(AppRadius.pill),
+                      ),
+                      child: Text(
+                          '${S.driverOffersLabel} (${offers.length})',
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12.5)),
+                    ),
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: offers.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (context, i) {
+                          final d = offers[i];
+                          return RepaintBoundary(
+                            key: ValueKey(d.id),
+                            child: _RideOfferCard(
+                              requestId: widget.requestId,
+                              offerId: d.id,
+                              offer: d.data(),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
       ],
+      ),
+    );
+  }
+}
+
+/// एउटा driver-प्रस्ताव — नाम, सवारी, rating, भाडा + Accept/Decline।
+class _RideOfferCard extends StatelessWidget {
+  final String requestId;
+  final String offerId;
+  final Map<String, dynamic> offer;
+  const _RideOfferCard({
+    required this.requestId,
+    required this.offerId,
+    required this.offer,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final name = (offer['workerName'] ?? '—').toString();
+    final make = (offer['vehicleMake'] ?? '').toString();
+    final model = (offer['vehicleModel'] ?? '').toString();
+    final plate = (offer['vehiclePlate'] ?? '').toString();
+    // पुरानो worker record (structured field अझै नभएको) मा composed
+    // सारांशमा नै फर्कने — कहिल्यै खाली नदेखियोस्।
+    final vehicleLine = [make, model].where((s) => s.isNotEmpty).join(' ');
+    final vehicle = vehicleLine.isNotEmpty
+        ? vehicleLine
+        : (offer['vehicleDetails'] ?? '').toString();
+    final rating = (offer['rating'] as num?)?.toDouble() ?? 0;
+    final completedRides = (offer['completedRides'] as num?)?.toInt() ?? 0;
+    final price = offer['offerPrice'];
+    return GlassPanel(
+      padding: const EdgeInsets.all(12),
+      radius: AppRadius.md,
+      fill: AppColors.kmSurface.withValues(alpha: 0.88),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              // driver-को साँचो फोटो (registration selfie) — कहिल्यै अपलोड
+              // नभएको/लोड नभएको भए आफैं generic icon मा fallback गर्छ।
+              WorkerAvatar(
+                uid: (offer['workerUid'] ?? '').toString(),
+                size: 36,
+                iconColor: AppColors.kmInk,
+                backgroundColor: AppColors.kmOrange,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        style: const TextStyle(
+                            color: AppColors.kmText,
+                            fontWeight: FontWeight.w800, fontSize: 14.5)),
+                    if (vehicle.isNotEmpty)
+                      Text(vehicle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 11.5, color: AppColors.kmMuted)),
+                    if (plate.isNotEmpty)
+                      Text('${S.vehiclePlateLabel}: $plate',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.kmMuted)),
+                    if (rating > 0 || completedRides > 0)
+                      Row(
+                        children: [
+                          if (rating > 0) ...[
+                            const Icon(Icons.star_rounded,
+                                size: 14, color: AppColors.kmAmber),
+                            const SizedBox(width: 2),
+                            Text(rating.toStringAsFixed(1),
+                                style: const TextStyle(
+                                    color: AppColors.kmText,
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w700)),
+                          ],
+                          if (rating > 0 && completedRides > 0)
+                            const Text(' · ',
+                                style: TextStyle(
+                                    color: AppColors.kmMuted, fontSize: 11.5)),
+                          if (completedRides > 0)
+                            Text(S.ridesCountShort(completedRides),
+                                style: const TextStyle(
+                                    color: AppColors.kmMuted,
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+              Text('Rs. $price',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
+                      color: AppColors.kmOrange)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if ((offer['status'] ?? 'pending') == 'passenger_countered')
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+              decoration: BoxDecoration(
+                color: AppColors.kmOrange.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '${S.waitingAccept} · Rs. ${offer['passengerCounterPrice']}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.kmOrange),
+              ),
+            )
+          else
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => declineRideOffer(requestId, offerId),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.kmRose,
+                    side: const BorderSide(color: AppColors.kmRose),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: Text(S.decline),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => negotiateRideOffer(
+                      context, requestId, offerId, (price as num?) ?? 0),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.kmOrange,
+                    side: const BorderSide(color: AppColors.kmOrange),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: Text(S.counterBack, style: const TextStyle(fontSize: 12.5)),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () =>
+                      acceptRideOffer(context, requestId, offerId, offer),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.kmOrange,
+                    foregroundColor: AppColors.kmInk,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: Text(S.accept,
+                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -530,21 +844,20 @@ class _Ended extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(gradient: AppColors.igGradient),
+    return AuroraBackground(
       child: SafeArea(
         child: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: Colors.white, size: 64),
+              Icon(icon, color: AppColors.kmText, size: 64),
               const SizedBox(height: 16),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 40),
                 child: Text(title,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                        color: Colors.white,
+                        color: AppColors.kmText,
                         fontSize: 16,
                         fontWeight: FontWeight.w700)),
               ),
@@ -552,14 +865,14 @@ class _Ended extends StatelessWidget {
               OutlinedButton(
                 onPressed: onBack,
                 style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.white70),
+                  side: const BorderSide(color: AppColors.kmMuted),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 26, vertical: 12),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(AppRadius.pill)),
                 ),
-                child:
-                    Text(S.back, style: const TextStyle(color: Colors.white)),
+                child: Text(S.back,
+                    style: const TextStyle(color: AppColors.kmText)),
               ),
             ],
           ),
@@ -593,7 +906,6 @@ class _ProviderTrackCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final name = (data['workerName'] ?? 'Provider').toString();
     final service = (data['service'] ?? '').toString();
     final phone = (data['workerPhone'] ?? '').toString();
@@ -606,12 +918,24 @@ class _ProviderTrackCard extends StatelessWidget {
     final status = (data['status'] ?? 'accepted').toString();
     final arrived = data['arrivedAt'] != null;
     final travelMode = TravelMode.fromValue(data['travelMode'] as String?);
+    // Ride-Start OTP — driver आइपुगेपछि यही कोड सुनाउनुपर्छ; राइड
+    // 'in_progress' नभएसम्म (अझै driver ले verify नगरेसम्म) मात्र देखिने।
+    final isRide = service == 'Bike' || service == 'Car';
+    final rideStartCode = (data['rideStartCode'] ?? '').toString();
 
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: AppColors.igGradient,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-        boxShadow: [
+    return ClipRRect(
+      borderRadius:
+          const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+      decoration: BoxDecoration(
+        color: AppColors.kmSurface.withValues(alpha: 0.92),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+        border: Border(
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+        ),
+        boxShadow: const [
           BoxShadow(
               color: Colors.black38, blurRadius: 20, offset: Offset(0, -4)),
         ],
@@ -651,6 +975,44 @@ class _ProviderTrackCard extends StatelessWidget {
                 ),
               ),
             ],
+            // Ride-Start OTP — driver आइपुगेर राइड सुरु नगरेसम्म (status अझै
+            // 'in_progress' नभएसम्म) पासेन्जरलाई सधैँ प्रस्ट देखिने।
+            if (isRide && rideStartCode.isNotEmpty && status != 'in_progress') ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  gradient: AppColors.kmCtaGradient,
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.password_rounded,
+                        color: AppColors.kmInk, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(S.shareCodeWithDriver,
+                              style: const TextStyle(
+                                  color: AppColors.kmInk,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 11)),
+                          Text(rideStartCode,
+                              style: const TextStyle(
+                                  color: AppColors.kmInk,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 22,
+                                  letterSpacing: 6)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [
@@ -665,19 +1027,20 @@ class _ProviderTrackCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
+                color: Colors.white.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(AppRadius.md),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 22,
-                        backgroundColor: const Color(0x22833AB4),
-                        child: Icon(serviceIconFor(service),
-                            color: AppColors.igViolet),
+                      // driver को साँचो फोटो (registration selfie)।
+                      WorkerAvatar(
+                        uid: (data['workerUid'] ?? '').toString(),
+                        size: 44,
+                        iconColor: AppColors.kmInk,
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -686,13 +1049,14 @@ class _ProviderTrackCard extends StatelessWidget {
                           children: [
                             Text(name,
                                 style: const TextStyle(
+                                    color: AppColors.kmText,
                                     fontWeight: FontWeight.w800, fontSize: 15)),
                             Text(
                               [
                                 S.serviceName(service),
                                 if (price != null) 'Rs. $price',
                               ].join('  ·  '),
-                              style: theme.textTheme.bodySmall,
+                              style: const TextStyle(color: AppColors.kmMuted),
                             ),
                           ],
                         ),
@@ -712,39 +1076,39 @@ class _ProviderTrackCard extends StatelessWidget {
                         .set({'travelMode': m.value}, SetOptions(merge: true)),
                   ),
                   if (address.isNotEmpty) ...[
-                    const Divider(height: 16),
+                    Divider(height: 16, color: Colors.white.withValues(alpha: 0.1)),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Icon(Icons.place_outlined,
-                            size: 15, color: Colors.black45),
+                            size: 15, color: AppColors.kmMuted),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(address,
                               style: const TextStyle(
-                                  fontSize: 12, color: Colors.black54)),
+                                  fontSize: 12, color: AppColors.kmMuted)),
                         ),
                       ],
                     ),
                   ],
                   // फोन नम्बर सिधै देखिने — Call बटन थिच्नुअघि नै थाहा
                   // होस्/कल गर्न सजिलो होस् भनेर, लुकेको Call बटनमा मात्र
-                  // सीमित नराखी। तर worker साँच्चै आइपुगेपछि मात्र — Arrival-
-                  // Gated Communication (job_actions.dart::isCommunicationUnlocked)।
+                  // सीमित नराखी। स्वीकृति भएकै क्षणदेखि — Acceptance-Gated
+                  // Communication (job_actions.dart::isCommunicationUnlocked)।
                   if (isCommunicationUnlocked(status) && phone.isNotEmpty) ...[
-                    const Divider(height: 16),
+                    Divider(height: 16, color: Colors.white.withValues(alpha: 0.1)),
                     GestureDetector(
                       onTap: () => _callWorker(context, phone),
                       child: Row(
                         children: [
                           const Icon(Icons.call_rounded,
-                              size: 15, color: AppColors.igViolet),
+                              size: 15, color: AppColors.kmOrange),
                           const SizedBox(width: 6),
                           Text(phone,
                               style: const TextStyle(
                                   fontSize: 13.5,
                                   fontWeight: FontWeight.w700,
-                                  color: AppColors.igViolet)),
+                                  color: AppColors.kmOrange)),
                         ],
                       ),
                     ),
@@ -753,20 +1117,21 @@ class _ProviderTrackCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
-            // Arrival-Gated Communication — worker साँच्चै आइपुगेर status
-            // `in_progress` नभएसम्म Call/Video/Message लुकेका रहन्छन्।
+            // Acceptance-Gated Communication — स्वीकृति भएकै क्षणदेखि
+            // (accepted/confirmed/in_progress) Call/Video/Message स्थायी
+            // रूपमा खुल्ला।
             if (isCommunicationUnlocked(status))
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () => _callWorker(context, phone),
-                      icon:
-                          const Icon(Icons.call_rounded, color: Colors.white),
+                      icon: const Icon(Icons.call_rounded,
+                          color: AppColors.kmText),
                       label: Text(S.callWord,
-                          style: const TextStyle(color: Colors.white)),
+                          style: const TextStyle(color: AppColors.kmText)),
                       style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.white70),
+                        side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                     ),
@@ -781,11 +1146,11 @@ class _ProviderTrackCard extends StatelessWidget {
                         video: true,
                       ),
                       icon: const Icon(Icons.videocam_rounded,
-                          color: Colors.white),
+                          color: AppColors.kmText),
                       label: Text(S.videoCall,
-                          style: const TextStyle(color: Colors.white)),
+                          style: const TextStyle(color: AppColors.kmText)),
                       style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.white70),
+                        side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                     ),
@@ -807,8 +1172,8 @@ class _ProviderTrackCard extends StatelessWidget {
                       label: Text(S.messageWord,
                           style: const TextStyle(fontWeight: FontWeight.w800)),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: AppColors.igViolet,
+                        backgroundColor: AppColors.kmOrange,
+                        foregroundColor: AppColors.kmInk,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                     ),
@@ -821,24 +1186,27 @@ class _ProviderTrackCard extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.14),
+                  color: Colors.white.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(AppRadius.sm),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
                 ),
                 child: Row(
                   children: [
                     const Icon(Icons.lock_outline_rounded,
-                        size: 16, color: Colors.white),
+                        size: 16, color: AppColors.kmMuted),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(S.contactLockedAwaitingArrival,
                           style: const TextStyle(
-                              fontSize: 12, color: Colors.white)),
+                              fontSize: 12, color: AppColors.kmMuted)),
                     ),
                   ],
                 ),
               ),
           ],
         ),
+      ),
+    ),
       ),
     );
   }

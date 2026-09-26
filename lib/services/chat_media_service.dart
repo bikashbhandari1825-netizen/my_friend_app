@@ -22,6 +22,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 
+import '../l10n/strings.dart';
 import 'document_service.dart' show DocumentService;
 
 class ChatMediaService {
@@ -81,18 +82,29 @@ class ChatMediaService {
     );
   }
 
-  /// भ्वाइस-नोट — `record` package ले AAC-LC (.m4a) मा नै दिन्छ, त्यही
-  /// container मा सिधै अपलोड (audio codec अगाडि नै साँघुरो bitrate मा
-  /// रेकर्ड भएकोले थप compress गर्नुपर्ने ठूलो फाइदा हुँदैन)।
+  /// भ्वाइस-नोट — `record` package ले mobile/desktop मा AAC-LC (.m4a) मा
+  /// दिन्छ, तर Web मा Chrome/Edge/Firefox को `MediaRecorder` ले AAC नै
+  /// समर्थन नगर्ने भएकोले `voice_recorder_bar.dart` त्यहाँ Opus (.webm) मा
+  /// रेकर्ड गर्छ — container फरक भएकोले [ext]/content-type पनि सोही अनुसार,
+  /// caller (chat_screen.dart) बाट स्पष्ट रूपमा आउनुपर्छ (हार्डकोड गरे
+  /// गलत content-type सहित अपलोड हुन्छ र playback असफल हुन्छ)। audio codec
+  /// अगाडि नै साँघुरो bitrate मा रेकर्ड भएकोले थप compress गर्नुपर्ने ठूलो
+  /// फाइदा हुँदैन, container ज्यूँकात्यूँ अपलोड।
   static Future<String> uploadChatVoice({
     required String requestId,
     required Uint8List bytes,
+    String ext = 'm4a',
   }) async {
     final id = DateTime.now().millisecondsSinceEpoch;
+    final contentType = switch (ext) {
+      'webm' => 'audio/webm',
+      'ogg' => 'audio/ogg',
+      _ => 'audio/mp4',
+    };
     return _upload(
-      path: 'chats/$requestId/media/$id.m4a',
+      path: 'chats/$requestId/media/$id.$ext',
       bytes: bytes,
-      contentType: 'audio/mp4',
+      contentType: contentType,
     );
   }
 
@@ -133,6 +145,25 @@ class ChatMediaService {
   /// पुनः-प्रयोग (त्यही Storage/network error handling सधैँभरि एउटै ठाउँ)।
   static String describeUploadError(Object e) =>
       DocumentService.describeUploadError(e);
+
+  /// [describeUploadError] कै code (जस्तै "permission-denied") सिधै
+  /// प्रयोगकर्तालाई नदेखाई — यसको सट्टा कारण-अनुसार प्रस्ट, कारबाही-योग्य
+  /// (actionable) सन्देश। "permission-denied" यहाँ प्रायः यो chat अघिल्लोपल्ट
+  /// खोलेपछि त्यसको access अद्यावधिक भएको (जस्तै काम अर्को स्थितिमा गइसकेको)
+  /// बेला देखिन्छ — "फेरि प्रयास गर्नुहोस्" भन्दा "यो chat फेरि खोल्नुहोस्"
+  /// बढी उपयोगी हुन्छ।
+  static String friendlyUploadError(Object e) {
+    switch (describeUploadError(e)) {
+      case 'permission-denied':
+        return S.uploadErrorPermission;
+      case 'network':
+        return S.uploadErrorNetwork;
+      case 'storage-not-setup':
+        return S.uploadErrorStorageNotSetup;
+      default:
+        return S.uploadErrorGeneric;
+    }
+  }
 }
 
 class VideoTooLargeException implements Exception {

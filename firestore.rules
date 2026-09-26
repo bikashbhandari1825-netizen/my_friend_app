@@ -143,29 +143,70 @@ service cloud.firestore {
       allow delete: if isAdmin()
         || (isSignedIn() && resource.data.employerUid == request.auth.uid)
         || (isSignedIn() && resource.data.workerUid == request.auth.uid);
+
+      // ── rideOffers (Bike/Car ride-hailing मात्र) ────────────
+      // inDrive-style simultaneous bidding: धेरै driver ले एकैचोटि आ-आफ्नै
+      // भाडा प्रस्ताव यहाँ (आफ्नै uid को doc) लेख्छन् — parent doc कहिल्यै
+      // छुँदैन (workerUid/status अझै खाली नै रहन्छ, driver-driver बीच race
+      // हुनसक्दैन)। passenger (employer) ले तीमध्ये एउटा छान्दा मात्र
+      // parent doc अपडेट हुन्छ (job_actions.dart::acceptRideOffer)।
+      match /rideOffers/{offerId} {
+        // पहिले जुनसुकै signed-in user ले (यो booking सँग कुनै सरोकार
+        // नभए पनि) सबै driver को प्रतिस्पर्धी भाडा प्रस्ताव हेर्न सक्थे —
+        // अब त्यो offer आफ्नै (driver) वा parent request कै employer
+        // (यात्रु) वा admin मात्र।
+        allow read: if isSignedIn() && (
+          resource.data.workerUid == request.auth.uid
+          || get(/databases/$(database)/documents/serviceRequests/$(doc))
+               .data.employerUid == request.auth.uid
+          || isAdmin());
+        allow create: if isSignedIn()
+          && request.resource.data.workerUid == request.auth.uid;
+        allow update: if isSignedIn() && (
+          resource.data.workerUid == request.auth.uid
+          || get(/databases/$(database)/documents/serviceRequests/$(doc))
+               .data.employerUid == request.auth.uid
+          || isAdmin());
+        allow delete: if isAdmin();
+      }
     }
 
     // ── chats ───────────────────────────────────────────────
-    // TODO: booking को पक्ष हो कि भनेर get() ले कस्न सकिन्छ।
-    // parent doc — अहिले "seen/read" receipt (`readBy.{uid}`) राख्न मात्र
-    // प्रयोग हुन्छ; message हरू भने subcollection मै छन्।
+    // पहिले जुनसुकै signed-in user ले (requestId थाहा/अनुमान भए) अर्को
+    // दुई व्यक्तिबीचको निजी कुराकानी नै पढ्न/मेट्न सक्थे — अब त्यही
+    // booking का employer/worker (वा admin) मात्र। parent doc — "seen/
+    // read" receipt (`readBy.{uid}`) राख्न मात्र प्रयोग हुन्छ; message
+    // हरू भने subcollection मै छन्।
+    function isChatParticipant(requestId) {
+      let r = get(/databases/$(database)/documents/serviceRequests/$(requestId)).data;
+      return r.employerUid == request.auth.uid || r.workerUid == request.auth.uid;
+    }
     match /chats/{requestId} {
-      allow read, create, update: if isSignedIn();
+      allow read, create, update: if isSignedIn()
+        && (isChatParticipant(requestId) || isAdmin());
       // deleteCancelledBooking (job_actions.dart) ले यो parent doc लाई
       // messages/serviceRequests सँगै एउटै batch मा डिलिट गर्छ — delete
       // यहाँ अनुमति नभए पूरै batch (serviceRequests समेत) atomically
-      // असफल हुन्थ्यो।
-      allow delete: if isSignedIn();
+      // असफल हुन्थ्यो। बुकिङ मेटिनुअघि नै हो भएकोले participant जाँच
+      // अझै लागू गर्न मिल्छ।
+      allow delete: if isSignedIn()
+        && (isChatParticipant(requestId) || isAdmin());
       match /messages/{msg} {
-        allow read, create, update, delete: if isSignedIn();
+        allow read, create, update, delete: if isSignedIn()
+          && (isChatParticipant(requestId) || isAdmin());
       }
     }
 
     // ── calls (WebRTC signaling: offer/answer/ICE) ──────────
+    // चैट कै उस्तै — अर्को दुई व्यक्तिको live call सिग्नलिङमा (ICE
+    // candidate injection/मेटाउन) तेस्रो व्यक्तिले हस्तक्षेप गर्न
+    // नपाओस् भनेर booking का participant मात्र।
     match /calls/{requestId} {
-      allow read, create, update, delete: if isSignedIn();
+      allow read, create, update, delete: if isSignedIn()
+        && (isChatParticipant(requestId) || isAdmin());
       match /{sub}/{cand} {
-        allow read, create, update, delete: if isSignedIn();
+        allow read, create, update, delete: if isSignedIn()
+          && (isChatParticipant(requestId) || isAdmin());
       }
     }
 
@@ -197,10 +238,35 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
 
+    // ── cancellations (ride/job cancel reason — analytics-only log,
+    // बुकिङ आफैं cancel हुँदा पूर्ण रूपमा मेटिन्छ, यो छुट्टै हल्का log हो) ──
+    match /cancellations/{doc} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ── sosAlerts (emergency SOS button — admin/support ले पछि हेर्ने) ──
+    match /sosAlerts/{doc} {
+      allow create: if isSignedIn();
+      allow read: if isSignedIn()
+        && (resource.data.uid == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
     // ── reviews ────────────────────────────────────────────
+    // पहिले जुनसुकै signed-in user ले `authorUid` जे पायो त्यही राखेर
+    // (अरू कसैको नाममा समेत) फर्जी review लेख्न सक्थे — रेटिङ बढाउने/
+    // प्रतिस्पर्धीलाई तल झार्ने दुरुपयोग हुन सक्थ्यो। अब authorUid
+    // आफ्नै हुनैपर्छ, र जुन booking (`requestId`) को नाममा review
+    // लेखिँदैछ त्यो साँच्चै आफूले नै employer भएर पूरा गरेको (completed)
+    // काम नै हुनुपर्छ — worker को uid पनि मिल्नुपर्छ।
     match /reviews/{doc} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.authorUid == request.auth.uid
+        && get(/databases/$(database)/documents/serviceRequests/$(request.resource.data.requestId)).data.employerUid == request.auth.uid
+        && get(/databases/$(database)/documents/serviceRequests/$(request.resource.data.requestId)).data.workerUid == request.resource.data.targetUid
+        && get(/databases/$(database)/documents/serviceRequests/$(request.resource.data.requestId)).data.status == 'completed';
       allow update, delete: if isAdmin();
     }
 

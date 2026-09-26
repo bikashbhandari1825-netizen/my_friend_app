@@ -77,6 +77,16 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
     const leg = route?.legs?.[0];
     const encoded = route?.overview_polyline?.points;
     if (encoded && leg) {
+      console.log("getRoute google source origin=", originLat, originLng,
+          "dest=", destLat, destLng, "km=", (leg.distance?.value || 0) / 1000,
+          "steps=", leg.steps?.length, "encodedLen=", encoded.length,
+          "summary=", route.summary, "polyline=", encoded);
+      console.log("getRoute step start/end points=", JSON.stringify(
+          (leg.steps || []).map((s) => ({
+            start: s.start_location, end: s.end_location,
+            instr: (s.html_instructions || "").replace(/<[^>]+>/g, ""),
+          })),
+      ));
       return {
         polyline: encoded,
         km: (leg.distance?.value || 0) / 1000,
@@ -107,6 +117,9 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
     const body = await res.json();
     const route = body.routes?.[0];
     if (route?.geometry) {
+      console.log("getRoute osrm source origin=", originLat, originLng,
+          "dest=", destLat, destLng, "km=", (route.distance || 0) / 1000,
+          "encodedLen=", route.geometry.length);
       return {
         polyline: route.geometry,
         km: (route.distance || 0) / 1000,
@@ -123,6 +136,113 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
   // दुवै असफल — client ले यसलाई "route unavailable" भनेर देखाउने, कुनै
   // सीधा-रेखा fallback कहिल्यै बनाउँदैन।
   throw new HttpsError("unavailable", "Route भेटिएन।");
+});
+
+/**
+ * Ride-Hailing destination search — Google Geocoding API सधैँ यहाँबाट
+ * (server-side) कल हुन्छ, `getRoute` कै उही कारणले (CORS + key कहिल्यै
+ * browser मा नदेखिने)। अघि client (Flutter) बाटै सिधै Nominatim (OSM)
+ * प्रयोग हुँदै थियो — त्यसले Nepal-बाहिरका ठेगाना (टेस्ट/विदेशी) भेट्दैनथ्यो
+ * (`countrycodes=np` restriction) र प्रायः native Google Maps जस्तो
+ * प्रस्ट/सही नतिजा दिँदैनथ्यो। अब त्यही एउटै Maps API key (Directions कै,
+ * यसमा Geocoding API पनि enabled हुनुपर्छ — Google Cloud Console मा
+ * "Geocoding API" enable गर्नुपर्ने हुनसक्छ) प्रयोग गर्छ। `region=np` ले
+ * Nepal-नजिकका नतिजा प्राथमिकतामा राख्छ, तर बाहिरका पूर्ण रूपमा रोक्दैन —
+ * ठ्याक्कै native Google Maps जस्तै global खोजी।
+ */
+exports.geocodeSearch = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
+  const query = String(request.data?.query || "").trim();
+  if (query.length < 2) {
+    throw new HttpsError("invalid-argument", "query (कम्तिमा २ अक्षर) चाहिन्छ।");
+  }
+  const biasLat = request.data?.biasLat;
+  const biasLng = request.data?.biasLng;
+  // पहिले यहाँ bias बिन्दु Nepal भित्रै हो कि छैन जाँचेर, Nepal-बाहिर भए
+  // bounds नै नलगाउने (unbiased global खोजी) गरिएको थियो — त्यो त्यो बेला
+  // देखिएको Poland नतिजा (जो साँच्चै stale client build कै bug थियो, यो
+  // bounds mechanism कै होइन) बाट डराएर थपिएको अत्यधिक सावधानी थियो। तर
+  // यसले वास्तविक समस्या ल्यायो: प्रयोगकर्ता Nepal-बाहिर (जस्तै टेस्टिङका
+  // क्रममा Poland बाट) भए, स्थानीय खोजी (उस्तै/नजिकैको सडक-नाम भएका फरक-फरक
+  // सहर, जस्तै Szczecin भित्रको "Chorwacka/Rondo" टाढाको Poznań मा गएर
+  // बस्ने) कहिल्यै सही disambiguate हुँदैनथ्यो — किनभने bounds नै पठाइँदैनथ्यो।
+  // अब जहाँसुकैको बायस बिन्दु भए पनि (Nepal-मात्र सीमित होइन) सधैँ त्यही
+  // वरपर bounds लगाउने — यही नै साँचो "प्रयोगकर्ता हाल कहाँ छ, त्यहीं
+  // प्राथमिकता" व्यवहार हो (native Google Maps जस्तै)।
+  const hasBias = typeof biasLat === "number" && typeof biasLng === "number";
+
+  // haversine (km) — बायस बिन्दुदेखि हरेक नतिजा साँच्चै कति टाढा छ भनेर।
+  const distKm = (lat, lng) => {
+    const R = 6371;
+    const dLat = (lat - biasLat) * Math.PI / 180;
+    const dLng = (lng - biasLng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+        Math.cos(biasLat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) *
+        Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  };
+
+  const runGeocode = async (useBias) => {
+    const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+    url.searchParams.set("address", query);
+    url.searchParams.set("key", MAPS_API_KEY.value());
+    if (useBias && hasBias) {
+      // `bounds` Google का अनुसार "bias मात्र, restrict होइन" — व्यवहारमा
+      // यसले टाढाको (तर bounds भित्रै पर्ने ठूलो box मा) उस्तै-नाम भएको
+      // ठाउँलाई नजिकैको भन्दा माथि राख्न सक्छ (जस्तै एउटै "Szkolna 23"
+      // Goleniów नजिकै भए पनि टाढाको Międzywodzie नै दिने)। त्यसैले box
+      // सानो (~15-18km, साँच्चै "यही सहर/वरपर" जति मात्र) राख्ने, अनि तलको
+      // दूरी-अनुसार sort ले नै अन्तिम टुङ्गो लगाउने — bounds त सुरुमै टाढाका
+      // धेरै असम्बन्धित नतिजा हटाउने पहिलो तह मात्र हो।
+      url.searchParams.set(
+          "bounds", `${biasLat - 0.15},${biasLng - 0.15}|${biasLat + 0.15},${biasLng + 0.15}`,
+      );
+    } else if (!hasBias) {
+      // बायस बिन्दु नै नआएको (दुर्लभ) अवस्थामा मात्र — यो app मूलतः Nepal-
+      // केन्द्रित भएकोले हल्का ccTLD झुकाव।
+      url.searchParams.set("region", "np");
+    }
+    const res = await fetch(url.toString());
+    return res.json();
+  };
+
+  try {
+    console.log("geocodeSearch query:", query, "hasBias:", hasBias,
+        "biasLat:", biasLat, "biasLng:", biasLng);
+    let body = await runGeocode(true);
+    // Local-First Fallback — स्थानीय (bounds-सीमित) खोजीले केही नभेटे मात्र
+    // (कहिल्यै त्यसैले सधैँ हुने होइन) फेरि सिधै bounds-रहित (फराकिलो/global)
+    // खोजी — नत्र bounds बाहिरको साँच्चै मात्र-त्यहीँ भएको ठाउँ (टाढाको सहर/
+    // देशको ठ्याक्कै ठेगाना खोज्दा) कहिल्यै भेटिँदैनथ्यो।
+    if (body.status === "ZERO_RESULTS" && hasBias) {
+      console.log("geocodeSearch local bounds empty — falling back to wider search");
+      body = await runGeocode(false);
+    }
+    console.log("geocodeSearch status:", body.status,
+        "topResult:", body.results?.[0]?.formatted_address);
+    if (body.status !== "OK" && body.status !== "ZERO_RESULTS") {
+      console.warn("Geocode non-OK:", body.status, body.error_message);
+    }
+    const results = Array.isArray(body.results) ? body.results : [];
+    let mapped = results.map((r) => ({
+      label: r.formatted_address || "",
+      lat: r.geometry?.location?.lat,
+      lng: r.geometry?.location?.lng,
+    })).filter((r) => r.label && typeof r.lat === "number" && typeof r.lng === "number");
+    // bounds "bias मात्र, restrict होइन" भएकोले Google ले नै टाढाको उस्तै-
+    // नाम भएको नतिजालाई नजिकैको भन्दा माथि राखिदिन सक्छ — त्यसैले यहाँ
+    // साँच्चै दूरी (haversine) अनुसार पुनः-क्रमबद्ध गरेर नजिकैको सधैँ
+    // पहिलो (Enter/Search key ले सिधै छान्ने पनि यही "पहिलो" नै हो) बनाउने।
+    if (hasBias) {
+      mapped = mapped
+          .map((r) => ({...r, _km: distKm(r.lat, r.lng)}))
+          .sort((a, b) => a._km - b._km)
+          .map(({_km, ...rest}) => rest);
+    }
+    return {results: mapped.slice(0, 6)};
+  } catch (err) {
+    console.error("Geocode call failed:", err);
+    throw new HttpsError("unavailable", "खोजी असफल भयो।");
+  }
 });
 
 exports.sendPushForNotification = onDocumentCreated(

@@ -3,6 +3,7 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
@@ -75,19 +76,70 @@ Future<({double lat, double lng})?> lastKnownProfileLocation(String uid) async {
 Future<void> openLocationAppSettings() => Geolocator.openAppSettings();
 
 /// lat/lng बाट मानिसले पढ्न मिल्ने ठेगाना (Nominatim / OSM)। असफल भए खाली।
-Future<String> reverseGeocode(double lat, double lng) async {
+/// Nominatim को free tier ले धेरैपटक झट्टाझट्टै आउने request (rate-limit)
+/// कहिलेकाहीं खाली जवाफ दिन्छ — त्यसैले एक-पटक असफल/खाली भए छोटो पर्खाइपछि
+/// फेरि एकपटक कोसिस (location_picker_page.dart मा पहिल्यै प्रयोग हुने
+/// उस्तै resilience, अब यहीं साझा ठाउँमा — यो function प्रयोग गर्ने सबैले
+/// फाइदा पाउने गरी)।
+/// ठेगाना/ठाउँको नाम (जस्तै "Bhaktapur" वा पूर्ण ठेगाना) ले खोजेर सम्भावित
+/// स्थानहरू फर्काउने — Ride-Hailing को "Where to?" खोज बक्समा प्रयोग हुन्छ।
+/// पहिले सिधै Nominatim (OSM, free) बाट हुँदै थियो — त्यसले `countrycodes=np`
+/// प्रतिबन्धका कारण Nepal-बाहिरका ठेगाना (टेस्ट/भ्रमणकारी) कहिल्यै भेट्दैनथ्यो,
+/// र प्रायः native Google Maps जस्तो सही/पूर्ण नतिजा दिँदैनथ्यो। अब त्यही
+/// एउटै Maps API key (Directions/`getRoute` कै) प्रयोग गर्ने server-side
+/// Google Geocoding API (`geocodeSearch` Cloud Function, functions/index.js)
+/// बाट — global खोजी, key कहिल्यै client मा एक्स्पोज नहुने।
+Future<List<({String label, double lat, double lng})>> searchPlaces(
+    String query, {double? biasLat, double? biasLng}) async {
+  final q = query.trim();
+  if (q.length < 2) return const [];
   try {
-    final lang = S.isNepali ? 'ne' : 'en';
-    final uri =
-        Uri.parse('https://nominatim.openstreetmap.org/reverse?format=jsonv2'
-            '&lat=$lat&lon=$lng&accept-language=$lang');
-    final res = await http.get(uri, headers: {
-      'User-Agent': 'KaamMitra/1.0 (job address)',
-    }).timeout(const Duration(seconds: 8));
-    if (res.statusCode == 200) {
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      return (body['display_name'] ?? '').toString();
-    }
-  } catch (_) {}
+    final callable = FirebaseFunctions.instance.httpsCallable(
+      'geocodeSearch',
+      options: HttpsCallableOptions(timeout: const Duration(seconds: 12)),
+    );
+    final result = await callable.call<Map<String, dynamic>>({
+      'query': q,
+      if (biasLat != null && biasLng != null) 'biasLat': biasLat,
+      if (biasLat != null && biasLng != null) 'biasLng': biasLng,
+    });
+    final list = (result.data['results'] as List?) ?? const [];
+    return list.map((e) {
+      // `e as Map<String, dynamic>` (कडा generic cast) ले यहाँ silently
+      // असफल हुँदै थियो — Android platform channel ले nested map हरू
+      // प्रायः `Map<Object?, Object?>` को रूपमा फर्काउँछ (सिधै
+      // `Map<String, dynamic>` होइन), जसले गर्दा हरेक खोजी नतिजा (server
+      // ले सही डेटा फर्काए पनि) यहीँ `catch` भएर सधैँ खाली सूची फर्किरहेको
+      // थियो। untyped `Map` मा cast गर्दा दुवै किसिमको map चल्छ।
+      final m = e as Map;
+      return (
+        label: (m['label'] ?? '').toString(),
+        lat: (m['lat'] as num?)?.toDouble() ?? 0,
+        lng: (m['lng'] as num?)?.toDouble() ?? 0,
+      );
+    }).where((r) => r.label.isNotEmpty).toList();
+  } catch (_) {
+    return const [];
+  }
+}
+
+Future<String> reverseGeocode(double lat, double lng) async {
+  final lang = S.isNepali ? 'ne' : 'en';
+  final uri =
+      Uri.parse('https://nominatim.openstreetmap.org/reverse?format=jsonv2'
+          '&lat=$lat&lon=$lng&accept-language=$lang');
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      final res = await http.get(uri, headers: {
+        'User-Agent': 'KaamMitra/1.0 (job address)',
+      }).timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final found = (body['display_name'] ?? '').toString();
+        if (found.isNotEmpty) return found;
+      }
+    } catch (_) {}
+    if (attempt == 0) await Future.delayed(const Duration(seconds: 1));
+  }
   return '';
 }

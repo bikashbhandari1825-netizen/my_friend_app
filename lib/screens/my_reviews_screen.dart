@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 import '../l10n/strings.dart';
 import '../report_page.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 
 enum _Sort { recent, highest, lowest }
 
@@ -30,31 +30,48 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(S.reviewsTitle),
-        actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert_rounded),
-            onSelected: (v) {
-              if (v == 'report') {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ReportOptionsPage()),
-                );
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'report', child: Text('Report a Problem')),
-            ],
-          ),
-        ],
-      ),
-      body: uid == null
-          ? const Center(child: Text('Login गर्नुहोस्'))
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: KmScreenHeader(
+                  title: S.reviewsTitle,
+                  actions: [
+                    PopupMenuButton<String>(
+                      icon: const Icon(Icons.more_vert_rounded,
+                          color: AppColors.kmText),
+                      color: AppColors.kmSurface,
+                      onSelected: (v) {
+                        if (v == 'report') {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const ReportOptionsPage()),
+                          );
+                        }
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(
+                            value: 'report',
+                            child: Text('Report a Problem',
+                                style: TextStyle(color: AppColors.kmText))),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: uid == null
+          ? const Center(
+              child: Text('Login गर्नुहोस्',
+                  style: TextStyle(color: AppColors.kmMuted)))
           : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
                   .collection('reviews')
@@ -62,11 +79,13 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
                   .snapshots(),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
+                  return const Center(
+                      child: CircularProgressIndicator(
+                          color: AppColors.kmOrange));
                 }
                 final docs = snap.data?.docs ?? [];
                 if (docs.isEmpty) {
-                  return _empty(theme);
+                  return _empty();
                 }
 
                 final reviews = docs.map((d) => d.data()).toList();
@@ -108,11 +127,16 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
                     const SizedBox(height: 16),
                     Row(
                       children: [
-                        Text(S.sortBy, style: theme.textTheme.bodySmall),
+                        Text(S.sortBy,
+                            style:
+                                const TextStyle(color: AppColors.kmMuted)),
                         const SizedBox(width: 8),
                         DropdownButton<_Sort>(
                           value: _sort,
                           underline: const SizedBox(),
+                          dropdownColor: AppColors.kmSurface,
+                          iconEnabledColor: AppColors.kmMuted,
+                          style: const TextStyle(color: AppColors.kmText),
                           items: _Sort.values
                               .map((s) => DropdownMenuItem(
                                   value: s, child: Text(_sortLabel(s))))
@@ -131,17 +155,23 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
                 );
               },
             ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
-  Widget _empty(ThemeData theme) => Center(
+  Widget _empty() => Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.reviews_outlined,
-                size: 56, color: theme.colorScheme.onSurfaceVariant),
+            const Icon(Icons.reviews_outlined,
+                size: 56, color: AppColors.kmMuted),
             const SizedBox(height: 12),
-            Text(S.noReviewsYet, style: theme.textTheme.bodyMedium),
+            Text(S.noReviewsYet,
+                style: const TextStyle(color: AppColors.kmMuted)),
           ],
         ),
       );
@@ -156,8 +186,7 @@ class _SummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return AppCard(
+    return GlassPanel(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -165,11 +194,13 @@ class _SummaryCard extends StatelessWidget {
             children: [
               Text(avg.toStringAsFixed(1),
                   style: const TextStyle(
-                      fontSize: 34, fontWeight: FontWeight.w800)),
+                      color: AppColors.kmText,
+                      fontSize: 34,
+                      fontWeight: FontWeight.w800)),
               _Stars(avg.toDouble(), size: 15),
               const SizedBox(height: 4),
               Text('$total ${S.basedOnReviews}',
-                  style: theme.textTheme.bodySmall),
+                  style: const TextStyle(color: AppColors.kmMuted)),
             ],
           ),
           const SizedBox(width: 18),
@@ -181,7 +212,9 @@ class _SummaryCard extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(vertical: 2),
                     child: Row(
                       children: [
-                        Text('$s', style: theme.textTheme.bodySmall),
+                        Text('$s',
+                            style:
+                                const TextStyle(color: AppColors.kmMuted)),
                         const SizedBox(width: 6),
                         Expanded(
                           child: ClipRRect(
@@ -190,9 +223,9 @@ class _SummaryCard extends StatelessWidget {
                               value: total == 0 ? 0 : (counts[s] ?? 0) / total,
                               minHeight: 7,
                               backgroundColor:
-                                  theme.colorScheme.surfaceContainerHighest,
-                              valueColor:
-                                  const AlwaysStoppedAnimation(AppColors.lime),
+                                  Colors.white.withValues(alpha: 0.08),
+                              valueColor: const AlwaysStoppedAnimation(
+                                  AppColors.kmOrange),
                             ),
                           ),
                         ),
@@ -201,7 +234,8 @@ class _SummaryCard extends StatelessWidget {
                           width: 20,
                           child: Text('${counts[s] ?? 0}',
                               textAlign: TextAlign.right,
-                              style: theme.textTheme.bodySmall),
+                              style:
+                                  const TextStyle(color: AppColors.kmMuted)),
                         ),
                       ],
                     ),
@@ -221,7 +255,6 @@ class _ReviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final name = (r['authorName'] ?? 'User').toString();
     final rating = ((r['rating'] ?? 0) as num).toDouble();
     final comment = (r['comment'] ?? '').toString();
@@ -233,23 +266,35 @@ class _ReviewCard extends StatelessWidget {
       date = '${d.day}/${d.month}/${d.year}';
     }
 
-    return AppCard(
+    return GlassPanel(
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const LimeIconBadge(Icons.person, size: 36),
+              Container(
+                width: 36,
+                height: 36,
+                decoration: const BoxDecoration(
+                  gradient: AppColors.kmCtaGradient,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.person, color: AppColors.kmInk, size: 20),
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(name,
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                        style: const TextStyle(
+                            color: AppColors.kmText,
+                            fontWeight: FontWeight.w700)),
                     if (service.isNotEmpty)
-                      Text(service, style: theme.textTheme.bodySmall),
+                      Text(service,
+                          style:
+                              const TextStyle(color: AppColors.kmMuted)),
                   ],
                 ),
               ),
@@ -259,11 +304,11 @@ class _ReviewCard extends StatelessWidget {
           if (comment.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(comment,
-                style: theme.textTheme.bodyMedium?.copyWith(height: 1.4)),
+                style: const TextStyle(color: AppColors.kmText, height: 1.4)),
           ],
           if (date.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(date, style: theme.textTheme.bodySmall),
+            Text(date, style: const TextStyle(color: AppColors.kmMuted)),
           ],
         ],
       ),
@@ -285,7 +330,7 @@ class _Stars extends StatelessWidget {
         return Icon(
           filled ? Icons.star_rounded : Icons.star_outline_rounded,
           size: size,
-          color: AppColors.lime,
+          color: AppColors.kmOrange,
         );
       }),
     );

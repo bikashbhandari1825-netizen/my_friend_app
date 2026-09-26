@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_ui.dart';
 import 'nearby_common.dart';
 
 class ScheduleScreen extends StatefulWidget {
@@ -73,75 +74,77 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(S.scheduleTitle),
+    return AuroraBackground(
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.buttonGradient),
-        ),
-      ),
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppColors.igGradient),
-        child: SafeArea(
-          child: uid == null
-              ? const Center(
-                  child: Text('Login गर्नुहोस्',
-                      style: TextStyle(color: Colors.white)))
-              : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: FirebaseFirestore.instance
-                      .collection('serviceRequests')
-                      .where('workerUid', isEqualTo: uid)
-                      .snapshots(),
-                  builder: (context, snap) {
-                    final jobs = <(DateTime, Map<String, dynamic>)>[];
-                    for (final d in snap.data?.docs ?? []) {
-                      final data = d.data();
-                      if (!_statuses
-                          .contains((data['status'] ?? '').toString())) {
-                        continue;
-                      }
-                      final pd = data['preferredDate'];
-                      if (pd is! Timestamp) continue;
-                      jobs.add((pd.toDate(), data));
-                    }
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: KmScreenHeader(title: S.scheduleTitle),
+              ),
+              Expanded(
+                child: uid == null
+                    ? const Center(
+                        child: Text('Login गर्नुहोस्',
+                            style: TextStyle(color: AppColors.kmMuted)))
+                    : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: FirebaseFirestore.instance
+                            .collection('serviceRequests')
+                            .where('workerUid', isEqualTo: uid)
+                            .snapshots(),
+                        builder: (context, snap) {
+                          final jobs = <(DateTime, Map<String, dynamic>)>[];
+                          for (final d in snap.data?.docs ?? []) {
+                            final data = d.data();
+                            if (!_statuses
+                                .contains((data['status'] ?? '').toString())) {
+                              continue;
+                            }
+                            final pd = data['preferredDate'];
+                            if (pd is! Timestamp) continue;
+                            jobs.add((pd.toDate(), data));
+                          }
 
-                    final dayJobs = jobs
-                        .where((j) => _sameDay(j.$1, _selected))
-                        .map((j) => j.$2)
-                        .toList();
+                          final dayJobs = jobs
+                              .where((j) => _sameDay(j.$1, _selected))
+                              .map((j) => j.$2)
+                              .toList();
 
-                    return ListView(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                      children: [
-                        _calendarCard(jobs),
-                        const SizedBox(height: 16),
-                        Text(
-                          '${_selected.day} ${_monthName(_selected.month)} — ${S.upcomingJobs}',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 14),
-                        ),
-                        const SizedBox(height: 8),
-                        if (dayJobs.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text(
-                              jobs.isEmpty
-                                  ? S.noScheduledJobs
-                                  : S.noJobsThisDay,
-                              style: const TextStyle(color: Colors.white70),
-                            ),
-                          )
-                        else
-                          ...dayJobs.map(_jobTile),
-                      ],
-                    );
-                  },
-                ),
+                          return ListView(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                            children: [
+                              _calendarCard(jobs),
+                              const SizedBox(height: 16),
+                              Text(
+                                '${_selected.day} ${_monthName(_selected.month)} — ${S.upcomingJobs}',
+                                style: const TextStyle(
+                                    color: AppColors.kmText,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 14),
+                              ),
+                              const SizedBox(height: 8),
+                              if (dayJobs.isEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Text(
+                                    jobs.isEmpty
+                                        ? S.noScheduledJobs
+                                        : S.noJobsThisDay,
+                                    style: const TextStyle(
+                                        color: AppColors.kmMuted),
+                                  ),
+                                )
+                              else
+                                ...dayJobs.map(_jobTile),
+                            ],
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -171,10 +174,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         child: Container(
           margin: const EdgeInsets.all(2),
           decoration: BoxDecoration(
-            color: isSel ? AppColors.igViolet : Colors.transparent,
+            gradient: isSel ? AppColors.kmCtaGradient : null,
             borderRadius: BorderRadius.circular(10),
             border: isToday && !isSel
-                ? Border.all(color: AppColors.igViolet, width: 1.4)
+                ? Border.all(color: AppColors.kmOrange, width: 1.4)
                 : null,
           ),
           child: Column(
@@ -184,7 +187,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                   style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w700,
-                      color: isSel ? Colors.white : Colors.black87)),
+                      color: isSel ? AppColors.kmInk : AppColors.kmText)),
               const SizedBox(height: 2),
               Container(
                 width: 5,
@@ -192,7 +195,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: hasJobs(day)
-                      ? (isSel ? Colors.white : AppColors.igRed)
+                      ? (isSel ? AppColors.kmInk : AppColors.kmPink)
                       : Colors.transparent,
                 ),
               ),
@@ -205,18 +208,16 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     const wk = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
     const wkNe = ['आ', 'सो', 'मं', 'बु', 'बि', 'शु', 'श'];
 
-    return Container(
+    return GlassPanel(
+      radius: AppRadius.lg,
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-      ),
       child: Column(
         children: [
           Row(
             children: [
               IconButton(
-                icon: const Icon(Icons.chevron_left_rounded),
+                icon: const Icon(Icons.chevron_left_rounded,
+                    color: AppColors.kmText),
                 onPressed: () => setState(
                     () => _month = DateTime(_month.year, _month.month - 1)),
               ),
@@ -225,11 +226,14 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                   '${_monthName(_month.month)} ${_month.year}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
-                      fontWeight: FontWeight.w800, fontSize: 15),
+                      color: AppColors.kmText,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15),
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.chevron_right_rounded),
+                icon: const Icon(Icons.chevron_right_rounded,
+                    color: AppColors.kmText),
                 onPressed: () => setState(
                     () => _month = DateTime(_month.year, _month.month + 1)),
               ),
@@ -244,7 +248,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                       style: const TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
-                          color: Colors.black45)),
+                          color: AppColors.kmMuted)),
                 ),
             ],
           ),
@@ -268,53 +272,56 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     final price = d['finalPrice'] ?? d['proposedPrice'];
     final status = (d['status'] ?? '').toString();
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(AppRadius.md),
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: const Color(0x11833AB4),
-            child: Icon(serviceIconFor(service),
-                color: AppColors.igViolet, size: 18),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassPanel(
+        radius: AppRadius.md,
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: AppColors.kmOrange.withValues(alpha: 0.16),
+              child: Icon(serviceIconFor(service),
+                  color: AppColors.kmOrange, size: 18),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${S.serviceName(service)}  ·  $slot',
+                      style: const TextStyle(
+                          color: AppColors.kmText,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13)),
+                  if (address.isNotEmpty)
+                    Text(address,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 11, color: AppColors.kmMuted)),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text('${S.serviceName(service)}  ·  $slot',
+                if (price != null)
+                  Text('Rs. $price',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.kmPink)),
+                Text(
+                    status == 'completed'
+                        ? (S.isNepali ? 'पूरा' : 'done')
+                        : (S.isNepali ? 'तय' : 'booked'),
                     style: const TextStyle(
-                        fontWeight: FontWeight.w700, fontSize: 13)),
-                if (address.isNotEmpty)
-                  Text(address,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          const TextStyle(fontSize: 11, color: Colors.black45)),
+                        fontSize: 10, color: AppColors.kmMuted)),
               ],
             ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (price != null)
-                Text('Rs. $price',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w800, color: AppColors.igRed)),
-              Text(
-                  status == 'completed'
-                      ? (S.isNepali ? 'पूरा' : 'done')
-                      : (S.isNepali ? 'तय' : 'booked'),
-                  style: const TextStyle(fontSize: 10, color: Colors.black38)),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

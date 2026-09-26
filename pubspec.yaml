@@ -1,5 +1,5 @@
 name: my_friend_app
-description: "A new Flutter project."
+description: "Sahyatri (सहयात्री) — local worker marketplace app."
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 version: 1.0.0+5
@@ -28,12 +28,14 @@ dependencies:
   qr_flutter: ^4.1.0
   shared_preferences: ^2.3.2
   url_launcher: ^6.3.0
-  flutter_webrtc: ^1.6.2+hotfix.1
+  flutter_webrtc: ^1.6.2+hotfix.3
   permission_handler: ^11.3.1
   firebase_messaging: ^15.1.3
   flutter_local_notifications: ^18.0.1
+  safe_device: ^1.1.6
   cached_network_image: ^3.4.1
   path_provider: ^2.1.4
+  country_picker: ^2.0.28
 
   # The following adds the Cupertino Icons font to your application.
   cupertino_icons: ^1.0.9
@@ -41,6 +43,7 @@ dependencies:
   open_filex: ^4.7.0
   video_player: ^2.9.5
   flutter_image_compress: ^2.3.0
+  mobile_scanner: ^7.4.2
 
 dev_dependencies:
   flutter_test:
@@ -52,6 +55,18 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.14.3
+
+# Sahayatri launcher icon — `dart run flutter_launcher_icons` (re)generates
+# every platform's icon set from assets/icon/app_icon*.png.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#07060D"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+  remove_alpha_ios: true
 
 # यहाँ मात्र `google_maps_flutter_web` लाई साना, स्थानीय patch सहितको आफ्नै
 # copy बाट लिने — किन र के फरक छ भन्ने `third_party/google_maps_flutter_web/
@@ -74,3 +89,4 @@ flutter:
   assets:
     - assets/images/
     - assets/images/services/
+    - assets/icon/

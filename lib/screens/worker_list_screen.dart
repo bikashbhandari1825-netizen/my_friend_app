@@ -80,6 +80,7 @@ class WorkerListScreen extends StatelessWidget {
                         'price': data['price'] ?? '',
                         'document': data['document'] ?? '',
                         'phone': data['phone'] ?? '',
+                        'vehicleDetails': data['vehicleDetails'] ?? '',
                       };
                       Navigator.push(
                         context,

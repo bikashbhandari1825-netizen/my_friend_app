@@ -9,7 +9,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/worker_avatar.dart';
 import 'nearby_common.dart';
 
@@ -104,74 +104,99 @@ class _NearbyScreenState extends State<NearbyScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Scaffold(
-      appBar: AppBar(title: Text(S.nearbyTitle)),
-      body: _loadingLoc
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const CircularProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text(S.enableLocation, style: theme.textTheme.bodyMedium),
-                ],
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: KmScreenHeader(title: S.nearbyTitle),
               ),
-            )
-          : Column(
-              children: [
-                if (_approx) _ApproxBanner(onEnable: _initLocation),
-                _FilterBar(
-                  selected: _filter,
-                  onSelect: (f) => setState(() => _filter = f),
-                ),
-                Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: _initLocation,
-                    child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: _query.snapshots(),
-                      builder: (context, snap) {
-                        if (snap.connectionState == ConnectionState.waiting) {
-                          return const Center(
-                              child: CircularProgressIndicator());
-                        }
-                        final docs = snap.data?.docs ?? [];
-                        if (docs.isEmpty) {
-                          return _EmptyNearby();
-                        }
+              Expanded(
+                child: _loadingLoc
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(
+                                color: AppColors.kmOrange),
+                            const SizedBox(height: 16),
+                            Text(S.enableLocation,
+                                style: const TextStyle(
+                                    color: AppColors.kmMuted)),
+                          ],
+                        ),
+                      )
+                    : Column(
+                        children: [
+                          if (_approx) _ApproxBanner(onEnable: _initLocation),
+                          _FilterBar(
+                            selected: _filter,
+                            onSelect: (f) => setState(() => _filter = f),
+                          ),
+                          Expanded(
+                            child: RefreshIndicator(
+                              onRefresh: _initLocation,
+                              color: AppColors.kmOrange,
+                              backgroundColor: AppColors.kmSurface,
+                              child: StreamBuilder<
+                                  QuerySnapshot<Map<String, dynamic>>>(
+                                stream: _query.snapshots(),
+                                builder: (context, snap) {
+                                  if (snap.connectionState ==
+                                      ConnectionState.waiting) {
+                                    return const Center(
+                                        child: CircularProgressIndicator(
+                                            color: AppColors.kmOrange));
+                                  }
+                                  final docs = snap.data?.docs ?? [];
+                                  if (docs.isEmpty) {
+                                    return _EmptyNearby();
+                                  }
 
-                        final workers = docs.map((d) {
-                          final data = d.data();
-                          final wp = workerPos(data, d.id, _lat, _lng);
-                          final km = haversineKm(_lat, _lng, wp.lat, wp.lng);
-                          return (data: data, id: d.id, km: km);
-                        }).toList()
-                          ..sort((a, b) => a.km.compareTo(b.km));
+                                  final workers = docs.map((d) {
+                                    final data = d.data();
+                                    final wp =
+                                        workerPos(data, d.id, _lat, _lng);
+                                    final km = haversineKm(
+                                        _lat, _lng, wp.lat, wp.lng);
+                                    return (data: data, id: d.id, km: km);
+                                  }).toList()
+                                    ..sort((a, b) => a.km.compareTo(b.km));
 
-                        return ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          itemCount: workers.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 12),
-                          itemBuilder: (context, i) {
-                            final w = workers[i];
-                            return _WorkerCard(
-                              data: w.data,
-                              workerId: w.id,
-                              distanceKm: w.km,
-                              employerLat: _lat,
-                              employerLng: _lng,
-                            );
-                          },
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ],
-            ),
+                                  return ListView.separated(
+                                    padding: const EdgeInsets.fromLTRB(
+                                        16, 12, 16, 24),
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    itemCount: workers.length,
+                                    separatorBuilder: (_, __) =>
+                                        const SizedBox(height: 12),
+                                    itemBuilder: (context, i) {
+                                      final w = workers[i];
+                                      return _WorkerCard(
+                                        data: w.data,
+                                        workerId: w.id,
+                                        distanceKm: w.km,
+                                        employerLat: _lat,
+                                        employerLng: _lng,
+                                      );
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -189,18 +214,23 @@ class _ApproxBanner extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: AppColors.lime.withValues(alpha: 0.14),
+        color: AppColors.kmOrange.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: AppColors.kmOrange.withValues(alpha: 0.35)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.location_off, size: 18, color: AppColors.lime),
+          const Icon(Icons.location_off, size: 18, color: AppColors.kmOrange),
           const SizedBox(width: 8),
           Expanded(
-            child:
-                Text(S.approxLocation, style: const TextStyle(fontSize: 12.5)),
+            child: Text(S.approxLocation,
+                style: const TextStyle(
+                    color: AppColors.kmText, fontSize: 12.5)),
           ),
-          TextButton(onPressed: onEnable, child: Text(S.enableLocation)),
+          TextButton(
+              onPressed: onEnable,
+              child: Text(S.enableLocation,
+                  style: const TextStyle(color: AppColors.kmOrange))),
         ],
       ),
     );
@@ -214,7 +244,6 @@ class _FilterBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     Widget chip(String value, String label, IconData? icon) {
       final active = value == selected;
       return Padding(
@@ -224,30 +253,27 @@ class _FilterBar extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
             decoration: BoxDecoration(
-              color: active
-                  ? AppColors.lime
-                  : theme.colorScheme.surfaceContainerHighest,
+              gradient: active ? AppColors.kmCtaGradient : null,
+              color: active ? null : Colors.white.withValues(alpha: 0.07),
               borderRadius: BorderRadius.circular(AppRadius.pill),
               border: Border.all(
-                  color: active ? AppColors.lime : theme.dividerColor),
+                  color: active
+                      ? Colors.transparent
+                      : Colors.white.withValues(alpha: 0.14)),
             ),
             child: Row(
               children: [
                 if (icon != null) ...[
                   Icon(icon,
                       size: 15,
-                      color: active
-                          ? AppColors.onLime
-                          : theme.colorScheme.onSurfaceVariant),
+                      color: active ? AppColors.kmInk : AppColors.kmMuted),
                   const SizedBox(width: 5),
                 ],
                 Text(label,
                     style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w700,
-                      color: active
-                          ? AppColors.onLime
-                          : theme.colorScheme.onSurface,
+                      color: active ? AppColors.kmInk : AppColors.kmMuted,
                     )),
               ],
             ),
@@ -279,12 +305,12 @@ class _EmptyNearby extends StatelessWidget {
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
         const SizedBox(height: 90),
-        Icon(Icons.person_search_rounded,
-            size: 56, color: Theme.of(context).colorScheme.onSurfaceVariant),
+        const Icon(Icons.person_search_rounded,
+            size: 56, color: AppColors.kmMuted),
         const SizedBox(height: 14),
         Center(
           child: Text(S.noWorkersNearby,
-              style: Theme.of(context).textTheme.bodyMedium),
+              style: const TextStyle(color: AppColors.kmMuted)),
         ),
       ],
     );
@@ -308,14 +334,15 @@ class _WorkerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final name = (data['name'] ?? '').toString();
     final service = (data['service'] ?? '').toString();
-    final rating = (data['rating'] ?? '5.0').toString();
+    // '5.0' default हटाइयो — नयाँ worker सुरुमा साँच्चै ०/कुनै review
+    // नभएको देखिनुपर्छ, admin approve गर्दै लेख्ने मान अब '0.0' नै हो।
+    final rating = (data['rating'] ?? '0.0').toString();
     final reviews = (data['reviews'] ?? '0').toString();
     final price = (data['price'] ?? 'Rs. 500').toString();
 
-    return AppCard(
+    return GlassPanel(
       padding: const EdgeInsets.all(14),
       child: Column(
         children: [
@@ -330,24 +357,28 @@ class _WorkerCard extends StatelessWidget {
                   children: [
                     Text(name.isEmpty ? '—' : name,
                         style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 15.5)),
+                            color: AppColors.kmText,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15.5)),
                     const SizedBox(height: 2),
                     Text(S.serviceName(service),
-                        style: theme.textTheme.bodySmall),
+                        style: const TextStyle(color: AppColors.kmMuted)),
                     const SizedBox(height: 4),
                     Row(
                       children: [
                         const Icon(Icons.star_rounded,
-                            size: 15, color: AppColors.lime),
+                            size: 15, color: AppColors.kmOrange),
                         const SizedBox(width: 3),
                         Text('$rating  ($reviews)',
-                            style: theme.textTheme.bodySmall),
+                            style:
+                                const TextStyle(color: AppColors.kmMuted)),
                       ],
                     ),
                   ],
                 ),
               ),
-              Pill(S.distanceLabel(distanceKm), icon: Icons.near_me_rounded),
+              KmTag(S.distanceLabel(distanceKm),
+                  color: AppColors.kmTealBlue, icon: Icons.near_me_rounded),
             ],
           ),
           const SizedBox(height: 10),
@@ -355,11 +386,14 @@ class _WorkerCard extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: Text(
               S.fromPrice(price),
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+              style: const TextStyle(
+                  color: AppColors.kmText,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14),
             ),
           ),
           const SizedBox(height: 12),
-          PrimaryButton(
+          KmCtaButton(
             label: S.offerYourPrice,
             icon: Icons.gavel_rounded,
             onPressed: () => showOfferSheet(

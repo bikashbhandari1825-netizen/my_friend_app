@@ -87,6 +87,14 @@ class CallSession {
       _pendingRemoteCandidates.add(c);
       return;
     }
+    // यो Firestore listener callback हो — `hangUp()` ले `_subs` cancel
+    // गरिसकेको भए पनि, त्यो cancel() भन्दा अघि नै "in-flight" भइसकेको
+    // event (Dart ले पहिल्यै dispatch गरिसकेको, केवल यो function अझै
+    // चलिरहेको) रोकिँदैन। `_closed` भइसकेपछि native (बन्द भइसकेको)
+    // `_pc` मा `addCandidate` कल गर्दा signaling thread मा native SIGABRT
+    // (libjingle_peerconnection_so.so) आउँथ्यो — यही थियो "video call
+    // बीचमै आफैं app back/close हुने" क्र्यासको साँचो जड।
+    if (_closed || _pc == null) return;
     try {
       await _pc!.addCandidate(c);
     } catch (_) {
@@ -105,6 +113,11 @@ class CallSession {
     final pending = List<RTCIceCandidate>.from(_pendingRemoteCandidates);
     _pendingRemoteCandidates.clear();
     for (final c in pending) {
+      // हरेक iteration आफैं await हुने भएकोले, बीचमै (यो loop चलिरहेकै
+      // बेला) `hangUp()` भइहाले पछिल्ला candidate हरूले बन्द भइसकेको
+      // native `_pc` छुनु हुँदैन — `_addRemoteCandidate()` कै उस्तै
+      // native-SIGABRT जोखिम।
+      if (_closed || _pc == null) return;
       try {
         await _pc!.addCandidate(c);
       } catch (_) {}
@@ -329,15 +342,22 @@ class CallSession {
     } catch (_) {}
 
     _pc!.onTrack = (RTCTrackEvent e) async {
-      if (e.streams.isNotEmpty) {
+      // `hangUp()` ले renderer dispose गरिसकेपछि पनि यो callback फायर हुन
+      // सक्छ (remote बाट ढिलो आइपुगेको track event) — अरू सबै callback
+      // (`onIceCandidate`, `_addRemoteCandidate`, आदि) मा भइसकेकै
+      // `_closed` guard यहाँ छुटेको थियो, disposed renderer मा
+      // `setSrcObject` कल गर्दा native crash हुनसक्ने जोखिम।
+      if (_closed || e.streams.isEmpty) return;
+      try {
         final stream = e.streams.first;
         await remoteRenderer.setSrcObject(
           stream: stream,
           trackId: _firstTrackId(stream.getVideoTracks()),
         );
+        if (_closed) return;
         remoteJoined.value = true;
         status.value = CallStatus.connected;
-      }
+      } catch (_) {}
     };
     // `disconnected` (कुनै transport ले क्षणिक रूपमा नेटवर्क गुमाउँदा, खास
     // गरी यहाँ प्रयोग हुने free TURN relay बाट जाँदा सामान्य) प्रायः केही
@@ -349,15 +369,30 @@ class CallSession {
     // सेकेन्ड (grace period) पर्खने — त्यतिञ्जेलमा फेरि `connected` भए टाइमर
     // रद्द, अझै `disconnected`/`failed`/`closed` नै रहे मात्र साँच्चै काट्ने।
     _pc!.onConnectionState = (s) {
+      if (_closed) return;
       if (s == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         _disconnectGraceTimer?.cancel();
         _disconnectGraceTimer = null;
         return;
       }
-      if (s == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-          s == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
         _disconnectGraceTimer?.cancel();
         if (!_closed) hangUp(remote: false);
+        return;
+      }
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        // पहिले यहाँ तुरुन्तै hang-up हुन्थ्यो — तर ब्यान्डविथ अचानक धेरै
+        // ड्रप हुँदा (weak network) ICE ले क्षणिक रूपमा `failed` देखाएर पनि
+        // केही सेकेन्डमै आफैं `connected` मा फर्कने केसहरू पनि हुन्छन्।
+        // पूर्ण ICE-restart (नयाँ offer/answer signaling round-trip) यहाँ
+        // थप्नु जोखिमपूर्ण हुन्थ्यो (live call बिना test गरी), त्यसैले
+        // `disconnected` कै जस्तै तर छोटो grace period — साँच्चै निको
+        // नभए (यो भन्दा गम्भीर अवस्था भएकोले `disconnected` को ८ सेकेन्ड
+        // भन्दा छोटो) मात्र काट्ने।
+        _disconnectGraceTimer?.cancel();
+        _disconnectGraceTimer = Timer(const Duration(seconds: 4), () {
+          if (!_closed) hangUp(remote: false);
+        });
         return;
       }
       if (s == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
@@ -390,7 +425,9 @@ class CallSession {
 
     final offer = await _pc!.createOffer();
     _assertValidDescription(offer, 'Offer');
+    if (_closed || _pc == null) return;
     await _pc!.setLocalDescription(offer);
+    if (_closed) return;
 
     await _doc.set({
       'offer': {'type': offer.type, 'sdp': offer.sdp},
@@ -403,13 +440,14 @@ class CallSession {
 
     // answer आउने बित्तिकै set गर्ने
     _subs.add(_doc.snapshots().listen((snap) async {
-      if (_remoteDescSet) return;
+      if (_remoteDescSet || _closed || _pc == null) return;
       final data = snap.data();
       final ans = data?['answer'];
       if (ans == null) return;
       try {
         await _pc!.setRemoteDescription(
             RTCSessionDescription(ans['sdp'], ans['type']));
+        if (_closed) return;
         status.value = CallStatus.connecting;
         await _markRemoteDescSet();
       } catch (_) {}
@@ -443,6 +481,10 @@ class CallSession {
       await hangUp(remote: false);
       return;
     }
+    // यहाँदेखि तल हरेक `await` पछि — Decline/hang-up यही बेला (offer
+    // fetch/setRemoteDescription/createAnswer आदि चलिरहेकै बीचमा) भइहाले,
+    // बन्द भइसकेको native `_pc` लाई फेरि नछुने (माथिकै SIGABRT जोखिम)।
+    if (_closed || _pc == null) return;
     await _pc!.setRemoteDescription(
         RTCSessionDescription(offerSdp, offerType));
     // offer subcollection सुन्नुअघि नै remote description सेट भइसकेको
@@ -450,10 +492,13 @@ class CallSession {
     // तर subcollection ले पहिल्यै भएका पुराना doc पनि "added" भनेर फर्काउने
     // भएकोले buffering (caller-side कै उस्तै) यहाँ पनि सुरक्षाको लागि राखिएको।
     await _markRemoteDescSet();
+    if (_closed || _pc == null) return;
 
     final answer = await _pc!.createAnswer();
     _assertValidDescription(answer, 'Answer');
+    if (_closed || _pc == null) return;
     await _pc!.setLocalDescription(answer);
+    if (_closed) return;
 
     await _doc.set({
       'answer': {'type': answer.type, 'sdp': answer.sdp},
@@ -518,14 +563,29 @@ class CallSession {
     status.value = CallStatus.ended;
 
     _disconnectGraceTimer?.cancel();
+    // हरेक cleanup चरण (subscription cancel, track stop, stream dispose, PC
+    // close) आफ्नै छुट्टै try/catch मा — पहिले यी सबै एउटै try block भित्र
+    // थिए, त्यसैले बीचमा कुनै एउटा (जस्तै दोस्रो track.stop()) असफल भए
+    // त्यसपछिका बाँकी सबै (stream.dispose()/pc.close() सम्म) चुपचाप
+    // नचलिकनै छाडिन्थे। नतिजा: camera/mic native handle कहिल्यै साँच्चै
+    // release नहुने — केही (3-4) कल पछि ती leaked handle जम्मा भएर
+    // क्र्यास हुने, र त्यही खुला रहेको camera/mic ले chat भित्रको फोटो/
+    // भ्वाइस-नोट क्याप्चर पनि असफल बनाउने ("device busy") — यी दुवै
+    // गुनासोको साँचो एउटै जड यही थियो।
     for (final s in _subs) {
-      await s.cancel();
+      try {
+        await s.cancel();
+      } catch (_) {}
+    }
+    for (final t in _local?.getTracks() ?? []) {
+      try {
+        await t.stop();
+      } catch (_) {}
     }
     try {
-      for (final t in _local?.getTracks() ?? []) {
-        await t.stop();
-      }
       await _local?.dispose();
+    } catch (_) {}
+    try {
       await _pc?.close();
     } catch (_) {}
 
@@ -556,8 +616,13 @@ class CallSession {
       } catch (_) {}
     }
 
+    // यहाँ पनि उस्तै — छुट्टाछुट्टै try/catch, नत्र localRenderer.dispose()
+    // असफल भए remoteRenderer.dispose() कहिल्यै नचली त्यसको native texture
+    // पनि leak हुन्थ्यो।
     try {
       await localRenderer.dispose();
+    } catch (_) {}
+    try {
       await remoteRenderer.dispose();
     } catch (_) {}
   }

@@ -9,18 +9,23 @@
 // job_route_screen.dart र main_container.dart दुवैले लेख्छन्) बाट प्रत्येक
 // Firestore अपडेटमा पुनः गणना हुन्छ।
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../screens/chat_screen.dart';
 import '../screens/job_actions.dart'
-    show deleteCancelledBooking, isCommunicationUnlocked;
+    show deleteCancelledBooking, isCommunicationUnlocked, pickCancellationReason;
 import '../screens/nearby_common.dart' show haversineKm, serviceIconFor;
+import 'glass_ui.dart';
 import 'status_badge.dart';
+import 'worker_avatar.dart';
 
 class ActiveJobBar extends StatelessWidget {
   final String requestId;
@@ -65,35 +70,106 @@ class ActiveJobBar extends StatelessWidget {
 
   Future<void> _confirmCancel(
       BuildContext context, Map<String, dynamic> data) async {
-    final ok = await showDialog<bool>(
+    final ok = await showKmDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(S.activeJobBarCancelTitle),
-        content: Text(S.activeJobBarCancelBody),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: Text(S.keepJob),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: Text(S.cancelRequest,
-                style: const TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
+      title: S.activeJobBarCancelTitle,
+      message: S.activeJobBarCancelBody,
+      icon: Icons.close_rounded,
+      iconBg: const LinearGradient(
+          colors: [AppColors.kmRose, AppColors.kmPinkDeep]),
+      actions: [
+        KmDialogAction(
+          label: S.keepJob,
+          onPressed: () => Navigator.of(context).pop(false),
+        ),
+        KmDialogAction(
+          label: S.cancelRequest,
+          destructive: true,
+          filled: true,
+          onPressed: () => Navigator.of(context).pop(true),
+        ),
+      ],
     );
-    if (ok == true) {
-      // Cancelled Bookings Cleanup — status मात्र बदल्ने होइन, पूरै मेट्ने
-      // (कुनै अवशेष history नरहोस्)।
-      await deleteCancelledBooking(
-        requestId,
-        workerUid: (data['workerUid'] ?? '').toString(),
-        // worker आफैंले cancel गर्‍यो भने मात्र penalty — employer लाई
-        // कहिल्यै penalty छैन (job_actions.dart::deleteCancelledBooking हेर्नुहोस्)।
-        cancelledByWorker: isWorker,
-      );
+    if (ok != true || !context.mounted) return;
+    // "पक्का हो?" पछि मात्र किन cancel गर्दै भन्ने छोटो कारण — sheet बन्द
+    // गरे (null) भने cancel नै नगर्ने।
+    final reason = await pickCancellationReason(context);
+    if (reason == null) return;
+    // Cancelled Bookings Cleanup — status मात्र बदल्ने होइन, पूरै मेट्ने
+    // (कुनै अवशेष history नरहोस्)।
+    await deleteCancelledBooking(
+      requestId,
+      workerUid: (data['workerUid'] ?? '').toString(),
+      // worker आफैंले cancel गर्‍यो भने मात्र penalty — employer लाई
+      // कहिल्यै penalty छैन (job_actions.dart::deleteCancelledBooking हेर्नुहोस्)।
+      cancelledByWorker: isWorker,
+      reason: reason,
+    );
+  }
+
+  /// Emergency SOS — पक्का हो भनेर एकपटक सोधेपछि: (१) हालको लाइभ स्थान +
+  /// राइड सन्दर्भसहित `sosAlerts` मा एउटा log (admin/support ले पछि हेर्ने,
+  /// best-effort — यसले फोन कल रोक्दैन), (२) फोनको dialer मा साँचो
+  /// आपतकालीन नम्बर (नेपाल प्रहरी: १००) सिधै खोल्ने। कुनै नक्कली "help is
+  /// on the way" जस्तो दाबी गरिँदैन — केवल साँच्चै हुने दुई कुरा मात्र।
+  Future<void> _triggerSos(
+      BuildContext context, Map<String, dynamic> data) async {
+    final ok = await showKmDialog<bool>(
+      context: context,
+      title: S.sosConfirmTitle,
+      message: S.sosConfirmBody,
+      icon: Icons.emergency_rounded,
+      iconBg:
+          const LinearGradient(colors: [AppColors.danger, AppColors.kmRose]),
+      actions: [
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.of(context).pop(false),
+        ),
+        KmDialogAction(
+          label: S.sosCallEmergency,
+          destructive: true,
+          filled: true,
+          onPressed: () => Navigator.of(context).pop(true),
+        ),
+      ],
+    );
+    if (ok != true) return;
+    unawaited(_logSosAlert(data));
+    try {
+      await launchUrl(Uri(scheme: 'tel', path: '100'));
+    } catch (_) {}
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(S.sosAlertSent)));
+    }
+  }
+
+  Future<void> _logSosAlert(Map<String, dynamic> data) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final base = {
+      'requestId': requestId,
+      'uid': uid,
+      'service': (data['service'] ?? '').toString(),
+      'employerUid': (data['employerUid'] ?? '').toString(),
+      'workerUid': (data['workerUid'] ?? '').toString(),
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    try {
+      final p = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      ).timeout(const Duration(seconds: 6));
+      await FirebaseFirestore.instance.collection('sosAlerts').add({
+        ...base,
+        'lat': p.latitude,
+        'lng': p.longitude,
+      });
+    } catch (_) {
+      // स्थान लिन असफल भए पनि — बिना coordinate भए पनि alert log हुनुपर्छ,
+      // पूर्ण रूपमा हराउनु भन्दा राम्रो।
+      try {
+        await FirebaseFirestore.instance.collection('sosAlerts').add(base);
+      } catch (_) {}
     }
   }
 
@@ -116,96 +192,113 @@ class ActiveJobBar extends StatelessWidget {
       builder: (sheetContext) => Padding(
         padding: EdgeInsets.only(
             bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Theme.of(sheetContext).colorScheme.surface,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Theme.of(sheetContext).dividerColor,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
+        child: ClipRRect(
+          borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.kmSurface.withValues(alpha: 0.94),
+                borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(AppRadius.lg)),
+                border: Border(
+                    top: BorderSide(color: AppColors.kmGlassBorder),
+                    left: BorderSide(color: AppColors.kmGlassBorder),
+                    right: BorderSide(color: AppColors.kmGlassBorder)),
               ),
-              const SizedBox(height: 16),
-              Row(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(S.jobDetailsTitle,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w800, fontSize: 17)),
-                  ),
-                  StatusBadge(status: status, large: true),
-                ],
-              ),
-              const SizedBox(height: 14),
-              if (service.isNotEmpty)
-                _sheetRow(
-                    sheetContext, Icons.build_rounded, S.serviceName(service)),
-              if (desc.isNotEmpty)
-                _sheetRow(sheetContext, Icons.notes_rounded, desc),
-              if (address.isNotEmpty)
-                _sheetRow(sheetContext, Icons.place_rounded, address),
-              if (price != null)
-                _sheetRow(sheetContext, Icons.payments_rounded, 'Rs. $price'),
-              const SizedBox(height: 18),
-              if (empLat != null && empLng != null)
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _openInGoogleMaps(empLat, empLng),
-                    icon: const Icon(Icons.map_rounded),
-                    label: Text(S.openInGoogleMaps),
-                    style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 13)),
-                  ),
-                ),
-              if (_liveStatuses.contains(status)) ...[
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.of(sheetContext).pop();
-                      _confirmCancel(context, data);
-                    },
-                    icon: const Icon(Icons.close_rounded),
-                    label: Text(S.cancelRequest),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.danger,
-                      side: const BorderSide(color: AppColors.danger),
-                      padding: const EdgeInsets.symmetric(vertical: 13),
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.22),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ],
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(S.jobDetailsTitle,
+                            style: const TextStyle(
+                                color: AppColors.kmText,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 17)),
+                      ),
+                      StatusBadge(status: status, large: true),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  if (service.isNotEmpty)
+                    _sheetRow(Icons.build_rounded, S.serviceName(service)),
+                  if (desc.isNotEmpty) _sheetRow(Icons.notes_rounded, desc),
+                  if (address.isNotEmpty)
+                    _sheetRow(Icons.place_rounded, address),
+                  if (price != null)
+                    _sheetRow(Icons.payments_rounded, 'Rs. $price'),
+                  const SizedBox(height: 18),
+                  if (empLat != null && empLng != null)
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _openInGoogleMaps(empLat, empLng),
+                        icon: const Icon(Icons.map_rounded,
+                            color: AppColors.kmText),
+                        label: Text(S.openInGoogleMaps,
+                            style:
+                                const TextStyle(color: AppColors.kmText)),
+                        style: OutlinedButton.styleFrom(
+                            side: BorderSide(color: AppColors.kmGlassBorder),
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 13)),
+                      ),
+                    ),
+                  if (_liveStatuses.contains(status)) ...[
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(sheetContext).pop();
+                          _confirmCancel(context, data);
+                        },
+                        icon: const Icon(Icons.close_rounded),
+                        label: Text(S.cancelRequest),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.kmRose,
+                          side: const BorderSide(color: AppColors.kmRose),
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _sheetRow(BuildContext context, IconData icon, String text) => Padding(
+  Widget _sheetRow(IconData icon, String text) => Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon,
-                size: 17,
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
+            Icon(icon, size: 17, color: AppColors.kmMuted),
             const SizedBox(width: 10),
-            Expanded(child: Text(text, style: const TextStyle(fontSize: 13.5))),
+            Expanded(
+                child: Text(text,
+                    style: const TextStyle(
+                        color: AppColors.kmText, fontSize: 13.5))),
           ],
         ),
       );
@@ -285,12 +378,23 @@ class ActiveJobBar extends StatelessWidget {
                   ),
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 22,
-                        backgroundColor: const Color(0x22833AB4),
-                        child: Icon(serviceIconFor(service),
-                            color: AppColors.igViolet),
-                      ),
+                      // employer ले driver हेर्दा साँचो selfie photo देख्छन्;
+                      // worker ले employer हेर्दा भने (employer को कुनै
+                      // registration selfie नहुने भएकाले) service icon नै।
+                      if (!isWorker)
+                        WorkerAvatar(
+                          uid: (data['workerUid'] ?? '').toString(),
+                          size: 44,
+                          iconColor: AppColors.igViolet,
+                          backgroundColor: const Color(0x22833AB4),
+                        )
+                      else
+                        CircleAvatar(
+                          radius: 22,
+                          backgroundColor: const Color(0x22833AB4),
+                          child: Icon(serviceIconFor(service),
+                              color: AppColors.igViolet),
+                        ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Column(
@@ -325,6 +429,14 @@ class ActiveJobBar extends StatelessWidget {
                             ),
                           ],
                         ),
+                      ),
+                      // Emergency SOS — सधैँ देखिने (Call/Message जस्तो
+                      // arrival-gate छैन; आपतकालीन बटन कहिल्यै लुक्न हुँदैन)।
+                      IconButton(
+                        onPressed: () => _triggerSos(context, data),
+                        icon: const Icon(Icons.emergency_rounded),
+                        color: AppColors.danger,
+                        tooltip: S.sosButtonLabel,
                       ),
                       // Arrival-Gated Communication — worker साँच्चै
                       // आइपुगेर status `in_progress` नभएसम्म Call/Message

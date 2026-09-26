@@ -7,7 +7,8 @@ import 'package:flutter/material.dart';
 import 'auth/dev_login.dart';
 import 'l10n/strings.dart';
 import 'theme/app_theme.dart';
-import 'widgets/app_ui.dart';
+import 'widgets/app_ui.dart' show LocationField;
+import 'widgets/glass_ui.dart';
 
 class EmployerRegistrationPage extends StatefulWidget {
   const EmployerRegistrationPage({super.key});
@@ -84,85 +85,103 @@ class _EmployerRegistrationPageState extends State<EmployerRegistrationPage> {
   @override
   Widget build(BuildContext context) {
     final canGoBack = Navigator.of(context).canPop();
-    return Scaffold(
-      appBar: gradientAppBar(
-        S.employerRegTitle,
-        leading: IconButton(
-          icon:
-              Icon(canGoBack ? Icons.arrow_back_rounded : Icons.logout_rounded),
-          tooltip: canGoBack ? null : S.logOut,
-          onPressed: _saving
-              ? null
-              : () => canGoBack ? Navigator.pop(context) : _exit(),
-        ),
-      ),
-      body: AppGradientBackground(
-        glows: false,
-        child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                boxShadow: const [
-                  BoxShadow(
-                      color: Colors.black26,
-                      blurRadius: 20,
-                      offset: Offset(0, 8)),
-                ],
-              ),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const LimeIconBadge(Icons.badge_rounded,
-                        size: 56, solid: true),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _firstName,
-                      decoration: InputDecoration(labelText: S.firstName),
-                      validator: (v) =>
-                          (v == null || v.trim().isEmpty) ? S.enterName : null,
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: _lastName,
-                      decoration: InputDecoration(labelText: S.lastName),
-                      validator: (v) =>
-                          (v == null || v.trim().isEmpty) ? S.enterName : null,
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: _phone,
-                      keyboardType: TextInputType.phone,
-                      decoration: InputDecoration(labelText: S.phone),
-                      validator: (v) => (v == null || v.trim().length < 7)
-                          ? S.enterPhone
-                          : null,
-                    ),
-                    const SizedBox(height: 20),
-                    Text(S.locationSection,
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 8),
-                    LocationField(
-                      onChanged: (lat, lng) => setState(() {
-                        _lat = lat;
-                        _lng = lng;
-                      }),
-                    ),
-                    const SizedBox(height: 26),
-                    PrimaryButton(
-                      label: S.next,
-                      loading: _saving,
-                      onPressed: _submit,
-                    ),
-                  ],
+    return AuroraBackground(
+      orbs: const [
+        KmOrb(Alignment.topRight, AppColors.kmPink),
+        KmOrb(Alignment.bottomLeft, AppColors.kmPurple),
+      ],
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: KmScreenHeader(
+                  title: S.employerRegTitle,
+                  onBack: _saving
+                      ? () {}
+                      : () => canGoBack ? Navigator.pop(context) : _exit(),
                 ),
               ),
-            ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: GlassPanel(
+                    radius: 28,
+                    padding: const EdgeInsets.all(20),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Container(
+                            width: 64,
+                            height: 64,
+                            alignment: Alignment.center,
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(colors: [
+                                AppColors.kmRose,
+                                AppColors.kmPink
+                              ]),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.badge_rounded,
+                                color: AppColors.kmInk, size: 30),
+                          ),
+                          const SizedBox(height: 18),
+                          TextFormField(
+                            controller: _firstName,
+                            style: const TextStyle(color: AppColors.kmText),
+                            decoration: kmInputDecoration(S.firstName),
+                            validator: (v) => (v == null || v.trim().isEmpty)
+                                ? S.enterName
+                                : null,
+                          ),
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            controller: _lastName,
+                            style: const TextStyle(color: AppColors.kmText),
+                            decoration: kmInputDecoration(S.lastName),
+                            validator: (v) => (v == null || v.trim().isEmpty)
+                                ? S.enterName
+                                : null,
+                          ),
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            controller: _phone,
+                            keyboardType: TextInputType.phone,
+                            style: const TextStyle(color: AppColors.kmText),
+                            decoration: kmInputDecoration(S.phone),
+                            validator: (v) => (v == null || v.trim().length < 7)
+                                ? S.enterPhone
+                                : null,
+                          ),
+                          const SizedBox(height: 20),
+                          Text(S.locationSection,
+                              style: const TextStyle(
+                                  color: AppColors.kmText,
+                                  fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 8),
+                          LocationField(
+                            onChanged: (lat, lng) => setState(() {
+                              _lat = lat;
+                              _lng = lng;
+                            }),
+                          ),
+                          const SizedBox(height: 26),
+                          KmCtaButton(
+                            label: S.next,
+                            loading: _saving,
+                            onPressed: _submit,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

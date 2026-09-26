@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_ui.dart' show AuroraBackground;
 import '../widgets/success_feedback.dart';
 import 'main_container.dart';
 
@@ -72,10 +73,10 @@ class _WorkerApprovedCelebrationState extends State<WorkerApprovedCelebration>
       final ang = (i / 14) * 2 * pi + _rnd.nextDouble();
       final dist = 90 + _rnd.nextDouble() * 90;
       final color = [
-        AppColors.igYellow,
-        AppColors.success,
+        AppColors.kmAmber,
+        AppColors.kmTeal,
         Colors.white,
-        AppColors.igPink,
+        AppColors.kmPink,
       ][i % 4];
       return (ang, dist, color, 4.0 + _rnd.nextDouble() * 5);
     });
@@ -83,8 +84,7 @@ class _WorkerApprovedCelebrationState extends State<WorkerApprovedCelebration>
     return Scaffold(
       body: GestureDetector(
         onTap: _goDashboard, // टेप गरे तुरुन्तै अगाडि
-        child: Container(
-          decoration: const BoxDecoration(gradient: AppColors.igGradient),
+        child: AuroraBackground(
           child: SafeArea(
             child: Center(
               child: AnimatedBuilder(
@@ -140,7 +140,7 @@ class _WorkerApprovedCelebrationState extends State<WorkerApprovedCelebration>
                             Transform.scale(
                               scale: _check.value.clamp(0.0, 1.0),
                               child: const Icon(Icons.check_rounded,
-                                  size: 84, color: AppColors.success),
+                                  size: 84, color: AppColors.kmTeal),
                             ),
                           ],
                         ),

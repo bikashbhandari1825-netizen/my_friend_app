@@ -13,6 +13,7 @@
 // [checkForUpdate] अरू platform मा तुरुन्तै चुपचाप फर्कन्छ।
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
@@ -24,6 +25,7 @@ import 'package:path_provider/path_provider.dart';
 import '../config/app_config.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_ui.dart';
 
 /// Release-notes body भित्र देखिने पाठ यति लामोसम्म मात्र — असीमित लामो/
 /// malformed string ले dialog को layout (Column/RenderFlex) लाई कहिल्यै
@@ -99,78 +101,145 @@ class AppUpdateService {
     return showDialog(
       context: context,
       barrierDismissible: !forceUpdate,
+      barrierColor: Colors.black.withValues(alpha: 0.6),
       builder: (dialogContext) => PopScope(
         canPop: !forceUpdate,
-        child: AlertDialog(
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(AppRadius.lg)),
-          title: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: const BoxDecoration(
-                  gradient: AppColors.buttonGradient,
-                  shape: BoxShape.circle,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(26),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(22, 24, 22, 16),
+                decoration: BoxDecoration(
+                  color: AppColors.kmSurface.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(26),
+                  border: Border.all(color: AppColors.kmGlassBorder),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.45),
+                        blurRadius: 30,
+                        offset: const Offset(0, 14)),
+                  ],
                 ),
-                alignment: Alignment.center,
-                child: const Icon(Icons.system_update_rounded,
-                    color: Colors.white, size: 22),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                  child: Text(S.updateAvailableTitle,
-                      style: const TextStyle(fontSize: 17))),
-            ],
-          ),
-          // असीमित लामो release notes (वा अन्य malformed पाठ) ले यो
-          // dialog लाई screen भन्दा अग्लो बनाई layout नै तोड्न नपाओस्
-          // भनेर — bounded height भित्रै, चाहिए scroll हुने गरी।
-          content: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(dialogContext).size.height * 0.6,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(S.updateAvailableBody(versionName)),
-                  if (releaseNotes.trim().isNotEmpty) ...[
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: const BoxDecoration(
+                            gradient: AppColors.kmCtaGradient,
+                            shape: BoxShape.circle,
+                          ),
+                          alignment: Alignment.center,
+                          child: const Icon(Icons.system_update_rounded,
+                              color: AppColors.kmInk, size: 22),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                            child: Text(S.updateAvailableTitle,
+                                style: const TextStyle(
+                                    color: AppColors.kmText,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w700))),
+                      ],
+                    ),
                     const SizedBox(height: 12),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppColors.igViolet.withValues(alpha: 0.06),
-                        borderRadius: BorderRadius.circular(AppRadius.md),
+                    // असीमित लामो release notes (वा अन्य malformed पाठ) ले यो
+                    // dialog लाई screen भन्दा अग्लो बनाई layout नै तोड्न नपाओस्
+                    // भनेर — bounded height भित्रै, चाहिए scroll हुने गरी।
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight:
+                            MediaQuery.of(dialogContext).size.height * 0.6,
                       ),
-                      child: Text(releaseNotes,
-                          style: const TextStyle(fontSize: 12.5, height: 1.4)),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(S.updateAvailableBody(versionName),
+                                style:
+                                    const TextStyle(color: AppColors.kmMuted)),
+                            if (releaseNotes.trim().isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.06),
+                                  borderRadius:
+                                      BorderRadius.circular(AppRadius.md),
+                                  border: Border.all(
+                                      color: AppColors.kmGlassBorder),
+                                ),
+                                child: Text(releaseNotes,
+                                    style: const TextStyle(
+                                        color: AppColors.kmText,
+                                        fontSize: 12.5,
+                                        height: 1.4)),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        if (!forceUpdate) ...[
+                          KmDialogAction(
+                            label: S.updateLater,
+                            onPressed: () => Navigator.pop(dialogContext),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: AppColors.kmCtaGradient,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Material(
+                            type: MaterialType.transparency,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(999),
+                              onTap: () {
+                                Navigator.pop(dialogContext);
+                                _downloadAndInstall(context, apkUrl);
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 18, vertical: 10),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.download_rounded,
+                                        size: 18, color: AppColors.kmInk),
+                                    const SizedBox(width: 6),
+                                    Text(S.updateNow,
+                                        style: const TextStyle(
+                                            color: AppColors.kmInk,
+                                            fontWeight: FontWeight.w700)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
-                ],
+                ),
               ),
             ),
           ),
-          actions: [
-            if (!forceUpdate)
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: Text(S.updateLater),
-              ),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.igViolet,
-                  foregroundColor: Colors.white),
-              onPressed: () {
-                Navigator.pop(dialogContext);
-                _downloadAndInstall(context, apkUrl);
-              },
-              icon: const Icon(Icons.download_rounded, size: 18),
-              label: Text(S.updateNow),
-            ),
-          ],
         ),
       ),
     );
@@ -183,25 +252,52 @@ class AppUpdateService {
     showDialog(
       context: context,
       barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.6),
       builder: (_) => PopScope(
         canPop: false,
-        child: AlertDialog(
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(AppRadius.lg)),
-          content: Row(
-            children: [
-              SizedBox(
-                width: 22,
-                height: 22,
-                child: ValueListenableBuilder<double?>(
-                  valueListenable: progress,
-                  builder: (_, p, __) => CircularProgressIndicator(
-                      value: p, strokeWidth: 2.6, color: AppColors.igViolet),
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(26),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+              child: Container(
+                padding: const EdgeInsets.all(22),
+                decoration: BoxDecoration(
+                  color: AppColors.kmSurface.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(26),
+                  border: Border.all(color: AppColors.kmGlassBorder),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.45),
+                        blurRadius: 30,
+                        offset: const Offset(0, 14)),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: ValueListenableBuilder<double?>(
+                        valueListenable: progress,
+                        builder: (_, p, __) => CircularProgressIndicator(
+                            value: p,
+                            strokeWidth: 2.6,
+                            color: AppColors.kmOrange),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                        child: Text(S.downloadingUpdate,
+                            style:
+                                const TextStyle(color: AppColors.kmText))),
+                  ],
                 ),
               ),
-              const SizedBox(width: 16),
-              Expanded(child: Text(S.downloadingUpdate)),
-            ],
+            ),
           ),
         ),
       ),

@@ -1,14 +1,14 @@
 // auth/phone_landing_page.dart
-// inDrive-style landing — logo + welcome + "Confirm" (primary lime) र
-// "Create account / Change account" (secondary)।
+// Sahayatri welcome/landing page — dark glassmorphic aurora थिम, logo +
+// welcome + "Continue with phone" (gradient CTA) मात्र। कुनै छुट्टै "Admin
+// login" लिङ्क/बटन जानाजान यहाँ छैन — Admin पहुँच पूर्ण रूपमा गुप्त छ
+// (हेर्नुहोस् auth/admin_gate_page.dart र phone_input_page.dart::_continue())।
 import 'package:flutter/material.dart';
 
-import '../auth_page.dart';
-import '../config/app_config.dart';
 import '../l10n/strings.dart';
+import '../onboarding/sahayatri_brand.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
-import 'email_auth_page.dart';
+import '../widgets/glass_ui.dart';
 import 'phone_input_page.dart';
 
 class PhoneLandingPage extends StatelessWidget {
@@ -27,103 +27,41 @@ class PhoneLandingPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: AppGradientBackground(
-        child: SafeArea(
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
             child: Column(
               children: [
                 const Spacer(flex: 2),
-                Container(
-                  width: 132,
-                  height: 132,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(30),
-                    boxShadow: [
-                      BoxShadow(
-                          color: AppColors.igPink.withValues(alpha: 0.45),
-                          blurRadius: 40,
-                          spreadRadius: -4),
-                      const BoxShadow(
-                          color: Colors.black38,
-                          blurRadius: 24,
-                          offset: Offset(0, 12)),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    child: Image.asset(
-                      'assets/images/app_logo.png',
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const Icon(
-                          Icons.handyman_rounded,
-                          size: 56,
-                          color: AppColors.igViolet),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 28),
+                const SahayatriLogoMark(size: 116),
+                const SizedBox(height: 24),
+                const SahayatriWordmark(fontSize: 30),
+                const SizedBox(height: 18),
                 Text(S.welcomeTo,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                        shadows: [
-                          Shadow(color: Colors.black38, blurRadius: 12)
-                        ])),
+                        color: AppColors.kmText,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800)),
                 const SizedBox(height: 10),
                 Text(S.welcomeTagline,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.85),
+                    style: const TextStyle(
+                        color: AppColors.kmMuted,
                         fontSize: 13,
                         fontWeight: FontWeight.w500)),
                 const Spacer(flex: 3),
-                // Email/Password नै primary (टेस्टिङमा सबैभन्दा भरपर्दो) —
-                // Phone बटन भने भविष्यको प्रयोगका लागि सधैँ देखिन्छ (secondary,
-                // तल)। बटन थिचेपछिको वास्तविक व्यवहार (test-mode बनाम साँचो
-                // SMS) `kUseRealPhoneSms` ले नियन्त्रण गर्छ — phone_input_page.dart
-                // हेर्नुहोस्।
-                PrimaryButton(
-                  label: S.continueWithEmail,
-                  icon: Icons.mail_outline_rounded,
-                  onPressed: () => _go(context, const EmailAuthPage()),
-                ),
-                if (kEnablePhoneAuth) ...[
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () => _go(context, const PhoneInputPage()),
-                      icon: const Icon(Icons.phone_iphone_rounded,
-                          color: Colors.white),
-                      label: Text(S.continueWithPhone,
-                          style: const TextStyle(color: Colors.white)),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.white70),
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.pill)),
-                      ),
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 6),
-                TextButton(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const AuthPage()),
-                  ),
-                  child: Text(
-                    S.isNepali ? 'एडमिन लगइन' : 'Admin login',
-                    style: const TextStyle(color: Colors.white70),
-                  ),
+                // फोन नम्बर (OTP) मात्र — साधारण user को खाता बनाउने/लगइन
+                // गर्ने एकमात्र बाटो। बटन थिचेपछिको वास्तविक व्यवहार
+                // (test-mode बनाम साँचो SMS) `kUseRealPhoneSms` ले नियन्त्रण
+                // गर्छ — phone_input_page.dart हेर्नुहोस्।
+                KmCtaButton(
+                  label: S.continueWithPhone,
+                  icon: Icons.phone_iphone_rounded,
+                  onPressed: () => _go(context, const PhoneInputPage()),
                 ),
               ],
             ),

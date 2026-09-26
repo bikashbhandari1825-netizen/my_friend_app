@@ -70,7 +70,16 @@ Future<void> devTestSignIn(String phone) async {
 
 /// पुरानो uid को profile नयाँ session uid मा सार्ने।
 /// rules ले `users`/`providers` (आफ्नै doc) र `registeredWorkers` (uid == self)
-/// लेख्न दिन्छ। job-history (`serviceRequests`) real phone-auth बिना सर्दैन।
+/// लेख्न दिन्छ। job-history (`serviceRequests`) real phone-auth बिना सर्दैन
+/// — त्यसको participant जाँच (`firestore.rules`/`storage.rules` दुवैमा)
+/// resource कै हालको `employerUid`/`workerUid` उमेर्नेलाई मात्र लेख्न दिन्छ,
+/// नयाँ uid ले त्यो सर्त कहिल्यै पूरा गर्दैन (चिकन-एग: पुरानो uid बाहेक
+/// कसैले पनि त्यो field आफैं बदल्न पाउँदैन) — client-side बाट सुरक्षित
+/// रूपमा सम्भव छैन, admin-privileged Cloud Function मात्र यो गर्न सक्छ। यसैले
+/// test-mode मा फेरि उही नम्बरले login गरेपछि अघिल्लो (अझै active) काम/chat मा
+/// फोटो/भिडियो/कल गर्दा [permission-denied] देखिन सक्छ — यो एउटा ज्ञात, केवल
+/// test-harness-सम्बन्धी सीमा हो (साँचो phone auth मा uid कहिल्यै बदलिँदैन,
+/// त्यहाँ यो केस आउँदैन)।
 Future<void> _migrateIdentity(
     String oldUid, String newUid, String phone) async {
   final db = FirebaseFirestore.instance;

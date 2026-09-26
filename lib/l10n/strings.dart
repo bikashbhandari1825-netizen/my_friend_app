@@ -111,6 +111,56 @@ class S {
   static String get employerRegTitle => _t('employer_reg_title');
   static String get workerRegTitle => _t('worker_reg_title');
   static String get regWorkerNote => _t('reg_worker_note');
+  static String get driverRegTitle => _t('driver_reg_title');
+  static String get regDriverNote => _t('reg_driver_note');
+  // ── Driver 7-step wizard ─────────────────────────────────
+  static String stepOf(int step, int total) =>
+      isNepali ? 'चरण $step / $total' : 'Step $step of $total';
+  static String get stepCityConfirm => _t('step_city_confirm');
+  static String get stepPersonalInfo => _t('step_personal_info');
+  static String get stepVehicleCategory => _t('step_vehicle_category');
+  static String get stepLicenseDetails => _t('step_license_details');
+  static String get stepVehicleDocuments => _t('step_vehicle_documents');
+  static String get stepIdentityVerification =>
+      _t('step_identity_verification');
+  static String get stepFinalReview => _t('step_final_review');
+  static String get cityConfirmTitle => _t('city_confirm_title');
+  static String get cityConfirmHint => _t('city_confirm_hint');
+  static String get profilePictureLabel => _t('profile_picture_label');
+  static String get profilePictureHint => _t('profile_picture_hint');
+  static String get surnameLabel => _t('surname_label');
+  static String get vehicleCategoryHint => _t('vehicle_category_hint');
+  static String get agreeTermsLabel => _t('agree_terms_label');
+  static String get agreeTermsRequiredError =>
+      _t('agree_terms_required_error');
+  static String get reviewPersonalSection => _t('review_personal_section');
+  static String get reviewVehicleSection => _t('review_vehicle_section');
+  static String get reviewLicenseSection => _t('review_license_section');
+  static String get reviewDocsSection => _t('review_docs_section');
+  static String get editWord => _t('edit_word');
+  // ── Driver Control Dashboard ─────────────────────────────
+  static String get driverDashboardTitle => _t('driver_dashboard_title');
+  static String get offlineWord => _t('offline_word');
+  static String get goOnlineHint => _t('go_online_hint');
+  static String get goOfflineHint => _t('go_offline_hint');
+  static String get activeRidesSection => _t('active_rides_section');
+  static String get noActiveRides => _t('no_active_rides');
+  static String get manageRides => _t('manage_rides');
+  static String get recentHistorySection => _t('recent_history_section');
+  static String get noRideHistory => _t('no_ride_history');
+  static String get viewFullHistory => _t('view_full_history');
+  static String get earningsSummarySection => _t('earnings_summary_section');
+  static String get thisWeekLabel => _t('this_week_label');
+  static String get viewFullEarnings => _t('view_full_earnings');
+  static String get documentStatusSection => _t('document_status_section');
+  static String get verificationStatusLabel =>
+      _t('verification_status_label');
+  static String get statusPending => _t('status_pending');
+  static String get statusApproved => _t('status_approved');
+  static String get statusRejected => _t('status_rejected');
+  static String get updateDocuments => _t('update_documents');
+  static String get licenseExpiringSoon => _t('license_expiring_soon');
+  static String get licenseExpiredBanner => _t('license_expired_banner');
   static String get firstName => _t('first_name');
   static String get lastName => _t('last_name');
   static String get phone => _t('phone');
@@ -133,6 +183,73 @@ class S {
       _t('vehicle_registration_label');
   static String get vehicleDocsRequiredHint => _t('vehicle_docs_required_hint');
   static String get uploadDriverDocsError => _t('upload_driver_docs_error');
+  static String get licenseNumberLabel => _t('license_number_label');
+  static String get licenseCategoryLabel => _t('license_category_label');
+  static String get licenseCategoryBike => _t('license_category_bike');
+  static String get licenseCategoryCar => _t('license_category_car');
+  static String get licenseIssueDateLabel => _t('license_issue_date_label');
+  static String get licenseExpiryDateLabel => _t('license_expiry_date_label');
+  static String get selectDateHint => _t('select_date_hint');
+  static String get vehicleMakeLabel => _t('vehicle_make_label');
+  static String get vehicleModelLabel => _t('vehicle_model_label');
+  static String get vehicleYearLabel => _t('vehicle_year_label');
+  static String get vehicleColorLabel => _t('vehicle_color_label');
+  static String get vehiclePlateLabel => _t('vehicle_plate_label');
+  static String get vehicleInsuranceLabel => _t('vehicle_insurance_label');
+  static String get licenseDetailsRequiredError =>
+      _t('license_details_required_error');
+  static String get licenseExpiredError => _t('license_expired_error');
+  static String get vehicleDetailsRequiredError =>
+      _t('vehicle_details_required_error');
+  static String get uploadInsuranceError => _t('upload_insurance_error');
+  static String get dobRequiredError => _t('dob_required_error');
+  static String get stepVehicleDocs => _t('step_vehicle_docs');
+  static String get whereToHint => _t('where_to_hint');
+  static String get confirmPickupCta => _t('confirm_pickup_cta');
+  static String get confirmDestinationCta => _t('confirm_destination_cta');
+  static String get pickupLabel => _t('pickup_label');
+  static String get destinationLabel => _t('destination_label');
+  static String get changeDestination => _t('change_destination');
+  static String get requestRide => _t('request_ride');
+  static String get findOffer => _t('find_offer');
+  static String get autoOffer => _t('auto_offer');
+  static String get offerSentToPassenger => _t('offer_sent_to_passenger');
+  static String get offerNoLongerAvailable => _t('offer_no_longer_available');
+  static String get driverOffersLabel => _t('driver_offers_label');
+  static String get noOffersYet => _t('no_offers_yet');
+  static String get youAlreadySentOffer => _t('you_already_sent_offer');
+  static String get whereToAndHowMuch => _t('where_to_and_how_much');
+  static String get searchDestinationHint => _t('search_destination_hint');
+  static String get enterRouteTitle => _t('enter_route_title');
+  static String get fromLabel => _t('from_label');
+  static String get toLabel => _t('to_label');
+  static String get confirmRouteCta => _t('confirm_route_cta');
+  static String get cancelReasonTitle => _t('cancel_reason_title');
+  static String get cancelReasonChangedMind => _t('cancel_reason_changed_mind');
+  static String get cancelReasonTooLong => _t('cancel_reason_too_long');
+  static String get cancelReasonFoundAnother => _t('cancel_reason_found_another');
+  static String get cancelReasonPriceHigh => _t('cancel_reason_price_high');
+  static String get cancelReasonWrongLocation => _t('cancel_reason_wrong_location');
+  static String get cancelReasonOther => _t('cancel_reason_other');
+  static String get cancelReasonOtherHint => _t('cancel_reason_other_hint');
+  static String get sosButtonLabel => _t('sos_button_label');
+  static String get sosConfirmTitle => _t('sos_confirm_title');
+  static String get sosConfirmBody => _t('sos_confirm_body');
+  static String get sosCallEmergency => _t('sos_call_emergency');
+  static String get sosAlertSent => _t('sos_alert_sent');
+  static String get deviceIntegrityWarningTitle => _t('device_integrity_warning_title');
+  static String get deviceIntegrityWarningBody => _t('device_integrity_warning_body');
+  static String get deviceIntegrityContinueAnyway => _t('device_integrity_continue_anyway');
+  static String get useLiveLocationHint => _t('use_live_location_hint');
+  static String get verifiedRidersBanner => _t('verified_riders_banner');
+  static String get confirmRideTitle => _t('confirm_ride_title');
+  static String get fareOfferLabel => _t('fare_offer_label');
+  static String get noSearchResults => _t('no_search_results');
+  static String get destinationTooCloseError =>
+      _t('destination_too_close_error');
+  static String get findingDrivers => _t('finding_drivers');
+  static String get waitingDriverAccept => _t('waiting_driver_accept');
+  static String get noDriverAccepted => _t('no_driver_accepted');
   static String get experienceLabel => _t('experience_label');
   static String get yearsWord => _t('years_word');
   static String get monthsWord => _t('months_word');
@@ -203,6 +320,13 @@ class S {
   static String get walletIdLabel => _t('wallet_id_label');
   static String get scanToPay => _t('scan_to_pay');
   static String get openWallet => _t('open_wallet');
+  // Employer Payment View — eSewa/Khalti click गर्दा आफ्नै QR देखिनुको सट्टा
+  // "आफ्नै app खोल्ने" वा "QR स्क्यान गर्ने" दुई विकल्प (worker सुरु गर्ने
+  // व्यक्ति भएकोले, employer तिर पैसा तिर्ने/स्क्यान गर्ने पक्ष)।
+  static String get walletAppNotFound => _t('wallet_app_not_found');
+  static String get scannedWalletId => _t('scanned_wallet_id');
+  static String get copyId => _t('copy_id');
+  static String get idCopied => _t('id_copied');
 
   // ── Help / Support / Legal ───────────────────────────────
   static String get serviceStandard => _t('service_standard');
@@ -278,6 +402,10 @@ class S {
   static String get noProviderAccepted => _t('no_provider_accepted');
   static String get cancelRequest => _t('cancel_request');
   static String get requestCancelled => _t('request_cancelled');
+  static String get taskCancelledByAdminTitle =>
+      _t('task_cancelled_by_admin_title');
+  static String get taskCancelledByAdminBody =>
+      _t('task_cancelled_by_admin_body');
   static String get accept => _t('accept_word');
   static String get decline => _t('decline_word');
   static String get newJobNearby => _t('new_job_nearby');
@@ -344,6 +472,8 @@ class S {
   static String get allTrades => _t('all_trades');
   static String get myTrade => _t('my_trade');
   static String kmRadius(int n) => isNepali ? '$n किमी' : '$n km';
+  static String ridesCountShort(int n) =>
+      isNepali ? '$n राइड' : '$n ride${n == 1 ? '' : 's'}';
   static String get enableLocationForDistance =>
       _t('enable_location_for_distance');
 
@@ -465,6 +595,7 @@ class S {
   static String get availableForJobs => _t('available_for_jobs');
   static String get youAreOnline => _t('you_are_online');
   static String get youAreOffline => _t('you_are_offline');
+  static String get noInternetBanner => _t('no_internet_banner');
 
   // ── Post a job / job feed (Phase 1+2) ────────────────────
   static String get postJobTitle => _t('post_job_title');
@@ -504,6 +635,16 @@ class S {
       S.isNepali
           ? '$employerName ले Rs. $amount मा तपाईंको प्रस्ताव स्वीकार गर्नुभयो'
           : '$employerName accepted your offer for Rs. $amount';
+  // Worker profile बाट सिधै एक जना worker लाई पठाइने price offer (broadcast
+  // होइन) — `nearby_common.dart::OfferSheet._send()` ले सन्देश Firestore मा
+  // लेखेपछि यही notification worker लाई पठाउँछ, ताकि app नखोलेको बेला पनि
+  // थाहा पाओस्।
+  static String get directOfferNotifTitle => _t('direct_offer_notif_title');
+  static String directOfferNotifBody(
+          String employerName, String service, num amount) =>
+      S.isNepali
+          ? '$employerName ले ${S.serviceName(service)} का लागि Rs. $amount प्रस्ताव गर्नुभयो'
+          : '$employerName offered Rs. $amount for ${S.serviceName(service)}';
   static String get staleOfferError => _t('stale_offer_error');
   static String get openInGoogleMaps => _t('open_in_google_maps');
   static String get routeFallbackWarning => _t('route_fallback_warning');
@@ -513,6 +654,9 @@ class S {
   // राख्न पाउँछ; अर्को accept गर्न खोज्दा यी देखिन्छन्।
   static String get workerBusyWithOtherJob => _t('worker_busy_with_other_job');
   static String get finishCurrentJobFirst => _t('finish_current_job_first');
+  // Rating-Based Monthly Order Quota — worker ले यो महिनाको सीमा
+  // पुर्‍याइसकेको बेला accept/confirm गर्न खोज्दा देखिने।
+  static String get workerQuotaExceeded => _t('worker_quota_exceeded');
 
   // ── In-app auto-update ──────────────────────────────────
   static String get updateAvailableTitle => _t('update_available_title');
@@ -589,6 +733,15 @@ class S {
   static String get chooseFromGallery => _t('choose_from_gallery');
   static String get sendingMedia => _t('sending_media');
   static String get messageTooLong => _t('message_too_long');
+  // Chat media upload असफल हुँदा — raw Firebase error code (जस्तै
+  // "permission-denied") सिधै देखाउनुको सट्टा प्रस्ट, कारण-अनुसार फरक सन्देश।
+  // हेर्नुहोस् `chat_media_service.dart::friendlyUploadError`।
+  static String get uploadErrorPermission => _t('upload_error_permission');
+  static String get uploadErrorNetwork => _t('upload_error_network');
+  static String get uploadErrorStorageNotSetup =>
+      _t('upload_error_storage_not_setup');
+  static String get uploadErrorGeneric => _t('upload_error_generic');
+  static String get mediaPermissionNeeded => _t('media_permission_needed');
   static String get locationTrackingNotifTitle =>
       _t('location_tracking_notif_title');
   static String get locationTrackingNotifBody =>
@@ -636,6 +789,13 @@ class S {
   static String get onArrivalButton => _t('on_arrival_button');
   static String get getCloserToArrive => _t('get_closer_to_arrive');
   static String get arrivedJobInProgress => _t('arrived_job_in_progress');
+  static String get enterRideCodeTitle => _t('enter_ride_code_title');
+  static String get enterRideCodeHint => _t('enter_ride_code_hint');
+  static String get startRideCta => _t('start_ride_cta');
+  static String get rideCodeTooShort => _t('ride_code_too_short');
+  static String get rideCodeMismatch => _t('ride_code_mismatch');
+  static String get rideStartedInProgress => _t('ride_started_in_progress');
+  static String get shareCodeWithDriver => _t('share_code_with_driver');
   static String get workerArrivedNotifTitle => _t('worker_arrived_notif_title');
   static String get workerArrivedNotifBody => _t('worker_arrived_notif_body');
 
@@ -664,6 +824,7 @@ class S {
   static String get phoneInputSub => _t('phone_input_sub');
   static String get phoneNumberLabel => _t('phone_number_label');
   static String get countryCode => _t('country_code');
+  static String get searchCountryHint => _t('search_country_hint');
   static String get continueWord => _t('continue_word');
   static String get otpTitle => _t('otp_title');
   static String otpSentTo(String phone) =>
@@ -673,6 +834,7 @@ class S {
   static String get resendCode => _t('resend_code');
   static String get wrongNumber => _t('wrong_number');
   static String get enterValidPhone => _t('enter_valid_phone');
+  static String get phoneRequestTimedOut => _t('phone_request_timed_out');
   static String get enterOtp => _t('enter_otp');
   static String get otpFailed => _t('otp_failed');
   static String get phoneAuthNotEnabled => _t('phone_auth_not_enabled');
@@ -687,6 +849,9 @@ class S {
   static String get toLogin => _t('to_login');
   static String get orWord => _t('or_word');
   static String get signInWithGoogle => _t('sign_in_google');
+  static String get adminGateTitle => _t('admin_gate_title');
+  static String get adminGateSubtitle => _t('admin_gate_subtitle');
+  static String get adminGateDenied => _t('admin_gate_denied');
 
   // ─────────────────────────────────────────────────────────
   static const Map<String, Map<String, String>> _values = {
@@ -738,12 +903,12 @@ class S {
       'ne': 'कहाँ र कति मूल्यमा?'
     },
     'region_available': {
-      'en': 'KaamMitra is available in your area',
-      'ne': 'तपाईंको क्षेत्रमा KaamMitra उपलब्ध छ'
+      'en': 'Sahayatri is available in your area',
+      'ne': 'तपाईंको क्षेत्रमा सहयात्री उपलब्ध छ'
     },
     'region_unavailable': {
-      'en': "KaamMitra isn't in your region yet — we're expanding soon",
-      'ne': 'तपाईंको क्षेत्रमा KaamMitra अझै छैन — चाँडै विस्तार हुँदैछ'
+      'en': "Sahayatri isn't in your region yet — we're expanding soon",
+      'ne': 'तपाईंको क्षेत्रमा सहयात्री अझै छैन — चाँडै विस्तार हुँदैछ'
     },
     'location_off_title': {
       'en': 'Turn on your location',
@@ -770,7 +935,7 @@ class S {
     'my_reviews': {'en': 'My Reviews', 'ne': 'मेरा समीक्षा'},
     'payment_methods': {'en': 'Payment Methods', 'ne': 'भुक्तानी विधि'},
     'help_support': {'en': 'Help & Support', 'ne': 'सहायता'},
-    'about_app': {'en': 'About KaamMitra', 'ne': 'KaamMitra बारे'},
+    'about_app': {'en': 'About Sahayatri', 'ne': 'सहयात्री बारे'},
     'settings': {'en': 'Settings', 'ne': 'सेटिङ'},
     'appearance': {'en': 'Appearance', 'ne': 'रूप'},
     'theme_light': {'en': 'Light', 'ne': 'उज्यालो'},
@@ -801,6 +966,126 @@ class S {
     'reg_worker_note': {
       'en': 'Your profile goes live after admin approval.',
       'ne': 'Admin ले स्वीकृत गरेपछि तपाईंको प्रोफाइल live हुन्छ।'
+    },
+    'driver_reg_title': {'en': 'Driver registration', 'ne': 'ड्राइभर दर्ता'},
+    'reg_driver_note': {
+      'en':
+          'Enter your license, vehicle and experience details. Your profile goes live after admin approval.',
+      'ne':
+          'तपाईंको लाइसेन्स, सवारी साधन र अनुभवको विवरण भर्नुहोस्। Admin ले स्वीकृत गरेपछि तपाईंको प्रोफाइल live हुन्छ।'
+    },
+    'step_city_confirm': {'en': 'City Confirmation', 'ne': 'शहर पुष्टि'},
+    'step_personal_info': {
+      'en': 'Personal Information',
+      'ne': 'व्यक्तिगत जानकारी'
+    },
+    'step_vehicle_category': {
+      'en': 'Vehicle Category',
+      'ne': 'सवारी साधनको प्रकार'
+    },
+    'step_license_details': {
+      'en': 'Driver License Details',
+      'ne': 'चालक अनुमतिपत्र विवरण'
+    },
+    'step_vehicle_documents': {
+      'en': 'Vehicle Documents',
+      'ne': 'सवारी कागजातहरू'
+    },
+    'step_identity_verification': {
+      'en': 'Identity Verification',
+      'ne': 'परिचय प्रमाणीकरण'
+    },
+    'step_final_review': {
+      'en': 'Final Review & Submit',
+      'ne': 'अन्तिम समीक्षा र पेश'
+    },
+    'city_confirm_title': {
+      'en': 'Confirm your operating city',
+      'ne': 'तपाईं काम गर्ने शहर पुष्टि गर्नुहोस्'
+    },
+    'city_confirm_hint': {
+      'en': 'This helps us match you with nearby ride requests.',
+      'ne': 'यसले नजिकैका राइड अनुरोधसँग तपाईंलाई मिलाउन मद्दत गर्छ।'
+    },
+    'profile_picture_label': {'en': 'Profile Picture', 'ne': 'प्रोफाइल फोटो'},
+    'profile_picture_hint': {
+      'en': 'A clear photo of your face helps passengers recognize you.',
+      'ne': 'तपाईंको अनुहार स्पष्ट देखिने फोटोले यात्रुलाई चिन्न सजिलो बनाउँछ।'
+    },
+    'surname_label': {'en': 'Surname', 'ne': 'थर'},
+    'vehicle_category_hint': {
+      'en': 'Choose the vehicle you will drive with.',
+      'ne': 'तपाईंले चलाउने सवारी साधन छान्नुहोस्।'
+    },
+    'agree_terms_label': {
+      'en': 'I agree to the Terms & Conditions and Privacy Policy',
+      'ne': 'म सर्तहरू र गोपनीयता नीति स्वीकार गर्छु'
+    },
+    'agree_terms_required_error': {
+      'en': 'Please agree to the Terms & Conditions to continue',
+      'ne': 'अगाडि बढ्न कृपया सर्तहरू स्वीकार गर्नुहोस्'
+    },
+    'review_personal_section': {
+      'en': 'Personal Information',
+      'ne': 'व्यक्तिगत जानकारी'
+    },
+    'review_vehicle_section': {'en': 'Vehicle', 'ne': 'सवारी साधन'},
+    'review_license_section': {'en': 'License', 'ne': 'अनुमतिपत्र'},
+    'review_docs_section': {'en': 'Documents', 'ne': 'कागजातहरू'},
+    'edit_word': {'en': 'Edit', 'ne': 'सम्पादन'},
+    'driver_dashboard_title': {
+      'en': 'Driver Dashboard',
+      'ne': 'ड्राइभर ड्यासबोर्ड'
+    },
+    'offline_word': {'en': 'Offline', 'ne': 'अफलाइन'},
+    'go_online_hint': {
+      'en': 'You are online and can receive ride requests',
+      'ne': 'तपाईं अनलाइन हुनुहुन्छ, राइड अनुरोध पाउनुहुनेछ'
+    },
+    'go_offline_hint': {
+      'en': "You're offline — turn online to start receiving rides",
+      'ne': 'तपाईं अफलाइन हुनुहुन्छ — राइड पाउन अनलाइन बन्नुहोस्'
+    },
+    'active_rides_section': {'en': 'Active Rides', 'ne': 'चालु राइडहरू'},
+    'no_active_rides': {
+      'en': 'No active rides right now',
+      'ne': 'अहिले कुनै चालु राइड छैन'
+    },
+    'manage_rides': {'en': 'Manage Rides', 'ne': 'राइड व्यवस्थापन'},
+    'recent_history_section': {'en': 'Recent History', 'ne': 'हालैको इतिहास'},
+    'no_ride_history': {
+      'en': 'No completed rides yet',
+      'ne': 'अझै कुनै राइड पूरा भएको छैन'
+    },
+    'view_full_history': {'en': 'View Full History', 'ne': 'पूरा इतिहास हेर्नुहोस्'},
+    'earnings_summary_section': {
+      'en': 'Earnings & Payouts',
+      'ne': 'कमाइ र भुक्तानी'
+    },
+    'this_week_label': {'en': 'This week', 'ne': 'यो हप्ता'},
+    'view_full_earnings': {
+      'en': 'View Full Earnings',
+      'ne': 'पूरा कमाइ हेर्नुहोस्'
+    },
+    'document_status_section': {
+      'en': 'Profile & Document Status',
+      'ne': 'प्रोफाइल र कागजात स्थिति'
+    },
+    'verification_status_label': {
+      'en': 'Verification Status',
+      'ne': 'प्रमाणीकरण स्थिति'
+    },
+    'status_pending': {'en': 'Pending', 'ne': 'पेन्डिङ'},
+    'status_approved': {'en': 'Approved', 'ne': 'स्वीकृत'},
+    'status_rejected': {'en': 'Rejected', 'ne': 'अस्वीकृत'},
+    'update_documents': {'en': 'Update Documents', 'ne': 'कागजात अपडेट गर्नुहोस्'},
+    'license_expiring_soon': {
+      'en': 'Your license expires soon — please renew it',
+      'ne': 'तपाईंको लाइसेन्सको म्याद चाँडै सकिन्छ — नवीकरण गर्नुहोस्'
+    },
+    'license_expired_banner': {
+      'en': 'Your license has expired',
+      'ne': 'तपाईंको लाइसेन्सको म्याद सकिएको छ'
     },
     'first_name': {'en': 'First name', 'ne': 'नाम'},
     'last_name': {'en': 'Last name', 'ne': 'थर'},
@@ -922,6 +1207,197 @@ class S {
       'en': 'e.g. Bajaj Pulsar — Ba 12 Pa 3456',
       'ne': 'जस्तै: Bajaj Pulsar — बा १२ प ३४५६'
     },
+    'license_number_label': {
+      'en': 'License number',
+      'ne': 'लाइसेन्स नम्बर'
+    },
+    'license_category_label': {
+      'en': 'License category',
+      'ne': 'लाइसेन्स श्रेणी'
+    },
+    'license_category_bike': {
+      'en': 'A — Motorcycle/Scooter',
+      'ne': 'A — मोटरसाइकल/स्कुटर'
+    },
+    'license_category_car': {
+      'en': 'B — Car/Jeep/Van',
+      'ne': 'B — कार/जिप/भ्यान'
+    },
+    'license_issue_date_label': {
+      'en': 'License issue date',
+      'ne': 'लाइसेन्स जारी मिति'
+    },
+    'license_expiry_date_label': {
+      'en': 'License expiry date',
+      'ne': 'लाइसेन्स म्याद सकिने मिति'
+    },
+    'select_date_hint': {'en': 'Select date', 'ne': 'मिति छान्नुहोस्'},
+    'vehicle_make_label': {'en': 'Vehicle make', 'ne': 'सवारीको ब्रान्ड'},
+    'vehicle_model_label': {'en': 'Vehicle model', 'ne': 'सवारीको मोडल'},
+    'vehicle_year_label': {'en': 'Vehicle year', 'ne': 'सवारीको साल'},
+    'vehicle_color_label': {'en': 'Vehicle color', 'ne': 'सवारीको रङ'},
+    'vehicle_plate_label': {'en': 'Number plate', 'ne': 'नम्बर प्लेट'},
+    'vehicle_insurance_label': {
+      'en': 'Vehicle insurance document',
+      'ne': 'सवारी बिमा कागजात'
+    },
+    'license_details_required_error': {
+      'en': 'Please fill all license details',
+      'ne': 'कृपया लाइसेन्सका सबै विवरण भर्नुहोस्'
+    },
+    'license_expired_error': {
+      'en': 'License expiry date must be in the future',
+      'ne': 'लाइसेन्सको म्याद सकिने मिति भविष्यमा हुनुपर्छ'
+    },
+    'vehicle_details_required_error': {
+      'en': 'Please fill all vehicle details',
+      'ne': 'कृपया सवारीका सबै विवरण भर्नुहोस्'
+    },
+    'upload_insurance_error': {
+      'en': 'Please upload the vehicle insurance document',
+      'ne': 'कृपया सवारी बिमा कागजात अपलोड गर्नुहोस्'
+    },
+    'dob_required_error': {
+      'en': 'Please select date of birth',
+      'ne': 'कृपया जन्म मिति छान्नुहोस्'
+    },
+    'step_vehicle_docs': {'en': 'Vehicle & Docs', 'ne': 'सवारी र कागजात'},
+    'where_to_hint': {
+      'en': 'Move the map to set your drop-off point',
+      'ne': 'गन्तव्य राख्न नक्सा सार्नुहोस्'
+    },
+    'confirm_pickup_cta': {
+      'en': 'Confirm pickup · Where to?',
+      'ne': 'Pickup पुष्टि गर्नुहोस् · कहाँ जाने?'
+    },
+    'confirm_destination_cta': {
+      'en': 'Confirm destination',
+      'ne': 'गन्तव्य पुष्टि गर्नुहोस्'
+    },
+    'pickup_label': {'en': 'Pickup', 'ne': 'Pickup'},
+    'destination_label': {'en': 'Drop-off', 'ne': 'गन्तव्य'},
+    'change_destination': {'en': 'Change', 'ne': 'बदलनुहोस्'},
+    'request_ride': {'en': 'Request ride', 'ne': 'राइड माग्नुहोस्'},
+    'find_offer': {'en': 'Find Offer', 'ne': 'Offer खोज्नुहोस्'},
+    'auto_offer': {'en': 'Auto-Offer', 'ne': 'Auto-Offer'},
+    'offer_sent_to_passenger': {
+      'en': 'Your offer has been sent to the passenger',
+      'ne': 'तपाईंको प्रस्ताव यात्रुलाई पठाइयो'
+    },
+    'offer_no_longer_available': {
+      'en': 'This ride is no longer available',
+      'ne': 'यो राइड अब उपलब्ध छैन'
+    },
+    'driver_offers_label': {'en': 'Driver offers', 'ne': 'चालकका प्रस्तावहरू'},
+    'no_offers_yet': {
+      'en': 'Waiting for driver offers…',
+      'ne': 'चालकका प्रस्ताव पर्खँदै…'
+    },
+    'you_already_sent_offer': {
+      'en': 'You already sent an offer for this ride',
+      'ne': 'यो राइडका लागि तपाईंले पहिल्यै प्रस्ताव पठाइसक्नुभयो'
+    },
+    'where_to_and_how_much': {
+      'en': 'Where to & how much?',
+      'ne': 'कहाँ जाने र कति तिर्ने?'
+    },
+    'search_destination_hint': {
+      'en': 'Search a destination…',
+      'ne': 'गन्तव्य खोज्नुहोस्…'
+    },
+    'enter_route_title': {'en': 'Enter your route', 'ne': 'आफ्नो यात्रा मार्ग हाल्नुहोस्'},
+    'from_label': {'en': 'From', 'ne': 'कहाँबाट'},
+    'to_label': {'en': 'To', 'ne': 'कहाँ'},
+    'confirm_route_cta': {'en': 'Confirm route', 'ne': 'मार्ग पुष्टि गर्नुहोस्'},
+    'cancel_reason_title': {
+      'en': 'Why are you cancelling?',
+      'ne': 'किन रद्द गर्दै हुनुहुन्छ?'
+    },
+    'cancel_reason_changed_mind': {
+      'en': 'Changed my mind',
+      'ne': 'मेरो विचार बदलियो'
+    },
+    'cancel_reason_too_long': {
+      'en': 'Taking too long',
+      'ne': 'धेरै समय लाग्यो'
+    },
+    'cancel_reason_found_another': {
+      'en': 'Found another way',
+      'ne': 'अर्को उपाय भेट्टाएँ'
+    },
+    'cancel_reason_price_high': {
+      'en': 'Price too high',
+      'ne': 'मूल्य धेरै भयो'
+    },
+    'cancel_reason_wrong_location': {
+      'en': 'Wrong pickup/drop location',
+      'ne': 'गलत पिकअप/ड्रप स्थान'
+    },
+    'cancel_reason_other': {'en': 'Other reason', 'ne': 'अन्य कारण'},
+    'cancel_reason_other_hint': {
+      'en': 'Tell us a bit more…',
+      'ne': 'अलि विस्तारमा बताउनुहोस्…'
+    },
+    'sos_button_label': {'en': 'SOS', 'ne': 'एसओएस'},
+    'sos_confirm_title': {'en': 'Emergency SOS', 'ne': 'आपतकालीन SOS'},
+    'sos_confirm_body': {
+      'en':
+          'This will call emergency services and alert Sahyatri support with your live location. Use only in a real emergency.',
+      'ne':
+          'यसले आपतकालीन सेवामा कल गर्नेछ र तपाईंको लाइभ स्थानसहित Sahyatri सहयोग टोलीलाई सचेत गराउनेछ। साँच्चैको आपतकालीन अवस्थामा मात्र प्रयोग गर्नुहोस्।'
+    },
+    'sos_call_emergency': {'en': 'Call emergency now', 'ne': 'अहिल्यै आपतकालीन कल गर्नुहोस्'},
+    'sos_alert_sent': {
+      'en': 'SOS alert sent with your location',
+      'ne': 'तपाईंको स्थानसहित SOS अलर्ट पठाइयो'
+    },
+    'use_live_location_hint': {
+      'en': 'Use my current location',
+      'ne': 'मेरो हालको स्थान प्रयोग गर्नुहोस्',
+    },
+    'device_integrity_warning_title': {
+      'en': 'Unsafe device detected',
+      'ne': 'असुरक्षित डिभाइस फेला पर्‍यो',
+    },
+    'device_integrity_warning_body': {
+      'en':
+          'This device appears to be rooted or jailbroken. Other apps on a rooted device may be able to read your private data or login session. Payments and personal information are safest on a normal, unmodified device.',
+      'ne':
+          'यो डिभाइस root/jailbreak भएको देखियो। यस्तो डिभाइसमा अर्को app ले तपाईंको निजी डेटा वा लगइन सेसन पढ्न सक्ने जोखिम हुन्छ। भुक्तानी र व्यक्तिगत जानकारी सामान्य, अपरिवर्तित डिभाइसमा नै सबैभन्दा सुरक्षित हुन्छ।',
+    },
+    'device_integrity_continue_anyway': {
+      'en': 'I understand, continue anyway',
+      'ne': 'बुझेँ, जारी राख्नुहोस्',
+    },
+    'verified_riders_banner': {
+      'en': 'Verified drivers only — ride safe with Sahyatri',
+      'ne': 'प्रमाणित ड्राइभर मात्र — Sahyatri सँग सुरक्षित यात्रा'
+    },
+    'confirm_ride_title': {
+      'en': 'Confirm your ride',
+      'ne': 'आफ्नो राइड पुष्टि गर्नुहोस्'
+    },
+    'fare_offer_label': {'en': 'Fare offer', 'ne': 'भाडा प्रस्ताव'},
+    'no_search_results': {
+      'en': 'No matching places found',
+      'ne': 'कुनै ठाउँ फेला परेन'
+    },
+    'destination_too_close_error': {
+      'en': 'Please choose a destination different from your pickup point',
+      'ne': 'कृपया pickup भन्दा फरक गन्तव्य छान्नुहोस्'
+    },
+    'finding_drivers': {
+      'en': 'Finding nearby drivers…',
+      'ne': 'नजिकका चालक खोज्दै…'
+    },
+    'waiting_driver_accept': {
+      'en': 'Waiting for a driver to accept your ride',
+      'ne': 'चालकले तपाईंको राइड स्वीकार गर्ने पर्खाइमा'
+    },
+    'no_driver_accepted': {
+      'en': 'No driver accepted your ride yet',
+      'ne': 'कुनै चालकले अझै तपाईंको राइड स्वीकार गरेनन्'
+    },
     'reject_reason_title': {'en': 'Reject — reason', 'ne': 'अस्वीकृत — कारण'},
     'reject_reason_hint': {
       'en': 'e.g. Document is blurry / does not match name',
@@ -974,10 +1450,20 @@ class S {
     'wallet_id_label': {'en': 'Wallet ID / mobile', 'ne': 'Wallet ID / मोबाइल'},
     'scan_to_pay': {'en': 'Scan to pay', 'ne': 'तिर्न scan गर्नुहोस्'},
     'open_wallet': {'en': 'Open wallet', 'ne': 'Wallet खोल्नुहोस्'},
+    'wallet_app_not_found': {
+      'en': "Couldn't open the app — try scanning the QR instead.",
+      'ne': 'App खोल्न सकिएन — यसको सट्टा QR स्क्यान गरी हेर्नुहोस्।'
+    },
+    'scanned_wallet_id': {
+      'en': 'Scanned wallet ID',
+      'ne': 'स्क्यान गरिएको Wallet ID'
+    },
+    'copy_id': {'en': 'Copy ID', 'ne': 'ID कपी गर्नुहोस्'},
+    'id_copied': {'en': 'Copied', 'ne': 'कपी भयो'},
     'service_standard': {'en': 'Service Standard', 'ne': 'सर्भिस स्ट्यान्डर्ड'},
     'service_standard_sub': {
-      'en': "Workers' rights & KaamMitra's commitments",
-      'ne': 'कामदारको हक र KaamMitra का प्रतिबद्धता'
+      'en': "Workers' rights & Sahayatri's commitments",
+      'ne': 'कामदारको हक र सहयात्री का प्रतिबद्धता'
     },
     'worker_no_response': {
       'en': "Worker didn't respond",
@@ -1114,6 +1600,14 @@ class S {
     },
     'cancel_request': {'en': 'Cancel request', 'ne': 'अनुरोध रद्द गर्नुहोस्'},
     'request_cancelled': {'en': 'Request cancelled', 'ne': 'अनुरोध रद्द भयो'},
+    'task_cancelled_by_admin_title': {
+      'en': 'Task cancelled',
+      'ne': 'काम रद्द गरियो',
+    },
+    'task_cancelled_by_admin_body': {
+      'en': 'This task was cancelled by an admin. You\'re free to accept new jobs.',
+      'ne': 'यो काम एडमिनले रद्द गरेको छ। तपाईं अब नयाँ काम स्वीकार गर्न स्वतन्त्र हुनुहुन्छ।',
+    },
     'accept_word': {'en': 'Accept', 'ne': 'स्वीकार गर्नुहोस्'},
     'decline_word': {'en': 'Decline', 'ne': 'अस्वीकार गर्नुहोस्'},
     'new_job_nearby': {'en': 'New job nearby', 'ne': 'नजिकै नयाँ काम'},
@@ -1422,6 +1916,10 @@ class S {
       'en': "You're offline — you won't appear in employer searches",
       'ne': 'तपाईं अफलाइन हुनुहुन्छ — रोजगारदाताको खोजमा देखिनुहुन्न'
     },
+    'no_internet_banner': {
+      'en': 'No internet connection — showing saved data. Will update automatically once back online.',
+      'ne': 'इन्टरनेट जडान छैन — बचत गरिएको डाटा देखाइँदैछ। फेरि जडान भएपछि स्वतः अपडेट हुनेछ।',
+    },
     'post_job_title': {'en': 'Post a job', 'ne': 'काम राख्नुहोस्'},
     'job_description': {
       'en': 'What needs to be done?',
@@ -1495,6 +1993,10 @@ class S {
       'en': 'Your offer was accepted',
       'ne': 'तपाईंको प्रस्ताव स्वीकृत भयो'
     },
+    'direct_offer_notif_title': {
+      'en': 'New price offer',
+      'ne': 'नयाँ मूल्य प्रस्ताव'
+    },
     'stale_offer_error': {
       'en': 'This offer is no longer available — the worker sent a new price.',
       'ne': 'यो प्रस्ताव अब उपलब्ध छैन — कामदारले नयाँ मूल्य पठाइसक्नुभयो।'
@@ -1517,6 +2019,12 @@ class S {
           'You already have an active job. Finish or cancel it before accepting a new one.',
       'ne':
           'तपाईंसँग पहिल्यै एउटा सक्रिय काम छ। नयाँ काम स्वीकार गर्नुअघि त्यो सक्नुहोस् वा रद्द गर्नुहोस्।',
+    },
+    'worker_quota_exceeded': {
+      'en':
+          "You've reached this month's order limit for your rating. It resets next month, or contact support.",
+      'ne':
+          'तपाईंले यो महिना आफ्नो रेटिङ अनुसारको order सीमा पुर्‍याउनुभयो। अर्को महिना फेरि रिसेट हुन्छ, वा सहयोगलाई सम्पर्क गर्नुहोस्।',
     },
     'finish_current_job_first': {
       'en': 'Finish your current job first',
@@ -1718,8 +2226,8 @@ class S {
       'ne': 'तपाईं स्वीकृत हुनुभयो!'
     },
     'approved_celebrate_body': {
-      'en': 'Your KaamMitra worker account is now active — jobs are unlocked.',
-      'ne': 'तपाईंको KaamMitra कामदार खाता अब सक्रिय छ — कामहरू खुल्यो।'
+      'en': 'Your Sahayatri worker account is now active — jobs are unlocked.',
+      'ne': 'तपाईंको सहयात्री कामदार खाता अब सक्रिय छ — कामहरू खुल्यो।'
     },
     'opening_dashboard': {
       'en': 'Opening your dashboard…',
@@ -1745,6 +2253,26 @@ class S {
       'en': 'Video is too large (max 25 MB / 60 sec) — try a shorter clip',
       'ne': 'भिडियो धेरै ठूलो छ (बढीमा 25 MB / 60 सेकेन्ड) — छोटो क्लिप प्रयास गर्नुहोस्'
     },
+    'upload_error_permission': {
+      'en': "Couldn't send — reopen this chat and try again.",
+      'ne': 'पठाउन सकिएन — यो chat फेरि खोलेर प्रयास गर्नुहोस्।',
+    },
+    'upload_error_network': {
+      'en': "Couldn't send — check your internet connection and try again.",
+      'ne': 'पठाउन सकिएन — इन्टरनेट जडान जाँचेर फेरि प्रयास गर्नुहोस्।',
+    },
+    'upload_error_storage_not_setup': {
+      'en': 'Media upload is temporarily unavailable — try again shortly.',
+      'ne': 'फोटो/भिडियो अपलोड अहिले उपलब्ध छैन — केही बेरमा फेरि प्रयास गर्नुहोस्।',
+    },
+    'upload_error_generic': {
+      'en': "Couldn't send — please try again.",
+      'ne': 'पठाउन सकिएन — फेरि प्रयास गर्नुहोस्।',
+    },
+    'media_permission_needed': {
+      'en': 'Camera/Photos permission is required — please allow it in Settings.',
+      'ne': 'क्यामेरा/फोटो अनुमति चाहिन्छ — कृपया Settings मा गएर अनुमति दिनुहोस्।',
+    },
     'record_video': {'en': 'Record video', 'ne': 'भिडियो रेकर्ड गर्नुहोस्'},
     'choose_from_gallery': {
       'en': 'Choose from gallery',
@@ -1756,8 +2284,8 @@ class S {
       'ne': 'सन्देश धेरै लामो छ — छोटो पार्नुहोस्'
     },
     'location_tracking_notif_title': {
-      'en': 'KaamMitra — job in progress',
-      'ne': 'KaamMitra — काम जारी छ'
+      'en': 'Sahayatri — job in progress',
+      'ne': 'सहयात्री — काम जारी छ'
     },
     'location_tracking_notif_body': {
       'en': 'Sharing your live location with the employer for this job',
@@ -1769,9 +2297,9 @@ class S {
     },
     'background_location_rationale_body': {
       'en':
-          'So the employer can keep tracking you even if you lock your screen or switch apps during a job, KaamMitra needs "Allow all the time" location access. You can still change this later in Settings.',
+          'So the employer can keep tracking you even if you lock your screen or switch apps during a job, Sahayatri needs "Allow all the time" location access. You can still change this later in Settings.',
       'ne':
-          'काम गर्दा स्क्रिन लक गरे वा अर्को app मा गए पनि employer ले तपाईंलाई ट्र्याक गर्न सकून् भनेर KaamMitra लाई "सधैँ अनुमति दिनुहोस्" location चाहिन्छ। यो पछि Settings बाट पनि बदल्न सकिन्छ।'
+          'काम गर्दा स्क्रिन लक गरे वा अर्को app मा गए पनि employer ले तपाईंलाई ट्र्याक गर्न सकून् भनेर सहयात्री लाई "सधैँ अनुमति दिनुहोस्" location चाहिन्छ। यो पछि Settings बाट पनि बदल्न सकिन्छ।'
     },
     'allow_word': {'en': 'Allow', 'ne': 'अनुमति दिनुहोस्'},
     'travel_mode_driving': {'en': 'Driving', 'ne': 'गाडी'},
@@ -1841,6 +2369,28 @@ class S {
       'en': 'Arrived — job in progress',
       'ne': 'पुग्नुभयो — काम अगाडि बढ्दैछ',
     },
+    'enter_ride_code_title': {
+      'en': 'Ask the passenger for their ride code',
+      'ne': 'यात्रीसँग राइड कोड सोध्नुहोस्',
+    },
+    'enter_ride_code_hint': {'en': '4-digit code', 'ne': '४-अंकको कोड'},
+    'start_ride_cta': {'en': 'Start ride', 'ne': 'राइड सुरु गर्नुहोस्'},
+    'ride_code_too_short': {
+      'en': 'Enter the full 4-digit code',
+      'ne': 'पूरा ४-अंकको कोड हाल्नुहोस्',
+    },
+    'ride_code_mismatch': {
+      'en': 'Code doesn\'t match — ask the passenger again',
+      'ne': 'कोड मिलेन — यात्रीसँग फेरि सोध्नुहोस्',
+    },
+    'ride_started_in_progress': {
+      'en': 'Ride started — in progress',
+      'ne': 'राइड सुरु भयो — अगाडि बढ्दैछ',
+    },
+    'share_code_with_driver': {
+      'en': 'Share this code with your driver to start the ride',
+      'ne': 'राइड सुरु गर्न यो कोड आफ्नो ड्राइभरलाई दिनुहोस्',
+    },
     'worker_arrived_notif_title': {
       'en': 'Worker has arrived',
       'ne': 'कामदार पुग्नुभयो',
@@ -1872,7 +2422,7 @@ class S {
       'ne': 'कल गर्न क्यामेरा र माइक्रोफोन अनुमति दिनुहोस्।'
     },
     'seen_word': {'en': 'Seen', 'ne': 'हेरियो'},
-    'welcome_to': {'en': 'Welcome to KaamMitra', 'ne': 'KaamMitra मा स्वागत छ'},
+    'welcome_to': {'en': 'Welcome to Sahayatri', 'ne': 'सहयात्रीमा स्वागत छ'},
     'welcome_tagline': {
       'en': 'Trusted local workers, your price.',
       'ne': 'भरपर्दो स्थानीय कामदार, तपाईंकै मूल्यमा।'
@@ -1892,6 +2442,10 @@ class S {
     },
     'phone_number_label': {'en': 'Phone number', 'ne': 'फोन नम्बर'},
     'country_code': {'en': 'Country', 'ne': 'देश'},
+    'search_country_hint': {
+      'en': 'Search country or code',
+      'ne': 'देश वा कोड खोज्नुहोस्',
+    },
     'continue_word': {'en': 'Continue', 'ne': 'अगाडि बढ्नुहोस्'},
     'otp_title': {'en': 'Verify your number', 'ne': 'नम्बर verify गर्नुहोस्'},
     'otp_code_label': {'en': '6-digit code', 'ne': '6-अंकको code'},
@@ -1904,6 +2458,10 @@ class S {
     'enter_valid_phone': {
       'en': 'Enter a valid phone number',
       'ne': 'सही फोन नम्बर लेख्नुहोस्'
+    },
+    'phone_request_timed_out': {
+      'en': 'That took too long — please try again.',
+      'ne': 'धेरै समय लाग्यो — फेरि प्रयास गर्नुहोस्।',
     },
     'enter_otp': {
       'en': 'Enter the 6-digit code',
@@ -1939,6 +2497,15 @@ class S {
     },
     'or_word': {'en': 'OR', 'ne': 'वा'},
     'sign_in_google': {'en': 'Sign in with Google', 'ne': 'Google बाट लगइन'},
+    'admin_gate_title': {'en': 'Admin Access', 'ne': 'एडमिन पहुँच'},
+    'admin_gate_subtitle': {
+      'en': 'Sign in with the authorized admin Google account to continue.',
+      'ne': 'अगाडि बढ्न अधिकृत एडमिन Google खाताबाट साइन इन गर्नुहोस्।',
+    },
+    'admin_gate_denied': {
+      'en': 'This Google account is not authorized for admin access.',
+      'ne': 'यो Google खाता एडमिन पहुँचको लागि अधिकृत छैन।',
+    },
   };
 
   static const Map<String, String> _serviceNe = {

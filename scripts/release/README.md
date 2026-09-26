@@ -3,10 +3,19 @@
 One command that replaces the manual "build APK → upload to Storage → fill
 in the Admin Dashboard form" loop with a single script run.
 
-It bumps `pubspec.yaml`'s build number, runs `flutter build apk --release`,
-uploads the APK to Firebase Storage, and writes `config/appUpdate` in
-Firestore — the same document `services/app_update_service.dart` checks on
-every app launch.
+It bumps `pubspec.yaml`'s build number, runs
+`flutter build apk --release --obfuscate --split-debug-info=...`
+(obfuscated bytecode — much harder to reverse-engineer/decompile), uploads
+the APK to Firebase Storage, and writes `config/appUpdate` in Firestore —
+the same document `services/app_update_service.dart` checks on every app
+launch.
+
+**Debug symbols**: each run saves de-obfuscation symbols to
+`build/debug-info/{versionCode}/`. This folder is required to read crash
+stack traces from that specific release build — it's gitignored (with
+everything under `build/`) and wiped by `flutter clean`, so **back it up
+somewhere safe outside the repo** after every release, keyed by version
+code.
 
 ## One-time setup
 

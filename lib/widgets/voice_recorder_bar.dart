@@ -10,7 +10,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
@@ -18,11 +20,37 @@ import '../theme/app_theme.dart';
 import 'chat_waveform.dart';
 import 'spring_tap.dart';
 
+// ── Web voice-recording ──────────────────────────────────────────────────
+// यो recorder मोबाइलमा (`path_provider` को real temp file + `dart:io` को
+// `File.readAsBytes()`) राम्रोसँग चल्थ्यो, तर Flutter Web मा दुई ठाउँमा
+// पूर्ण रूपमा भाँचिन्थ्यो — त्यसैले "laptop मा voice message नै पठाउन
+// मिल्दैन" गुनासो सधैँ १००% दोहोरिने (कहिलेकाहीं होइन, हरेकपटक) थियो:
+//   (१) `AudioEncoder.aacLc` — Chrome/Edge (Chromium) को `MediaRecorder`
+//       ले AAC/MP4 audio recording नै समर्थन गर्दैन (Safari मात्र गर्छ)।
+//       `record_web` त्यसैले कुनै पनि समर्थित mime-type नभेटेर सिधै
+//       `'aacLc not supported.'` throw गर्थ्यो — recording सुरुै हुनुअघि नै।
+//   (२) भेटिए पनि — `record_web` को `stop()` ले real filesystem path कहिल्यै
+//       फर्काउँदैन, ब्राउजरको `URL.createObjectURL()` बाट बनेको `blob:...`
+//       URL मात्र फर्काउँछ। त्यो `dart:io` को `File(path)` लाई दिँदा (जो
+//       web मा वास्तविक फाइलसिस्टम नै छैन) असफल हुन्थ्यो।
+// समाधान: web मा फरक (व्यापक-समर्थित) encoder — `AudioEncoder.opus`
+// (`audio/webm;codecs=opus`, Chrome/Firefox/Edge सबैले समर्थन गर्छन्) —
+// र bytes `dart:io File` को सट्टा त्यही blob URL लाई सिधै `http.get()` गरेर
+// (ब्राउजरको आफ्नै page-scoped blob, कुनै network/CORS round-trip चाहिँदैन)
+// प्राप्त गर्ने। Mobile/desktop (native) तिर अघिकै (aacLc + real file)
+// व्यवहार ज्यूँकात्यूँ।
+AudioEncoder get _voiceEncoder =>
+    kIsWeb ? AudioEncoder.opus : AudioEncoder.aacLc;
+String get _voiceExt => kIsWeb ? 'webm' : 'm4a';
+
 enum _RecPhase { recording, preview }
 
 class VoiceRecorderBar extends StatefulWidget {
-  /// प्रयोगकर्ताले Send थिचेपछि मात्र call हुने — रेकर्ड गरिएको audio bytes।
-  final ValueChanged<Uint8List> onSend;
+  /// प्रयोगकर्ताले Send थिचेपछि मात्र call हुने — रेकर्ड गरिएको audio bytes +
+  /// त्यसको साँचो extension (मोबाइलमा 'm4a', web मा 'webm' — दुई फरक
+  /// container format हुन् भन्ने caller (chat_screen.dart) लाई थाहा हुनुपर्छ,
+  /// नत्र गलत content-type/extension सहित अपलोड हुन्छ र playback असफल हुन्छ)।
+  final void Function(Uint8List bytes, String ext) onSend;
 
   /// Discard/cancel भयो (recording बेला वा preview बेला) — केही पठाइँदैन।
   final VoidCallback onCancel;
@@ -70,11 +98,18 @@ class _VoiceRecorderBarState extends State<VoiceRecorderBar> {
         widget.onCancel();
         return;
       }
-      final dir = await getTemporaryDirectory();
-      final path =
-          '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      // web मा `path_provider` को कुनै platform implementation नै छैन
+      // (`getTemporaryDirectory()` सिधै throw हुन्छ) — र `record_web` ले
+      // यसलाई वास्तविक फाइलसिस्टम path को रूपमा प्रयोगै गर्दैन, त्यसैले
+      // web मा खाली string नै पठाउने।
+      String path = '';
+      if (!kIsWeb) {
+        final dir = await getTemporaryDirectory();
+        path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}'
+            '.$_voiceExt';
+      }
       await _recorder.start(
-        const RecordConfig(encoder: AudioEncoder.aacLc),
+        RecordConfig(encoder: _voiceEncoder),
         path: path,
       );
       _path = path;
@@ -112,7 +147,13 @@ class _VoiceRecorderBarState extends State<VoiceRecorderBar> {
         widget.onCancel();
         return;
       }
-      final bytes = await File(path).readAsBytes();
+      // web मा `path` वास्तविक फाइल होइन, ब्राउजरको आफ्नै `blob:...` URL हो
+      // (page-scoped, same-origin) — `dart:io` को `File()` ले यसलाई कहिल्यै
+      // पढ्न सक्दैन (web मा साँचो filesystem नै छैन); `http.get()` ले भने
+      // यो blob लाई कुनै network round-trip बिनै सिधै fetch गर्छ।
+      final bytes = kIsWeb
+          ? (await http.get(Uri.parse(path))).bodyBytes
+          : await File(path).readAsBytes();
       if (bytes.lengthInBytes < 500) {
         // धेरै छोटो (गल्तिले tap मात्र) — पठाउनलायक केही छैन।
         widget.onCancel();
@@ -137,9 +178,11 @@ class _VoiceRecorderBarState extends State<VoiceRecorderBar> {
     try {
       if (await _recorder.isRecording()) await _recorder.stop();
     } catch (_) {}
-    try {
-      if (_path != null) await File(_path!).delete();
-    } catch (_) {}
+    if (!kIsWeb) {
+      try {
+        if (_path != null && _path!.isNotEmpty) await File(_path!).delete();
+      } catch (_) {}
+    }
     widget.onCancel();
   }
 
@@ -154,7 +197,7 @@ class _VoiceRecorderBarState extends State<VoiceRecorderBar> {
 
   void _send() {
     if (_bytes == null || _busy) return;
-    widget.onSend(_bytes!);
+    widget.onSend(_bytes!, _voiceExt);
   }
 
   @override

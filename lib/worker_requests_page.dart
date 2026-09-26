@@ -19,6 +19,7 @@ import 'screens/schedule_screen.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_ui.dart';
 import 'widgets/counter_offer_card.dart';
+import 'widgets/glass_ui.dart';
 import 'widgets/status_badge.dart';
 
 class WorkerRequestsPage extends StatefulWidget {
@@ -50,100 +51,112 @@ class _WorkerRequestsPageState extends State<WorkerRequestsPage> {
   Widget build(BuildContext context) {
     final uid = _uid;
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        title: Text(S.jobRequests,
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w800)),
+    return AuroraBackground(
+      orbs: const [
+        KmOrb(Alignment.topRight, AppColors.kmTeal),
+        KmOrb(Alignment.bottomLeft, AppColors.kmPurple),
+      ],
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.buttonGradient),
-        ),
-        actions: [
-          IconButton(
-            tooltip: S.scheduleTitle,
-            icon: const Icon(Icons.calendar_month_rounded),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ScheduleScreen()),
-            ),
-          ),
-          IconButton(
-            tooltip: S.earningsTitle,
-            icon: const Icon(Icons.account_balance_wallet_rounded),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const EarningsScreen()),
-            ),
-          ),
-        ],
-      ),
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppColors.igGradient),
-        child: uid == null
-            ? const Center(
-                child: Text('Login गर्नुहोस्',
-                    style: TextStyle(color: Colors.white)))
-            : SafeArea(
-                child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                  stream: _userStream,
-                  builder: (context, userSnap) {
-                    final myActiveJobId =
-                        (userSnap.data?.data()?['activeJobId'] ?? '')
-                            .toString();
-                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: _stream,
-                      builder: (context, snap) {
-                        if (!snap.hasData) {
-                          return const Center(
-                              child: CircularProgressIndicator(
-                                  color: Colors.white));
-                        }
-                        final docs = (snap.data?.docs ?? []).toList()
-                          ..sort((a, b) {
-                            // ग्राहकले पठाएको live counter-offer सधैँ सबैभन्दा माथि।
-                            final pa =
-                                a.data()['status'] == 'pending_worker_counter'
-                                    ? 0
-                                    : 1;
-                            final pb =
-                                b.data()['status'] == 'pending_worker_counter'
-                                    ? 0
-                                    : 1;
-                            if (pa != pb) return pa - pb;
-                            final ta = a.data()['createdAt'];
-                            final tb = b.data()['createdAt'];
-                            if (ta is Timestamp && tb is Timestamp) {
-                              return tb.compareTo(ta);
-                            }
-                            return 0;
-                          });
-
-                        if (docs.isEmpty) {
-                          return const _EmptyState();
-                        }
-
-                        return ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-                          itemCount: docs.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 12),
-                          itemBuilder: (context, i) => _RequestCard(
-                            key: ValueKey(docs[i].id),
-                            docId: docs[i].id,
-                            data: docs[i].data(),
-                            blockedByOtherActiveJob: myActiveJobId.isNotEmpty &&
-                                myActiveJobId != docs[i].id,
-                          ),
-                        );
-                      },
-                    );
-                  },
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+                child: Row(
+                  children: [
+                    Expanded(child: KmScreenHeader(title: S.jobRequests)),
+                    GlassIconButton(
+                      icon: Icons.calendar_month_rounded,
+                      tooltip: S.scheduleTitle,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const ScheduleScreen()),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    GlassIconButton(
+                      icon: Icons.account_balance_wallet_rounded,
+                      tooltip: S.earningsTitle,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const EarningsScreen()),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
                 ),
               ),
+              Expanded(
+                child: uid == null
+                    ? const Center(
+                        child: Text('Login गर्नुहोस्',
+                            style: TextStyle(color: AppColors.kmText)))
+                    : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                        stream: _userStream,
+                        builder: (context, userSnap) {
+                          final myActiveJobId =
+                              (userSnap.data?.data()?['activeJobId'] ?? '')
+                                  .toString();
+                          return StreamBuilder<
+                              QuerySnapshot<Map<String, dynamic>>>(
+                            stream: _stream,
+                            builder: (context, snap) {
+                              if (!snap.hasData) {
+                                return const Center(
+                                    child: CircularProgressIndicator(
+                                        color: AppColors.kmTeal));
+                              }
+                              final docs = (snap.data?.docs ?? []).toList()
+                                ..sort((a, b) {
+                                  // ग्राहकले पठाएको live counter-offer सधैँ
+                                  // सबैभन्दा माथि।
+                                  final pa = a.data()['status'] ==
+                                          'pending_worker_counter'
+                                      ? 0
+                                      : 1;
+                                  final pb = b.data()['status'] ==
+                                          'pending_worker_counter'
+                                      ? 0
+                                      : 1;
+                                  if (pa != pb) return pa - pb;
+                                  final ta = a.data()['createdAt'];
+                                  final tb = b.data()['createdAt'];
+                                  if (ta is Timestamp && tb is Timestamp) {
+                                    return tb.compareTo(ta);
+                                  }
+                                  return 0;
+                                });
+
+                              if (docs.isEmpty) {
+                                return const _EmptyState();
+                              }
+
+                              return ListView.separated(
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                                itemCount: docs.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 12),
+                                itemBuilder: (context, i) => _RequestCard(
+                                  key: ValueKey(docs[i].id),
+                                  docId: docs[i].id,
+                                  data: docs[i].data(),
+                                  blockedByOtherActiveJob:
+                                      myActiveJobId.isNotEmpty &&
+                                          myActiveJobId != docs[i].id,
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -157,13 +170,13 @@ class _EmptyState extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(Icons.assignment_outlined,
-                size: 60, color: Colors.white70),
+                size: 60, color: AppColors.kmMuted),
             const SizedBox(height: 14),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 40),
               child: Text(S.onlineForJobs,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white)),
+                  style: const TextStyle(color: AppColors.kmText)),
             ),
           ],
         ),
@@ -222,6 +235,8 @@ class _RequestCard extends StatelessWidget {
       // route screen खोल्छ — यहाँबाट छुट्टै नखोल्ने (double-open नहोस् भनेर)।
     } on WorkerBusyException {
       messenger.showSnackBar(SnackBar(content: Text(S.workerBusyWithOtherJob)));
+    } on WorkerQuotaExceededException {
+      messenger.showSnackBar(SnackBar(content: Text(S.workerQuotaExceeded)));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
     }
@@ -242,46 +257,42 @@ class _RequestCard extends StatelessWidget {
 
   Future<void> _counterDialog(BuildContext context, num current) async {
     final controller = TextEditingController(text: current.toString());
-    await showDialog(
+    await showKmDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('नयाँ मूल्य प्रस्ताव गर्नुहोस्'),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(
-            labelText: 'तपाईंको मूल्य (Rs.)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text(S.cancel),
-          ),
-          ElevatedButton(
-            style:
-                ElevatedButton.styleFrom(backgroundColor: AppColors.igViolet),
-            onPressed: () async {
-              final newPrice = num.tryParse(controller.text.trim());
-              if (newPrice == null) return;
-              Navigator.of(dialogContext).pop();
-              await FirebaseFirestore.instance
-                  .collection('serviceRequests')
-                  .doc(docId)
-                  .update({
-                'status': 'pending_employer_approval',
-                'workerCounterPrice': newPrice,
-              });
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('नयाँ मूल्य ग्राहकलाई पठाइयो।')),
-              );
-            },
-            child: const Text('Send', style: TextStyle(color: Colors.white)),
-          ),
-        ],
+      title: 'नयाँ मूल्य प्रस्ताव गर्नुहोस्',
+      icon: Icons.price_change_rounded,
+      content: TextField(
+        controller: controller,
+        keyboardType: TextInputType.number,
+        style: const TextStyle(color: AppColors.kmText),
+        decoration: kmInputDecoration('तपाईंको मूल्य (Rs.)'),
       ),
+      actions: [
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        KmDialogAction(
+          label: 'Send',
+          filled: true,
+          onPressed: () async {
+            final newPrice = num.tryParse(controller.text.trim());
+            if (newPrice == null) return;
+            Navigator.of(context).pop();
+            await FirebaseFirestore.instance
+                .collection('serviceRequests')
+                .doc(docId)
+                .update({
+              'status': 'pending_employer_approval',
+              'workerCounterPrice': newPrice,
+            });
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('नयाँ मूल्य ग्राहकलाई पठाइयो।')),
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -306,6 +317,8 @@ class _RequestCard extends StatelessWidget {
       // route screen खोल्छ — यहाँबाट छुट्टै नखोल्ने (double-open नहोस् भनेर)।
     } on WorkerBusyException {
       messenger.showSnackBar(SnackBar(content: Text(S.workerBusyWithOtherJob)));
+    } on WorkerQuotaExceededException {
+      messenger.showSnackBar(SnackBar(content: Text(S.workerQuotaExceeded)));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
     }
@@ -329,58 +342,53 @@ class _RequestCard extends StatelessWidget {
   /// पठाउँछ, वा काम अस्वीकार गर्छ।
   Future<void> _counterBackToEmployer(BuildContext context, num current) async {
     final controller = TextEditingController(text: current.toString());
-    await showDialog(
+    await showKmDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(S.counterBack),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          autofocus: true,
-          decoration: InputDecoration(
-            labelText: S.yourPriceRs,
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-              _declineFromCounter(context);
-            },
-            child: Text(S.declineJob,
-                style: const TextStyle(color: AppColors.danger)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text(S.cancel),
-          ),
-          ElevatedButton(
-            style:
-                ElevatedButton.styleFrom(backgroundColor: AppColors.igViolet),
-            onPressed: () async {
-              final newPrice = num.tryParse(controller.text.trim());
-              if (newPrice == null) return;
-              Navigator.of(dialogContext).pop();
-              await FirebaseFirestore.instance
-                  .collection('serviceRequests')
-                  .doc(docId)
-                  .update({
-                'status': 'pending_employer_approval',
-                'workerCounterPrice': newPrice,
-                'counterFrom': 'worker',
-                'counteredAt': FieldValue.serverTimestamp(),
-              });
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(S.newPriceSentToCustomer)),
-              );
-            },
-            child: Text(S.sendNewPrice,
-                style: const TextStyle(color: Colors.white)),
-          ),
-        ],
+      title: S.counterBack,
+      icon: Icons.price_change_rounded,
+      content: TextField(
+        controller: controller,
+        keyboardType: TextInputType.number,
+        autofocus: true,
+        style: const TextStyle(color: AppColors.kmText),
+        decoration: kmInputDecoration(S.yourPriceRs),
       ),
+      actions: [
+        KmDialogAction(
+          label: S.declineJob,
+          destructive: true,
+          onPressed: () {
+            Navigator.of(context).pop();
+            _declineFromCounter(context);
+          },
+        ),
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        KmDialogAction(
+          label: S.sendNewPrice,
+          filled: true,
+          onPressed: () async {
+            final newPrice = num.tryParse(controller.text.trim());
+            if (newPrice == null) return;
+            Navigator.of(context).pop();
+            await FirebaseFirestore.instance
+                .collection('serviceRequests')
+                .doc(docId)
+                .update({
+              'status': 'pending_employer_approval',
+              'workerCounterPrice': newPrice,
+              'counterFrom': 'worker',
+              'counteredAt': FieldValue.serverTimestamp(),
+            });
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(S.newPriceSentToCustomer)),
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -413,12 +421,9 @@ class _RequestCard extends StatelessWidget {
       );
     }
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-      ),
+    return GlassPanel(
+      radius: 26,
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -426,13 +431,13 @@ class _RequestCard extends StatelessWidget {
             Row(
               children: [
                 const Icon(Icons.bolt_rounded,
-                    size: 15, color: AppColors.igViolet),
+                    size: 15, color: AppColors.kmOrange),
                 const SizedBox(width: 4),
                 Text(S.activeJobTitle,
                     style: const TextStyle(
                         fontSize: 11.5,
                         fontWeight: FontWeight.w800,
-                        color: AppColors.igViolet)),
+                        color: AppColors.kmOrange)),
               ],
             ),
             const SizedBox(height: 6),
@@ -442,7 +447,9 @@ class _RequestCard extends StatelessWidget {
               Expanded(
                 child: Text('$employer  ·  ${S.serviceName(service)}',
                     style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 15)),
+                        color: AppColors.kmText,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15)),
               ),
               StatusBadge(status: status),
             ],
@@ -453,7 +460,8 @@ class _RequestCard extends StatelessWidget {
           ],
           if (desc.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(desc, style: const TextStyle(fontSize: 13)),
+            Text(desc,
+                style: const TextStyle(color: AppColors.kmMuted, fontSize: 13)),
           ],
           if (address.isNotEmpty) ...[
             const SizedBox(height: 6),
@@ -461,12 +469,12 @@ class _RequestCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Icon(Icons.place_outlined,
-                    size: 14, color: Colors.black45),
+                    size: 14, color: AppColors.kmMuted),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(address,
-                      style:
-                          const TextStyle(fontSize: 12, color: Colors.black54)),
+                      style: const TextStyle(
+                          fontSize: 12, color: AppColors.kmMuted)),
                 ),
               ],
             ),
@@ -481,28 +489,29 @@ class _RequestCard extends StatelessWidget {
               child: Row(
                 children: [
                   const Icon(Icons.call_rounded,
-                      size: 14, color: AppColors.igViolet),
+                      size: 14, color: AppColors.kmOrange),
                   const SizedBox(width: 4),
                   Text((data['employerPhone']).toString().trim(),
                       style: const TextStyle(
                           fontSize: 12.5,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.igViolet)),
+                          color: AppColors.kmOrange)),
                 ],
               ),
             ),
           ],
           const SizedBox(height: 6),
           Text('प्रस्तावित मूल्य: Rs. $price',
-              style: const TextStyle(fontWeight: FontWeight.w700)),
+              style: const TextStyle(
+                  color: AppColors.kmText, fontWeight: FontWeight.w700)),
           if (data['workerCounterPrice'] != null)
             Text('तपाईंको मूल्य: Rs. ${data['workerCounterPrice']}',
                 style: const TextStyle(
-                    color: AppColors.warning, fontWeight: FontWeight.w700)),
+                    color: AppColors.kmOrange, fontWeight: FontWeight.w700)),
           if (data['finalPrice'] != null)
             Text('अन्तिम मूल्य: Rs. ${data['finalPrice']}',
                 style: const TextStyle(
-                    color: AppColors.success, fontWeight: FontWeight.w700)),
+                    color: AppColors.kmTeal, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
@@ -562,7 +571,7 @@ class _RequestCard extends StatelessWidget {
                 ElevatedButton.icon(
                   onPressed: () => _startWork(context),
                   style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF7C3AED),
+                      backgroundColor: AppColors.kmPurple,
                       foregroundColor: Colors.white),
                   icon: const Icon(Icons.play_arrow_rounded, size: 16),
                   label: Text(S.startWork),
@@ -575,20 +584,20 @@ class _RequestCard extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: AppColors.igViolet.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(AppRadius.pill),
+                    color: AppColors.kmOrange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(999),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(Icons.hourglass_top_rounded,
-                          size: 14, color: AppColors.igViolet),
+                          size: 14, color: AppColors.kmOrange),
                       const SizedBox(width: 6),
                       Text(S.waitingEmployerComplete,
                           style: const TextStyle(
                               fontSize: 11.5,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.igViolet)),
+                              color: AppColors.kmOrange)),
                     ],
                   ),
                 ),
@@ -600,20 +609,20 @@ class _RequestCard extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: AppColors.warning.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(AppRadius.pill),
+                    color: AppColors.kmRose.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(999),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(Icons.lock_clock_rounded,
-                          size: 14, color: AppColors.warning),
+                          size: 14, color: AppColors.kmRose),
                       const SizedBox(width: 6),
                       Text(S.finishCurrentJobFirst,
                           style: const TextStyle(
                               fontSize: 11.5,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.warning)),
+                              color: AppColors.kmRose)),
                     ],
                   ),
                 )
@@ -621,15 +630,15 @@ class _RequestCard extends StatelessWidget {
                 OutlinedButton(
                   onPressed: () => _counterDialog(context, price),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.igViolet,
-                    side: const BorderSide(color: AppColors.igViolet),
+                    foregroundColor: AppColors.kmOrange,
+                    side: const BorderSide(color: AppColors.kmOrange),
                   ),
                   child: Text(S.offerPrice),
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                      foregroundColor: Colors.white),
+                      backgroundColor: AppColors.kmTeal,
+                      foregroundColor: AppColors.kmInk),
                   onPressed: () => _acceptAtListedPrice(context, price),
                   child: Text(S.accept),
                 ),

@@ -10,7 +10,7 @@ import 'package:http/http.dart' as http;
 import 'l10n/strings.dart';
 import 'location_util.dart';
 import 'theme/app_theme.dart';
-import 'widgets/app_ui.dart';
+import 'widgets/glass_ui.dart';
 
 class PickedPlace {
   final String label;
@@ -144,10 +144,16 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
-      appBar: AppBar(title: Text(S.pickOnMap)),
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        foregroundColor: AppColors.kmText,
+        title: Text(S.pickOnMap,
+            style: const TextStyle(
+                color: AppColors.kmText, fontWeight: FontWeight.w700)),
+      ),
       body: Stack(
         alignment: Alignment.center,
         children: [
@@ -168,25 +174,21 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
           // center pin (bottom tip at center)
           const Padding(
             padding: EdgeInsets.only(bottom: 40),
-            child: Icon(Icons.location_pin, size: 46, color: AppColors.danger),
+            child: Icon(Icons.location_pin, size: 46, color: AppColors.kmRose),
           ),
 
           // address bar (top)
           Positioned(
-            top: 12,
+            top: 12 + kToolbarHeight + 24,
             left: 16,
             right: 16,
-            child: Container(
+            child: GlassPanel(
+              radius: AppRadius.md,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                borderRadius: BorderRadius.circular(AppRadius.md),
-                border: Border.all(color: theme.dividerColor),
-              ),
               child: Row(
                 children: [
                   const Icon(Icons.place_outlined,
-                      size: 18, color: AppColors.igViolet),
+                      size: 18, color: AppColors.kmOrange),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -197,7 +199,8 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                               : _addrCtrl.text),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall,
+                      style: const TextStyle(
+                          color: AppColors.kmMuted, fontSize: 12.5),
                     ),
                   ),
                 ],
@@ -210,13 +213,8 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
             left: 0,
             right: 0,
             bottom: 0,
-            child: Container(
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(AppRadius.lg)),
-                border: Border.all(color: theme.dividerColor),
-              ),
+            child: GlassPanel2(
+              radius: AppRadius.lg,
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
               child: SafeArea(
                 top: false,
@@ -225,7 +223,8 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                   children: [
                     TextField(
                       controller: _labelCtrl,
-                      decoration: InputDecoration(labelText: S.placeLabel),
+                      style: const TextStyle(color: AppColors.kmText),
+                      decoration: kmInputDecoration(S.placeLabel),
                     ),
                     const SizedBox(height: 10),
                     TextField(
@@ -233,9 +232,9 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                       onChanged: (_) => _addrEdited = true,
                       maxLines: 2,
                       minLines: 1,
-                      decoration: InputDecoration(
-                        labelText: S.jobAddressLabel,
-                        prefixIcon: const Icon(Icons.place_outlined),
+                      style: const TextStyle(color: AppColors.kmText),
+                      decoration: kmInputDecoration(
+                        S.jobAddressLabel,
                         suffixIcon: _loadingAddr
                             ? const Padding(
                                 padding: EdgeInsets.all(12),
@@ -243,24 +242,37 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                                     width: 16,
                                     height: 16,
                                     child: CircularProgressIndicator(
-                                        strokeWidth: 2)),
+                                        strokeWidth: 2,
+                                        color: AppColors.kmOrange)),
                               )
-                            : null,
+                            : const Icon(Icons.place_outlined,
+                                color: AppColors.kmMuted),
                       ),
                     ),
                     const SizedBox(height: 12),
                     Row(
                       children: [
                         Expanded(
-                          child: SecondaryButton(
-                            label: S.useMyLocation,
-                            icon: Icons.my_location_rounded,
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.kmText,
+                              side:
+                                  BorderSide(color: AppColors.kmGlassBorder),
+                              padding: const EdgeInsets.symmetric(
+                                  vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius:
+                                      BorderRadius.circular(999)),
+                            ),
                             onPressed: _useCurrentLocation,
+                            icon: const Icon(Icons.my_location_rounded,
+                                size: 18),
+                            label: Text(S.useMyLocation),
                           ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
-                          child: PrimaryButton(
+                          child: KmCtaButton(
                             label: S.confirmLocation,
                             icon: Icons.check_rounded,
                             onPressed: _confirm,

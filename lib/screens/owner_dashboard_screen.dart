@@ -4,9 +4,13 @@
 //   Reports  → user ले पठाएका report मात्र
 //   Support  → user ले पठाएका help/सुझाव message मात्र
 //   Users    → app का सबै user को list + status
+import 'dart:async' show unawaited;
+import 'dart:ui' show ImageFilter;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -16,7 +20,14 @@ import '../config/app_config.dart';
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/glass_ui.dart';
 import '../widgets/status_badge.dart';
+import 'help_content_editor_screen.dart';
+import 'job_actions.dart'
+    show
+        currentQuotaMonthKey,
+        monthlyOrderQuotaForRating,
+        releaseWorkerActiveJob;
 
 String _fmtTime(dynamic ts) {
   if (ts is Timestamp) {
@@ -24,6 +35,26 @@ String _fmtTime(dynamic ts) {
     return '${d.day}/${d.month}/${d.year}  ${d.hour}:${d.minute.toString().padLeft(2, '0')}';
   }
   return '';
+}
+
+/// Gradient circle icon badge — admin card हरूको हेडरमा (नयाँ dark-glass डिजाइन)।
+class _KmIconBadge extends StatelessWidget {
+  final IconData icon;
+  final double size;
+  const _KmIconBadge(this.icon, {this.size = 44});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: const BoxDecoration(
+        gradient: AppColors.kmCtaGradient,
+        shape: BoxShape.circle,
+      ),
+      child: Icon(icon, color: AppColors.kmInk, size: size * 0.5),
+    );
+  }
 }
 
 /// साना रातो delete icon — admin card को header मा।
@@ -39,7 +70,7 @@ class _DeleteBtn extends StatelessWidget {
       constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
       tooltip: S.delete,
       icon: const Icon(Icons.delete_outline_rounded,
-          size: 20, color: AppColors.danger),
+          size: 20, color: AppColors.kmRose),
       onPressed: onTap,
     );
   }
@@ -109,24 +140,23 @@ class _AdminSelectableListState extends State<_AdminSelectableList> {
       widget.selectable?.call(id, d) ?? true;
 
   Future<bool> _confirm(String body, String actionLabel) async {
-    return await showDialog<bool>(
+    return await showKmDialog<bool>(
           context: context,
-          builder: (ctx) => AlertDialog(
-            title: Text(S.deleteConfirmTitle),
-            content: Text(body),
-            actions: [
-              TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(S.cancel)),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.danger,
-                    foregroundColor: Colors.white),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: Text(actionLabel),
-              ),
-            ],
-          ),
+          title: S.deleteConfirmTitle,
+          message: body,
+          icon: Icons.delete_forever_rounded,
+          iconBg: const LinearGradient(
+              colors: [AppColors.kmRose, AppColors.kmPinkDeep]),
+          actions: [
+            KmDialogAction(
+                label: S.cancel, onPressed: () => Navigator.pop(context, false)),
+            KmDialogAction(
+              label: actionLabel,
+              destructive: true,
+              filled: true,
+              onPressed: () => Navigator.pop(context, true),
+            ),
+          ],
         ) ??
         false;
   }
@@ -219,7 +249,7 @@ class _AdminSelectableListState extends State<_AdminSelectableList> {
                   final Widget cb = _canSelect(id, data)
                       ? Checkbox(
                           value: _sel.contains(id),
-                          activeColor: AppColors.igViolet,
+                          activeColor: AppColors.kmOrange,
                           onChanged: _busy
                               ? null
                               : (v) => setState(() =>
@@ -242,18 +272,18 @@ class _AdminSelectableListState extends State<_AdminSelectableList> {
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       padding: const EdgeInsets.only(left: 4, right: 6),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.16),
+        color: AppColors.kmGlassFill,
         borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+        border: Border.all(color: AppColors.kmGlassBorder),
       ),
       child: Row(
         children: [
           Checkbox(
             value: _sel.isEmpty ? false : (allSelected ? true : null),
             tristate: true,
-            activeColor: Colors.white,
-            checkColor: AppColors.igViolet,
-            side: const BorderSide(color: Colors.white, width: 1.6),
+            activeColor: AppColors.kmOrange,
+            checkColor: AppColors.kmInk,
+            side: BorderSide(color: AppColors.kmMuted, width: 1.6),
             onChanged: (_busy || selectableIds.isEmpty)
                 ? null
                 : (_) => setState(() {
@@ -269,7 +299,7 @@ class _AdminSelectableListState extends State<_AdminSelectableList> {
           Text(
             _sel.isEmpty ? S.selectAll : S.nSelected(_sel.length),
             style: const TextStyle(
-                color: Colors.white,
+                color: AppColors.kmText,
                 fontWeight: FontWeight.w700,
                 fontSize: 12.5),
           ),
@@ -280,8 +310,8 @@ class _AdminSelectableListState extends State<_AdminSelectableList> {
               child: ElevatedButton.icon(
                 onPressed: _busy ? null : _deleteBulk,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.danger,
-                  foregroundColor: Colors.white,
+                  backgroundColor: AppColors.kmRose,
+                  foregroundColor: AppColors.kmInk,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   minimumSize: const Size(0, 34),
@@ -291,7 +321,7 @@ class _AdminSelectableListState extends State<_AdminSelectableList> {
                         width: 14,
                         height: 14,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
+                            strokeWidth: 2, color: AppColors.kmInk))
                     : const Icon(Icons.delete_sweep_rounded, size: 18),
                 label: Text(S.deleteSelected,
                     style: const TextStyle(fontWeight: FontWeight.w800)),
@@ -312,6 +342,13 @@ Future<void> _acceptWorker(BuildContext context, String docId, String uid,
     'workerVerificationStatus': 'approved',
     'rejectionReason': FieldValue.delete(),
     'approvedAt': FieldValue.serverTimestamp(),
+    // नयाँ worker सुरुमा ०-रेटिङ (कुनै साँचो review नभएकोले) — `rating`/
+    // `reviews` static field होइन, यहीँबाट live गणना हुन्छ (हेर्नुहोस्
+    // `complete_job_sheet.dart::_confirm()` ले हरेक review पछि यही
+    // `ratingSum`/`ratingCount` बढाउने, र `syncWorkerRatingToRegisteredWorkers`
+    // ले `registeredWorkers` कै display copy पनि ताजा राख्ने)।
+    'ratingSum': 0,
+    'ratingCount': 0,
   };
 
   await db.collection('pendingWorkers').doc(docId).update({
@@ -363,6 +400,8 @@ Future<void> _acceptWorker(BuildContext context, String docId, String uid,
     'citizenshipFrontUrl': data['citizenshipFrontUrl'] ?? '',
     'selfieUrl': data['selfieUrl'] ?? '',
     'certificateUrls': data['certificateUrls'] ?? <String>[],
+    if ((data['vehicleDetails'] ?? '').toString().isNotEmpty)
+      'vehicleDetails': data['vehicleDetails'],
     'isOnline': true,
     'approvedAt': FieldValue.serverTimestamp(),
     if (data['lat'] != null && data['lng'] != null) ...{
@@ -379,26 +418,28 @@ Future<void> _acceptWorker(BuildContext context, String docId, String uid,
 Future<void> _rejectWorker(
     BuildContext context, String docId, String uid) async {
   final ctrl = TextEditingController();
-  final reason = await showDialog<String>(
+  final reason = await showKmDialog<String>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(S.rejectReasonTitle),
-      content: TextField(
-        controller: ctrl,
-        maxLines: 3,
-        decoration: InputDecoration(
-          labelText: S.reasonLabel,
-          hintText: S.rejectReasonHint,
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(S.cancel)),
-        ElevatedButton(
-          onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-          child: Text(S.reject),
-        ),
-      ],
+    title: S.rejectReasonTitle,
+    icon: Icons.close_rounded,
+    iconBg: const LinearGradient(
+        colors: [AppColors.kmRose, AppColors.kmPinkDeep]),
+    content: TextField(
+      controller: ctrl,
+      maxLines: 3,
+      style: const TextStyle(color: AppColors.kmText),
+      decoration: kmInputDecoration(S.reasonLabel, hint: S.rejectReasonHint),
     ),
+    actions: [
+      KmDialogAction(
+          label: S.cancel, onPressed: () => Navigator.pop(context)),
+      KmDialogAction(
+        label: S.reject,
+        destructive: true,
+        filled: true,
+        onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+      ),
+    ],
   );
   if (reason == null) return; // cancelled
 
@@ -430,56 +471,108 @@ Future<void> _rejectWorker(
 }
 
 class OwnerDashboardScreen extends StatelessWidget {
-  const OwnerDashboardScreen({super.key});
+  // "Manage Workers" र "Reports & Stats" landing-page card दुवैले पहिले
+  // यही एउटै screen खोल्थे तर कहिल्यै फरक tab मा नझर्ने (app.dart मा भेटिएको
+  // bug) — अब हरेकले आफ्नै सम्बन्धित tab मा सिधै उघ्रोस् भनेर। बाँकी सबै
+  // tab अझै tap/swipe गरेर पुग्न मिल्छ — यो केवल *सुरुको* tab मात्र हो।
+  // (Driver-सम्बन्धी सबै नियन्त्रण अब यहाँ होइन, छुट्टै `DriversControlDashboard`
+  // screen मा छ — admin home कै छुट्टै कार्डबाट पुग्ने।)
+  final int initialTabIndex;
+  const OwnerDashboardScreen({super.key, this.initialTabIndex = 0});
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 6,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        extendBodyBehindAppBar: true,
-        appBar: AppBar(
-          title: const Text('Admin dashboard',
-              style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+      length: 7,
+      initialIndex: initialTabIndex,
+      child: AuroraBackground(
+        orbs: const [
+          KmOrb(Alignment.topRight, AppColors.kmTeal),
+          KmOrb(Alignment.bottomLeft, AppColors.kmPurple),
+        ],
+        child: Scaffold(
           backgroundColor: Colors.transparent,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          flexibleSpace: const DecoratedBox(
-            decoration: BoxDecoration(gradient: AppColors.buttonGradient),
-          ),
-          actions: const [
-            _SupportNumberButton(),
-            _AppUpdateButton(),
-            _NotifBell(),
-          ],
-          bottom: const TabBar(
-            isScrollable: true,
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white70,
-            indicatorColor: Colors.white,
-            tabs: [
-              Tab(text: 'Pending'),
-              Tab(text: 'History'),
-              Tab(text: 'Requests'),
-              Tab(text: 'Reports'),
-              Tab(text: 'Support'),
-              Tab(text: 'Users'),
-            ],
-          ),
-        ),
-        body: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.igGradient),
-          child: SafeArea(
-            child: TabBarView(
+          body: SafeArea(
+            child: Column(
               children: [
-                _PendingTab(),
-                _HistoryTab(),
-                _RequestsTab(),
-                _ReportsTab(),
-                _SupportTab(),
-                _UsersTab(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: KmScreenHeader(title: 'Admin'),
+                      ),
+                      IconTheme.merge(
+                        data: const IconThemeData(color: AppColors.kmText),
+                        child: const Row(children: [
+                          _SupportNumberButton(),
+                          _HelpContentButton(),
+                          _AppUpdateButton(),
+                          _NotifBell(),
+                        ]),
+                      ),
+                      const SizedBox(width: 4),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                  child: GlassPanel(
+                    radius: 22,
+                    padding: const EdgeInsets.all(4),
+                    child: const TabBar(
+                      isScrollable: true,
+                      dividerColor: Colors.transparent,
+                      labelColor: AppColors.kmInk,
+                      unselectedLabelColor: AppColors.kmMuted2,
+                      indicatorSize: TabBarIndicatorSize.tab,
+                      indicator: BoxDecoration(
+                        color: AppColors.kmText,
+                        borderRadius: BorderRadius.all(Radius.circular(18)),
+                      ),
+                      labelStyle:
+                          TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+                      unselectedLabelStyle:
+                          TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
+                      tabs: [
+                        Tab(
+                            icon: Icon(Icons.how_to_reg_rounded, size: 19),
+                            text: 'Pending'),
+                        Tab(
+                            icon: Icon(Icons.history_rounded, size: 19),
+                            text: 'History'),
+                        Tab(
+                            icon: Icon(Icons.assignment_rounded, size: 19),
+                            text: 'Requests'),
+                        Tab(
+                            icon: Icon(Icons.star_rounded, size: 19),
+                            text: 'Ratings'),
+                        Tab(
+                            icon: Icon(Icons.flag_rounded, size: 19),
+                            text: 'Reports'),
+                        Tab(
+                            icon: Icon(Icons.support_agent_rounded, size: 19),
+                            text: 'Support'),
+                        Tab(
+                            icon: Icon(Icons.group_rounded, size: 19),
+                            text: 'Users'),
+                      ],
+                    ),
+                  ),
+                ),
+                const Expanded(
+                  child: TabBarView(
+                    children: [
+                      _PendingTab(),
+                      _HistoryTab(),
+                      _RequestsTab(),
+                      _WorkerRatingsTab(),
+                      _ReportsTab(),
+                      _SupportTab(),
+                      _UsersTab(),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -498,27 +591,28 @@ class _SupportNumberButton extends StatelessWidget {
     final current = await SupportConfig.phoneOnce();
     if (!context.mounted) return;
     final ctrl = TextEditingController(text: current);
-    await showDialog(
+    await showKmDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(S.editSupportNumber),
-        content: TextField(
-          controller: ctrl,
-          keyboardType: TextInputType.phone,
-          decoration: InputDecoration(labelText: S.supportNumberLabel),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: Text(S.cancel)),
-          ElevatedButton(
-            onPressed: () async {
-              await SupportConfig.setPhone(ctrl.text);
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: Text(S.save),
-          ),
-        ],
+      title: S.editSupportNumber,
+      icon: Icons.contact_phone_rounded,
+      content: TextField(
+        controller: ctrl,
+        keyboardType: TextInputType.phone,
+        style: const TextStyle(color: AppColors.kmText),
+        decoration: kmInputDecoration(S.supportNumberLabel),
       ),
+      actions: [
+        KmDialogAction(
+            label: S.cancel, onPressed: () => Navigator.pop(context)),
+        KmDialogAction(
+          label: S.save,
+          filled: true,
+          onPressed: () async {
+            await SupportConfig.setPhone(ctrl.text);
+            if (context.mounted) Navigator.pop(context);
+          },
+        ),
+      ],
     );
   }
 
@@ -528,6 +622,24 @@ class _SupportNumberButton extends StatelessWidget {
       icon: const Icon(Icons.contact_phone_outlined),
       tooltip: S.editSupportNumber,
       onPressed: () => _edit(context),
+    );
+  }
+}
+
+/// Help & Support screen भित्रका सबै content (Service Standard, FAQ,
+/// Privacy Policy, Data Security) — यहाँबाट HelpContentEditorScreen खोल्ने।
+class _HelpContentButton extends StatelessWidget {
+  const _HelpContentButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: const Icon(Icons.article_outlined),
+      tooltip: 'Help Content',
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const HelpContentEditorScreen()),
+      ),
     );
   }
 }
@@ -553,111 +665,142 @@ class _AppUpdateButton extends StatelessWidget {
     var force = current?['forceUpdate'] == true;
     var uploading = false;
 
-    await showDialog(
+    await showKmDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: const Text('App Update'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+      title: 'App Update',
+      icon: Icons.system_update_rounded,
+      content: StatefulBuilder(
+        builder: (ctx, setState) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.5),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: codeCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: AppColors.kmText),
+                      decoration: kmInputDecoration(
+                          'Latest version code (integer, e.g. 2)'),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: nameCtrl,
+                      style: const TextStyle(color: AppColors.kmText),
+                      decoration:
+                          kmInputDecoration('Version name (e.g. 1.1.0)'),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: urlCtrl,
+                      style: const TextStyle(color: AppColors.kmText),
+                      decoration: kmInputDecoration('APK download URL'),
+                    ),
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.kmOrange,
+                          side: BorderSide(color: AppColors.kmGlassBorder),
+                        ),
+                        onPressed: uploading
+                            ? null
+                            : () async {
+                                final code =
+                                    int.tryParse(codeCtrl.text.trim());
+                                if (code == null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text(
+                                            'Set the version code first, then upload.')),
+                                  );
+                                  return;
+                                }
+                                setState(() => uploading = true);
+                                try {
+                                  final url = await _uploadApkFromDevice(code);
+                                  if (url != null) urlCtrl.text = url;
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context)
+                                        .showSnackBar(
+                                      SnackBar(
+                                          content: Text('Upload failed: $e')),
+                                    );
+                                  }
+                                } finally {
+                                  setState(() => uploading = false);
+                                }
+                              },
+                        icon: uploading
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: AppColors.kmOrange))
+                            : const Icon(Icons.upload_file_rounded, size: 18),
+                        label: Text(uploading
+                            ? 'Uploading…'
+                            : 'Upload APK from this device'),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: notesCtrl,
+                      minLines: 2,
+                      maxLines: 4,
+                      style: const TextStyle(color: AppColors.kmText),
+                      decoration:
+                          kmInputDecoration('Release notes (optional)'),
+                    ),
+                    const SizedBox(height: 6),
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: force,
+                      activeColor: AppColors.kmOrange,
+                      checkColor: AppColors.kmInk,
+                      onChanged: (v) => setState(() => force = v ?? false),
+                      title: const Text('Force update (block "Later")',
+                          style: TextStyle(color: AppColors.kmText)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                TextField(
-                  controller: codeCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                      labelText: 'Latest version code (integer, e.g. 2)'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Version name (e.g. 1.1.0)'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: urlCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'APK download URL'),
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    onPressed: uploading
-                        ? null
-                        : () async {
-                            final code = int.tryParse(codeCtrl.text.trim());
-                            if (code == null) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content: Text(
-                                        'Set the version code first, then upload.')),
-                              );
-                              return;
-                            }
-                            setState(() => uploading = true);
-                            try {
-                              final url = await _uploadApkFromDevice(code);
-                              if (url != null) urlCtrl.text = url;
-                            } catch (e) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Upload failed: $e')),
-                                );
-                              }
-                            } finally {
-                              setState(() => uploading = false);
-                            }
-                          },
-                    icon: uploading
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.upload_file_rounded, size: 18),
-                    label: Text(uploading
-                        ? 'Uploading…'
-                        : 'Upload APK from this device'),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: notesCtrl,
-                  minLines: 2,
-                  maxLines: 4,
-                  decoration: const InputDecoration(
-                      labelText: 'Release notes (optional)'),
-                ),
-                const SizedBox(height: 6),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: force,
-                  onChanged: (v) => setState(() => force = v ?? false),
-                  title: const Text('Force update (block "Later")'),
+                KmDialogAction(
+                    label: S.cancel, onPressed: () => Navigator.pop(context)),
+                const SizedBox(width: 8),
+                KmDialogAction(
+                  label: S.save,
+                  filled: true,
+                  onPressed: uploading
+                      ? null
+                      : () async {
+                          final code = int.tryParse(codeCtrl.text.trim());
+                          if (code == null || urlCtrl.text.trim().isEmpty) {
+                            return;
+                          }
+                          await AppUpdateConfig.publish(
+                            latestVersionCode: code,
+                            versionName: nameCtrl.text,
+                            apkUrl: urlCtrl.text,
+                            releaseNotes: notesCtrl.text,
+                            forceUpdate: force,
+                          );
+                          if (context.mounted) Navigator.pop(context);
+                        },
                 ),
               ],
-            ),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx), child: Text(S.cancel)),
-            ElevatedButton(
-              onPressed: uploading
-                  ? null
-                  : () async {
-                      final code = int.tryParse(codeCtrl.text.trim());
-                      if (code == null || urlCtrl.text.trim().isEmpty) return;
-                      await AppUpdateConfig.publish(
-                        latestVersionCode: code,
-                        versionName: nameCtrl.text,
-                        apkUrl: urlCtrl.text,
-                        releaseNotes: notesCtrl.text,
-                        forceUpdate: force,
-                      );
-                      if (ctx.mounted) Navigator.pop(ctx);
-                    },
-              child: Text(S.save),
             ),
           ],
         ),
@@ -722,7 +865,7 @@ class _NotifBell extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(3),
                   decoration: const BoxDecoration(
-                      color: AppColors.danger, shape: BoxShape.circle),
+                      color: AppColors.kmRose, shape: BoxShape.circle),
                   constraints:
                       const BoxConstraints(minWidth: 16, minHeight: 16),
                   child: Text('$count',
@@ -748,28 +891,29 @@ class _EmptyState extends StatelessWidget {
     return ListView(
       children: [
         const SizedBox(height: 100),
-        Icon(icon, size: 52, color: Colors.white.withValues(alpha: 0.9)),
+        Icon(icon, size: 52, color: AppColors.kmMuted),
         const SizedBox(height: 12),
         Center(
             child: Text(text,
                 style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w600))),
+                    color: AppColors.kmText, fontWeight: FontWeight.w600))),
       ],
     );
   }
 }
 
 Widget _kv(BuildContext context, IconData icon, String value) {
-  final muted = Theme.of(context).colorScheme.onSurfaceVariant;
   return Padding(
     padding: const EdgeInsets.only(top: 4),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 14, color: muted),
+        Icon(icon, size: 14, color: AppColors.kmMuted),
         const SizedBox(width: 6),
         Expanded(
-            child: Text(value, style: Theme.of(context).textTheme.bodySmall)),
+            child: Text(value,
+                style: const TextStyle(
+                    color: AppColors.kmMuted, fontSize: 12.5))),
       ],
     ),
   );
@@ -797,24 +941,26 @@ class _LabeledPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(fontWeight: FontWeight.w600)),
+            style: const TextStyle(
+                color: AppColors.kmMuted,
+                fontSize: 12,
+                fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
         if (url.isEmpty)
           Container(
             height: 90,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
+              color: Colors.white.withValues(alpha: 0.06),
               borderRadius: BorderRadius.circular(AppRadius.sm),
+              border: Border.all(color: AppColors.kmGlassBorder),
             ),
-            child: Icon(Icons.image_not_supported_outlined,
-                color: theme.colorScheme.onSurfaceVariant),
+            child: const Icon(Icons.image_not_supported_outlined,
+                color: AppColors.kmMuted),
           )
         else if (_isImage)
           GestureDetector(
@@ -849,18 +995,20 @@ class _LabeledPreview extends StatelessWidget {
                 placeholder: (_, __) => Container(
                   height: 100,
                   alignment: Alignment.center,
-                  color: theme.colorScheme.surfaceContainerHighest,
+                  color: Colors.white.withValues(alpha: 0.06),
                   child: const SizedBox(
                     width: 20,
                     height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppColors.kmOrange),
                   ),
                 ),
                 errorWidget: (_, __, ___) => Container(
                   height: 60,
                   alignment: Alignment.center,
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  child: Text(S.viewDocument),
+                  color: Colors.white.withValues(alpha: 0.06),
+                  child: Text(S.viewDocument,
+                      style: const TextStyle(color: AppColors.kmMuted)),
                 ),
               ),
             ),
@@ -950,10 +1098,42 @@ Widget _workerApplicationBody(BuildContext context, Map<String, dynamic> data) {
         const SizedBox(height: 10),
         Text(
             'Driver documents (${data['vehicleType'] ?? data['service'] ?? ''})',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(fontWeight: FontWeight.w600)),
+            style: const TextStyle(
+                color: AppColors.kmMuted,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600)),
+        if ((data['vehicleDetails'] ?? '').toString().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text((data['vehicleDetails']).toString(),
+                style: const TextStyle(
+                    color: AppColors.kmMuted, fontSize: 12.5)),
+          ),
+        Builder(builder: (context) {
+          final licenseNo = (data['licenseNumber'] ?? '').toString();
+          final licenseCat = (data['licenseCategory'] ?? '').toString();
+          final expiryRaw = (data['licenseExpiryDate'] ?? '').toString();
+          final expiry = DateTime.tryParse(expiryRaw);
+          final expired = expiry != null && expiry.isBefore(DateTime.now());
+          if (licenseNo.isEmpty && expiry == null) {
+            return const SizedBox.shrink();
+          }
+          return Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              [
+                if (licenseNo.isNotEmpty) 'Lic# $licenseNo',
+                if (licenseCat.isNotEmpty) licenseCat,
+                if (expiry != null)
+                  '${expired ? "EXPIRED" : "valid till"} ${expiry.day}/${expiry.month}/${expiry.year}',
+              ].join(' · '),
+              style: TextStyle(
+                  color: expired ? AppColors.kmRose : AppColors.kmMuted,
+                  fontSize: 12.5,
+                  fontWeight: expired ? FontWeight.w700 : FontWeight.w400),
+            ),
+          );
+        }),
         const SizedBox(height: 4),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -971,16 +1151,25 @@ Widget _workerApplicationBody(BuildContext context, Map<String, dynamic> data) {
                 url: (data['vehicleRegistrationUrl'] ?? '').toString(),
               ),
             ),
+            if ((data['vehicleInsuranceUrl'] ?? '').toString().isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Expanded(
+                child: _LabeledPreview(
+                  label: S.vehicleInsuranceLabel,
+                  url: (data['vehicleInsuranceUrl'] ?? '').toString(),
+                ),
+              ),
+            ],
           ],
         ),
       ],
       if (((data['certificateUrls'] as List?) ?? const []).isNotEmpty) ...[
         const SizedBox(height: 10),
         Text(S.certificatesLabel,
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(fontWeight: FontWeight.w600)),
+            style: const TextStyle(
+                color: AppColors.kmMuted,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
         Wrap(
           spacing: 8,
@@ -1018,6 +1207,7 @@ void _precacheWorkerDocs(BuildContext context,
       (data['selfieUrl'] ?? '').toString(),
       (data['drivingLicenseUrl'] ?? '').toString(),
       (data['vehicleRegistrationUrl'] ?? '').toString(),
+      (data['vehicleInsuranceUrl'] ?? '').toString(),
     ];
     for (final url in urls) {
       if (url.isEmpty) continue;
@@ -1051,7 +1241,8 @@ class _PendingTab extends StatelessWidget {
         final uid = (data['uid'] ?? '').toString();
         final name =
             '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}'.trim();
-        return AppCard(
+        return GlassPanel(
+          radius: 20,
           padding: const EdgeInsets.all(14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1059,7 +1250,7 @@ class _PendingTab extends StatelessWidget {
               Row(
                 children: [
                   checkbox,
-                  const LimeIconBadge(Icons.person, size: 44),
+                  _KmIconBadge(Icons.person, size: 44),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1067,17 +1258,20 @@ class _PendingTab extends StatelessWidget {
                       children: [
                         Text(name.isEmpty ? '—' : name,
                             style: const TextStyle(
-                                fontWeight: FontWeight.w700, fontSize: 15.5)),
+                                color: AppColors.kmText,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15.5)),
                         Text('${data['service'] ?? '—'}  ·  Pending',
-                            style: Theme.of(context).textTheme.bodySmall),
+                            style: const TextStyle(
+                                color: AppColors.kmMuted, fontSize: 12)),
                       ],
                     ),
                   ),
-                  const Pill('NEW', bg: AppColors.lime, fg: AppColors.onLime),
+                  const KmTag('NEW', color: AppColors.kmOrange),
                   _DeleteBtn(deleteThis),
                 ],
               ),
-              const Divider(height: 20),
+              Divider(height: 20, color: AppColors.kmGlassBorder),
               _workerApplicationBody(context, data),
               const SizedBox(height: 12),
               Row(
@@ -1085,13 +1279,13 @@ class _PendingTab extends StatelessWidget {
                   Expanded(
                     child: SecondaryButton(
                       label: S.reject,
-                      color: AppColors.danger,
+                      color: AppColors.kmRose,
                       onPressed: () => _rejectWorker(context, docId, uid),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: PrimaryButton(
+                    child: KmCtaButton(
                       label: S.approve,
                       icon: Icons.check_rounded,
                       onPressed: () => _acceptWorker(context, docId, uid, data),
@@ -1141,7 +1335,6 @@ class _HistoryTabState extends State<_HistoryTab> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Column(
       children: [
         Padding(
@@ -1149,23 +1342,31 @@ class _HistoryTabState extends State<_HistoryTab> {
           child: TextField(
             controller: _searchCtrl,
             onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
-            decoration: InputDecoration(
-              hintText: S.searchByEmailOrPhone,
-              prefixIcon: const Icon(Icons.search_rounded),
+            style: const TextStyle(color: AppColors.kmText),
+            decoration: kmInputDecoration(
+              S.searchByEmailOrPhone,
               suffixIcon: _query.isEmpty
-                  ? null
+                  ? const Icon(Icons.search_rounded, color: AppColors.kmMuted)
                   : IconButton(
-                      icon: const Icon(Icons.close_rounded),
+                      icon: const Icon(Icons.close_rounded,
+                          color: AppColors.kmMuted),
                       onPressed: () {
                         _searchCtrl.clear();
                         setState(() => _query = '');
                       },
                     ),
-              filled: true,
-              fillColor: theme.colorScheme.surface,
+            ).copyWith(
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(AppRadius.pill),
                 borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AppRadius.pill),
+                borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(AppRadius.pill)),
+                borderSide: BorderSide(color: AppColors.kmOrange, width: 1.4),
               ),
             ),
           ),
@@ -1234,21 +1435,22 @@ class _HistoryCard extends StatelessWidget {
     final status =
         (data['status'] ?? data['verificationStatus'] ?? '—').toString();
     final Color pillColor = switch (status) {
-      'approved' => AppColors.success,
-      'rejected' => AppColors.danger,
-      _ => AppColors.warning,
+      'approved' => AppColors.kmTeal,
+      'rejected' => AppColors.kmRose,
+      _ => AppColors.kmAmber,
     };
     final approvedAt = data['approvedAt'];
     final rejectionReason = (data['rejectionReason'] ?? '').toString();
 
-    return AppCard(
+    return GlassPanel(
+      radius: 20,
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const LimeIconBadge(Icons.person, size: 44),
+              _KmIconBadge(Icons.person, size: 44),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -1256,16 +1458,19 @@ class _HistoryCard extends StatelessWidget {
                   children: [
                     Text(name.isEmpty ? '—' : name,
                         style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 15.5)),
+                            color: AppColors.kmText,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15.5)),
                     Text((data['service'] ?? '—').toString(),
-                        style: Theme.of(context).textTheme.bodySmall),
+                        style: const TextStyle(
+                            color: AppColors.kmMuted, fontSize: 12)),
                   ],
                 ),
               ),
-              Pill(status.toUpperCase(), bg: pillColor, fg: Colors.white),
+              Pill(status.toUpperCase(), bg: pillColor, fg: AppColors.kmInk),
             ],
           ),
-          const Divider(height: 20),
+          Divider(height: 20, color: AppColors.kmGlassBorder),
           _workerApplicationBody(context, data),
           if (status == 'rejected' && rejectionReason.isNotEmpty) ...[
             const SizedBox(height: 10),
@@ -1313,12 +1518,20 @@ class _RequestsTab extends StatelessWidget {
       noun: S.jobRequestWord,
       deleteOne: (id, _) => _deleteRequest(id),
       rowBuilder: (context, id, d, checkbox, deleteThis) {
-        final theme = Theme.of(context);
         final proposed = d['proposedPrice'];
         final counter = d['workerCounterPrice'];
         final finalPrice = d['finalPrice'];
         final km = d['distanceKm'];
-        return AppCard(
+        final status = (d['status'] ?? '').toString();
+        final workerUid = (d['workerUid'] ?? '').toString();
+        // साधारण Worker (Plumber/Electrician/... — Bike/Car ड्राइभर मात्र
+        // देखिने Drivers Control Dashboard मा यिनी कहिल्यै आउँदैनन्) कै
+        // सक्रिय काम पनि यहीँबाटै admin ले cancel गर्न सकून् — `_ActiveTaskRow`
+        // (Drivers Control Dashboard कै उही widget, दोहोरिँदैन) पुनः-प्रयोग।
+        final showCancelRow = workerUid.isNotEmpty &&
+            {'accepted', 'confirmed', 'in_progress'}.contains(status);
+        return GlassPanel(
+          radius: 20,
           padding: const EdgeInsets.all(14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1326,7 +1539,7 @@ class _RequestsTab extends StatelessWidget {
               Row(
                 children: [
                   checkbox,
-                  const LimeIconBadge(Icons.assignment_rounded, size: 40),
+                  _KmIconBadge(Icons.assignment_rounded, size: 40),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1335,12 +1548,15 @@ class _RequestsTab extends StatelessWidget {
                         Text(
                           '${d['employerName'] ?? 'User'}  →  ${d['workerName'] ?? 'Worker'}',
                           style: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 14.5),
+                              color: AppColors.kmText,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14.5),
                         ),
                         Text(
                             '${d['service'] ?? '—'}'
                             '${km != null ? '  ·  ${(km as num).toStringAsFixed(1)} km' : ''}',
-                            style: theme.textTheme.bodySmall),
+                            style: const TextStyle(
+                                color: AppColors.kmMuted, fontSize: 12)),
                       ],
                     ),
                   ),
@@ -1352,7 +1568,7 @@ class _RequestsTab extends StatelessWidget {
               if ((d['details'] ?? '').toString().isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Text(d['details'].toString(),
-                    style: theme.textTheme.bodyMedium),
+                    style: const TextStyle(color: AppColors.kmMuted)),
               ],
               const SizedBox(height: 6),
               _kv(
@@ -1362,12 +1578,1376 @@ class _RequestsTab extends StatelessWidget {
                   '${counter != null ? '   ·   Worker: Rs. $counter' : ''}'
                   '${finalPrice != null ? '   ·   Final: Rs. $finalPrice' : ''}'),
               _kv(context, Icons.schedule_rounded, _fmtTime(d['createdAt'])),
+              if (showCancelRow)
+                _ActiveTaskRow(requestId: id, data: d, workerUid: workerUid),
             ],
           ),
         );
       },
     );
   }
+}
+
+// ── Worker Ratings & Monthly Order-Quota (Admin) ────────────────────────────
+// Owner ले rating अनुसार worker list sort/filter गर्न, र आवश्यक परे कुनै
+// पनि worker को rating वा order-limit म्यानुअली override गर्न सक्ने ठाउँ
+// (`job_actions.dart::consumeOrderQuotaInTransaction` ले यही
+// `ratingOverride`/`orderLimitOverride` लाई computed tier भन्दा पहिले पढ्छ)।
+enum _RatingSort { highToLow, lowToHigh }
+
+// ── Drivers Control Dashboard — Owner home कै छुट्टै कार्डबाट सिधै पुग्ने,
+// आफैंमा पूर्ण independent admin screen। Driver सम्बन्धी सबै नियन्त्रण/
+// व्यवस्थापन/सेटिङ (online स्थिति, verification approve/reject, account
+// suspend/block, कागजात, ride history/stats) यहीँ मात्र — arku कुनै tab मा
+// दोहोरिँदैन। सामान्य (non-driver) Worker का लागि Ratings/Reports भने
+// आफ्नै छुट्टै tab मा जस्ताको त्यस्तै रहन्छन् (यो dashboard ले तिनलाई छुँदैन)।
+class DriversControlDashboard extends StatelessWidget {
+  const DriversControlDashboard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return AuroraBackground(
+      orbs: const [
+        KmOrb(Alignment.topLeft, AppColors.kmOrangeDeep),
+        KmOrb(Alignment.bottomRight, AppColors.kmPurple),
+      ],
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Column(
+            children: const [
+              Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: KmScreenHeader(title: 'Drivers Control Dashboard'),
+              ),
+              Expanded(child: _DriverControlHub()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Driver Control Hub — सबै Driver को list (online/offline, verification,
+// rating), tap गरे पूरा नियन्त्रण (approve/reject/suspend/documents/ride
+// history) खुल्ने _DriverAdminDetailPage मा जान्छ।
+// ── साझा helper (card र detail page दुवैले प्रयोग गर्ने, दोहोरो नबनोस्) ──
+
+Future<QueryDocumentSnapshot<Map<String, dynamic>>?> _findPendingDriverDoc(
+    String uid) async {
+  final snap = await FirebaseFirestore.instance
+      .collection('pendingWorkers')
+      .where('uid', isEqualTo: uid)
+      .where('status', isEqualTo: 'pending')
+      .limit(1)
+      .get();
+  return snap.docs.isEmpty ? null : snap.docs.first;
+}
+
+Future<void> _setDriverAccountStatus(String uid, String status) =>
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .set({'accountStatus': status}, SetOptions(merge: true));
+
+void _viewDriverDoc(BuildContext context, String url) {
+  if (url.isEmpty) return;
+  showDialog(
+    context: context,
+    builder: (_) => Dialog(
+      backgroundColor: Colors.black,
+      child: InteractiveViewer(
+        child: CachedNetworkImage(imageUrl: url, fit: BoxFit.contain),
+      ),
+    ),
+  );
+}
+
+/// सबै कागजात (citizenship/selfie/license/vehicle reg/insurance) एउटै
+/// bottom sheet मा — "Documents" बटन थिच्दा (card भित्रैबाट, अर्को page नखोली)।
+void _showDriverDocsSheet(BuildContext context, Map<String, dynamic> data) {
+  final docs = <(String, String)>[
+    ('Citizenship front', (data['citizenshipFrontUrl'] ?? '').toString()),
+    ('Citizenship back', (data['citizenshipBackUrl'] ?? '').toString()),
+    ('Selfie', (data['selfieUrl'] ?? '').toString()),
+    ('License', (data['drivingLicenseUrl'] ?? '').toString()),
+    ('Vehicle reg.', (data['vehicleRegistrationUrl'] ?? '').toString()),
+    ('Insurance', (data['vehicleInsuranceUrl'] ?? '').toString()),
+  ].where((d) => d.$2.isNotEmpty).toList();
+
+  showKmSheet(
+    context: context,
+    title: 'Documents',
+    children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(10, 4, 10, 16),
+        child: docs.isEmpty
+            ? const Text('No documents uploaded yet',
+                style: TextStyle(color: AppColors.kmMuted))
+            : Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  for (final d in docs) _docThumbShared(context, d.$1, d.$2),
+                ],
+              ),
+      ),
+    ],
+  );
+}
+
+Widget _docThumbShared(BuildContext context, String label, String url) {
+  return GestureDetector(
+    onTap: () => _viewDriverDoc(context, url),
+    child: Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: CachedNetworkImage(
+            imageUrl: url,
+            width: 76,
+            height: 76,
+            fit: BoxFit.cover,
+            errorWidget: (_, __, ___) => Container(
+              width: 76,
+              height: 76,
+              color: Colors.white.withValues(alpha: 0.06),
+              child: const Icon(Icons.insert_drive_file_rounded,
+                  color: AppColors.kmMuted),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(label,
+            style: const TextStyle(fontSize: 10, color: AppColors.kmMuted)),
+      ],
+    ),
+  );
+}
+
+class _DriverControlHub extends StatelessWidget {
+  const _DriverControlHub();
+
+  @override
+  Widget build(BuildContext context) {
+    return _AdminSelectableList(
+      query: FirebaseFirestore.instance
+          .collection('users')
+          .where('service', whereIn: ['Bike', 'Car']),
+      emptyIcon: Icons.local_taxi_outlined,
+      emptyText: 'No drivers registered yet',
+      noun: 'driver',
+      deleteOne: (id, data) => _UsersTab._deleteUser(id, data),
+      rowBuilder: (context, uid, data, checkbox, deleteThis) => _DriverAdminCard(
+        uid: uid,
+        data: data,
+        checkbox: checkbox,
+        deleteThis: deleteThis,
+      ),
+    );
+  }
+}
+
+/// Driver Control Hub को हरेक card — यहीँबाट सिधै (कुनै अर्को page नखोली)
+/// सबै मुख्य नियन्त्रण: (१) Verification Approve/Reject, (२) Account
+/// Active/Suspend/Block, (३) Documents view, (४) Ride/Earnings stats।
+/// "पूरा विवरण" चाहिए मात्र (पछिल्ला राइडको लामो list जस्ता कुरा) detail
+/// page मा जाने ऐच्छिक बटन छुट्टै छ।
+class _DriverAdminCard extends StatefulWidget {
+  final String uid;
+  final Map<String, dynamic> data;
+  final Widget checkbox;
+  final VoidCallback deleteThis;
+  const _DriverAdminCard({
+    required this.uid,
+    required this.data,
+    required this.checkbox,
+    required this.deleteThis,
+  });
+
+  @override
+  State<_DriverAdminCard> createState() => _DriverAdminCardState();
+}
+
+class _DriverAdminCardState extends State<_DriverAdminCard> {
+  bool _busy = false;
+
+  static const _activeStatuses = {'accepted', 'confirmed', 'in_progress'};
+
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _ridesStream =
+      FirebaseFirestore.instance
+          .collection('serviceRequests')
+          .where('workerUid', isEqualTo: widget.uid)
+          .snapshots();
+
+  Future<void> _approve() async {
+    setState(() => _busy = true);
+    try {
+      final doc = await _findPendingDriverDoc(widget.uid);
+      if (doc == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Pending application not found')));
+        }
+        return;
+      }
+      if (!mounted) return;
+      await _acceptWorker(context, doc.id, widget.uid, doc.data());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _reject() async {
+    setState(() => _busy = true);
+    try {
+      final doc = await _findPendingDriverDoc(widget.uid);
+      if (doc == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Pending application not found')));
+        }
+        return;
+      }
+      if (!mounted) return;
+      await _rejectWorker(context, doc.id, widget.uid);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _setStatus(String s) async {
+    setState(() => _busy = true);
+    try {
+      await _setDriverAccountStatus(widget.uid, s);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final data = widget.data;
+    final name = '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}'.trim();
+    final online = data['isOnline'] != false;
+    final vStatus = (data['verificationStatus'] ??
+            data['workerVerificationStatus'] ??
+            'pending')
+        .toString();
+    final accountStatus = (data['accountStatus'] ?? 'active').toString();
+    final service = (data['service'] ?? '').toString();
+    final ratingCount = (data['ratingCount'] ?? 0) as num;
+    final ratingSum = (data['ratingSum'] ?? 0) as num;
+    final avgRating = ratingCount > 0 ? (ratingSum / ratingCount) : 0;
+
+    final Color vColor = switch (vStatus) {
+      'approved' => AppColors.kmTeal,
+      'rejected' => AppColors.kmRose,
+      _ => AppColors.kmAmber,
+    };
+    final Color aColor = switch (accountStatus) {
+      'suspended' => AppColors.kmAmber,
+      'blocked' => AppColors.kmRose,
+      _ => AppColors.kmTeal,
+    };
+
+    return GlassPanel(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── हेडर: फोटो/अनलाइन डट + नाम + status pill हरू ──
+          Row(
+            children: [
+              widget.checkbox,
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  _KmIconBadge(Icons.local_taxi_rounded, size: 44),
+                  Positioned(
+                    right: -1,
+                    bottom: -1,
+                    child: Container(
+                      width: 13,
+                      height: 13,
+                      decoration: BoxDecoration(
+                        color: online ? AppColors.kmTeal : Colors.black38,
+                        shape: BoxShape.circle,
+                        border:
+                            Border.all(color: AppColors.kmSurface, width: 2),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                        name.isEmpty
+                            ? (data['email'] ?? '—').toString()
+                            : name,
+                        style: const TextStyle(
+                            color: AppColors.kmText,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14.5)),
+                    Text(
+                        '${S.serviceName(service)} · ${online ? S.onlineNow : S.offlineWord}',
+                        style: const TextStyle(
+                            color: AppColors.kmMuted, fontSize: 12.5)),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.open_in_full_rounded,
+                    size: 18, color: AppColors.kmMuted),
+                tooltip: 'Full details',
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => _DriverAdminDetailPage(
+                        uid: widget.uid, initialData: data),
+                  ),
+                ),
+              ),
+              _DeleteBtn(widget.deleteThis),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              Pill('Verification: $vStatus', bg: vColor, fg: AppColors.kmInk),
+              Pill('Account: $accountStatus', bg: aColor, fg: AppColors.kmInk),
+            ],
+          ),
+          Divider(height: 20, color: AppColors.kmGlassBorder),
+
+          // ── (४) Ride & Earnings Stats — सधैँ प्रत्यक्ष देखिने, साथै हाल
+          // सक्रिय काम (भए) माथि नै सिधै "Cancel Task" — Owner ले worker
+          // सँग सिधै सम्पर्क नगरी नै तुरुन्तै काम रोक्न सकून्।
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _ridesStream,
+            builder: (context, rideSnap) {
+              final allDocs = rideSnap.data?.docs ?? [];
+              final activeDocs = allDocs
+                  .where((d) => _activeStatuses
+                      .contains((d.data()['status'] ?? '').toString()))
+                  .toList();
+              final completedDocs = allDocs
+                  .where((d) =>
+                      (d.data()['status'] ?? '').toString() == 'completed')
+                  .toList();
+              final gross = completedDocs.fold<num>(
+                  0,
+                  (a, d) =>
+                      a +
+                      ((d.data()['finalPrice'] ?? d.data()['proposedPrice'] ?? 0)
+                          as num));
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 6,
+                    children: [
+                      _miniStat('Active', '${activeDocs.length}'),
+                      _miniStat('Completed', '${completedDocs.length}'),
+                      _miniStat('Rating',
+                          ratingCount > 0 ? avgRating.toStringAsFixed(1) : '—'),
+                      _miniStat('Earned', 'Rs. ${gross.round()}'),
+                    ],
+                  ),
+                  for (final rideDoc in activeDocs)
+                    _ActiveTaskRow(
+                      requestId: rideDoc.id,
+                      data: rideDoc.data(),
+                      workerUid: widget.uid,
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+
+          // ── (३) Documents — प्रत्यक्ष link/बटन ──
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _showDriverDocsSheet(context, data),
+              icon: const Icon(Icons.folder_open_rounded, size: 18),
+              label: const Text('Documents'),
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // ── (१) Verification Approve/Reject — pending भए प्रत्यक्ष ──
+          if (vStatus == 'pending') ...[
+            Row(
+              children: [
+                Expanded(
+                  child: SecondaryButton(
+                    label: S.reject,
+                    color: AppColors.kmRose,
+                    onPressed: _busy ? null : _reject,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: PrimaryButton(
+                    label: S.approve,
+                    icon: Icons.check_rounded,
+                    loading: _busy,
+                    onPressed: _approve,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+          ],
+
+          // ── (२) Account Management — सधैँ प्रत्यक्ष ──
+          Wrap(
+            spacing: 8,
+            children: [
+              if (accountStatus != 'active')
+                OutlinedButton(
+                  onPressed: _busy ? null : () => _setStatus('active'),
+                  child: const Text('Activate'),
+                ),
+              if (accountStatus != 'suspended')
+                OutlinedButton(
+                  onPressed: _busy ? null : () => _setStatus('suspended'),
+                  child: const Text('Suspend',
+                      style: TextStyle(color: AppColors.kmAmber)),
+                ),
+              if (accountStatus != 'blocked')
+                OutlinedButton(
+                  onPressed: _busy ? null : () => _setStatus('blocked'),
+                  child: const Text('Block',
+                      style: TextStyle(color: AppColors.kmRose)),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniStat(String label, String value) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(value,
+              style: const TextStyle(
+                  color: AppColors.kmText,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 14)),
+          Text(label,
+              style: const TextStyle(fontSize: 10, color: AppColors.kmMuted)),
+        ],
+      );
+}
+
+/// Driver Control Hub कार्ड भित्रै — हाल सक्रिय (`accepted`/`confirmed`/
+/// `in_progress`) एउटा काम, सिधै "Cancel Task" सहित। Owner ले Firestore
+/// कन्सोल नखोली नै, यहीँबाट तुरुन्तै रोक्न सक्छन्:
+///   १. `serviceRequests/{requestId}.status` → `cancelled_by_admin`
+///      (deliberately DELETE होइन — सामान्य employer/worker cancel जस्तो
+///      होइन, admin action को audit trail कायमै रहनुपर्छ)।
+///   २. `releaseWorkerActiveJob()` — worker फेरि नयाँ काम स्वीकार्न free।
+///   ३. worker को [job_route_screen.dart] ले यही status लाइभ सुन्दै
+///      (Firestore stream) तुरुन्तै "Task cancelled" देखाएर आफैं फर्किन्छ —
+///      real-time sync छुट्टै polling/notification बिना।
+class _ActiveTaskRow extends StatefulWidget {
+  final String requestId;
+  final Map<String, dynamic> data;
+  final String workerUid;
+  const _ActiveTaskRow({
+    required this.requestId,
+    required this.data,
+    required this.workerUid,
+  });
+
+  @override
+  State<_ActiveTaskRow> createState() => _ActiveTaskRowState();
+}
+
+class _ActiveTaskRowState extends State<_ActiveTaskRow> {
+  bool _cancelling = false;
+
+  Future<void> _confirmAndCancel() async {
+    final confirmed = await showKmDialog<bool>(
+      context: context,
+      title: 'Cancel this task?',
+      message:
+          'This immediately ends the ride/job for both the worker and the '
+          'customer. This cannot be undone.',
+      icon: Icons.cancel_rounded,
+      iconBg: const LinearGradient(colors: [AppColors.danger, AppColors.kmRose]),
+      actions: [
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        KmDialogAction(
+          label: S.confirm,
+          filled: true,
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _cancelling = true);
+    try {
+      final db = FirebaseFirestore.instance;
+      await db.collection('serviceRequests').doc(widget.requestId).update({
+        'status': 'cancelled_by_admin',
+        'cancelledBy': 'admin',
+        'cancelledAt': FieldValue.serverTimestamp(),
+      });
+      // सामान्य employer/worker cancel कै उही हल्का log (job_actions.dart::
+      // deleteCancelledBooking हेर्नुहोस्) — admin बाट भएको छुट्याउन।
+      unawaited(db.collection('cancellations').add({
+        'requestId': widget.requestId,
+        'reason': 'Cancelled by admin',
+        'cancelledByAdmin': true,
+        'workerUid': widget.workerUid,
+        'uid': FirebaseAuth.instance.currentUser?.uid ?? '',
+        'createdAt': FieldValue.serverTimestamp(),
+      }));
+      await releaseWorkerActiveJob(widget.workerUid, widget.requestId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Task cancelled — worker notified.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not cancel: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _cancelling = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.data;
+    final service = (d['service'] ?? '').toString();
+    final employerName = (d['employerName'] ?? S.customerWord).toString();
+    final status = (d['status'] ?? '').toString();
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.kmTeal.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.kmTeal.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.directions_run_rounded,
+              size: 18, color: AppColors.kmTeal),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${service.isEmpty ? 'Job' : service} · $employerName',
+                    style: const TextStyle(
+                        color: AppColors.kmText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13)),
+                Text(status,
+                    style: const TextStyle(
+                        color: AppColors.kmMuted, fontSize: 11)),
+              ],
+            ),
+          ),
+          SecondaryButton(
+            label: _cancelling ? '…' : 'Cancel Task',
+            color: AppColors.kmRose,
+            expand: false,
+            onPressed: _cancelling ? null : _confirmAndCancel,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DriverAdminDetailPage extends StatefulWidget {
+  final String uid;
+  final Map<String, dynamic> initialData;
+  const _DriverAdminDetailPage(
+      {required this.uid, required this.initialData});
+
+  @override
+  State<_DriverAdminDetailPage> createState() =>
+      _DriverAdminDetailPageState();
+}
+
+class _DriverAdminDetailPageState extends State<_DriverAdminDetailPage> {
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _userStream =
+      FirebaseFirestore.instance.collection('users').doc(widget.uid).snapshots();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _ridesStream =
+      FirebaseFirestore.instance
+          .collection('serviceRequests')
+          .where('workerUid', isEqualTo: widget.uid)
+          .snapshots();
+
+  bool _busy = false;
+
+  static const _activeStatuses = {'accepted', 'confirmed', 'in_progress'};
+
+  Future<void> _setAccountStatus(String s) async {
+    setState(() => _busy = true);
+    try {
+      await _setDriverAccountStatus(widget.uid, s);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _approve(Map<String, dynamic> data) async {
+    setState(() => _busy = true);
+    try {
+      final doc = await _findPendingDriverDoc(widget.uid);
+      if (doc == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Pending application not found')));
+        }
+        return;
+      }
+      if (!mounted) return;
+      await _acceptWorker(context, doc.id, widget.uid, doc.data());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _reject() async {
+    setState(() => _busy = true);
+    try {
+      final doc = await _findPendingDriverDoc(widget.uid);
+      if (doc == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Pending application not found')));
+        }
+        return;
+      }
+      if (!mounted) return;
+      await _rejectWorker(context, doc.id, widget.uid);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Widget _docThumb(String label, String url) {
+    if (url.isEmpty) return const SizedBox.shrink();
+    return _docThumbShared(context, label, url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AuroraBackground(
+      child: Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        title: const Text('Driver details',
+            style: TextStyle(
+                color: AppColors.kmText, fontWeight: FontWeight.w800)),
+        backgroundColor: Colors.transparent,
+        foregroundColor: AppColors.kmText,
+        elevation: 0,
+      ),
+      body: SafeArea(
+          child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            stream: _userStream,
+            builder: (context, userSnap) {
+              final data = userSnap.data?.data() ?? widget.initialData;
+              final name =
+                  '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}'.trim();
+              final online = data['isOnline'] != false;
+              final accountStatus = (data['accountStatus'] ?? 'active').toString();
+              final vStatus = (data['verificationStatus'] ??
+                      data['workerVerificationStatus'] ??
+                      'pending')
+                  .toString();
+              final rejectionReason = (data['rejectionReason'] ?? '').toString();
+              final ratingCount = (data['ratingCount'] ?? 0) as num;
+              final ratingSum = (data['ratingSum'] ?? 0) as num;
+              final avgRating =
+                  ratingCount > 0 ? (ratingSum / ratingCount) : 0;
+
+              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _ridesStream,
+                builder: (context, rideSnap) {
+                  final docs = (rideSnap.data?.docs ?? [])
+                      .map((d) => d.data())
+                      .toList();
+                  final active = docs
+                      .where((d) => _activeStatuses
+                          .contains((d['status'] ?? '').toString()))
+                      .length;
+                  final completed = docs
+                      .where((d) => (d['status'] ?? '').toString() == 'completed')
+                      .toList()
+                    ..sort((a, b) {
+                      final ta = a['completedAt'];
+                      final tb = b['completedAt'];
+                      if (ta is Timestamp && tb is Timestamp) {
+                        return tb.compareTo(ta);
+                      }
+                      return 0;
+                    });
+                  final gross = completed.fold<num>(
+                      0, (a, d) => a + ((d['finalPrice'] ?? d['proposedPrice'] ?? 0) as num));
+
+                  final locUpdated = data['locationUpdatedAt'];
+                  String lastSeen = '—';
+                  if (locUpdated is Timestamp) {
+                    lastSeen = _fmtTime(locUpdated);
+                  }
+
+                  return ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+                    children: [
+                      // ── प्रोफाइल हेडर ──
+                      GlassPanel(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            _KmIconBadge(Icons.local_taxi_rounded, size: 52),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(name.isEmpty ? '—' : name,
+                                      style: const TextStyle(
+                                          color: AppColors.kmText,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 17)),
+                                  Text(
+                                      '${data['phone'] ?? ''}  ·  ${data['email'] ?? ''}',
+                                      style: const TextStyle(
+                                          color: AppColors.kmMuted,
+                                          fontSize: 12.5)),
+                                  if ((data['vehicleDetails'] ?? '')
+                                      .toString()
+                                      .isNotEmpty)
+                                    Text(data['vehicleDetails'].toString(),
+                                        style: const TextStyle(
+                                            color: AppColors.kmMuted,
+                                            fontSize: 12)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // ── (१) Verification Control — Approvals/Documents ──
+                      _sectionLabel('① Verification Control'),
+                      GlassPanel(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Text('Verification status',
+                                    style: TextStyle(
+                                        color: AppColors.kmText,
+                                        fontWeight: FontWeight.w700)),
+                                const Spacer(),
+                                Pill(vStatus,
+                                    bg: vStatus == 'approved'
+                                        ? AppColors.kmTeal
+                                        : vStatus == 'rejected'
+                                            ? AppColors.kmRose
+                                            : AppColors.kmAmber,
+                                    fg: AppColors.kmInk),
+                              ],
+                            ),
+                            if (rejectionReason.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text('${S.reasonLabel}: $rejectionReason',
+                                  style: const TextStyle(
+                                      color: AppColors.kmRose, fontSize: 12.5)),
+                            ],
+                            if (vStatus == 'pending') ...[
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: SecondaryButton(
+                                      label: S.reject,
+                                      color: AppColors.kmRose,
+                                      onPressed: _busy ? null : _reject,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: PrimaryButton(
+                                      label: S.approve,
+                                      icon: Icons.check_rounded,
+                                      loading: _busy,
+                                      onPressed: () => _approve(data),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            const SizedBox(height: 16),
+                            const Text('Documents',
+                                style: TextStyle(
+                                    color: AppColors.kmText,
+                                    fontWeight: FontWeight.w700)),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: [
+                                _docThumb('Citizenship front',
+                                    (data['citizenshipFrontUrl'] ?? '').toString()),
+                                _docThumb('Citizenship back',
+                                    (data['citizenshipBackUrl'] ?? '').toString()),
+                                _docThumb(
+                                    'Selfie', (data['selfieUrl'] ?? '').toString()),
+                                _docThumb('License',
+                                    (data['drivingLicenseUrl'] ?? '').toString()),
+                                _docThumb('Vehicle reg.',
+                                    (data['vehicleRegistrationUrl'] ?? '').toString()),
+                                _docThumb('Insurance',
+                                    (data['vehicleInsuranceUrl'] ?? '').toString()),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+
+                      // ── (२) Online/Offline Status Monitoring ──
+                      _sectionLabel('② Online/Offline Status'),
+                      GlassPanel(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 14,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: online
+                                    ? AppColors.kmTeal
+                                    : Colors.black38,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(online ? 'Online now' : 'Offline',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 14.5,
+                                          color: online
+                                              ? AppColors.kmTeal
+                                              : AppColors.kmMuted)),
+                                  Text('Last location update: $lastSeen',
+                                      style: const TextStyle(
+                                          fontSize: 11,
+                                          color: AppColors.kmMuted)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+
+                      // ── (३) Account Management ──
+                      _sectionLabel('③ Account Management'),
+                      GlassPanel(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Text('Account status',
+                                    style: TextStyle(
+                                        color: AppColors.kmText,
+                                        fontWeight: FontWeight.w700)),
+                                const Spacer(),
+                                Pill(accountStatus,
+                                    bg: accountStatus == 'active'
+                                        ? AppColors.kmTeal
+                                        : accountStatus == 'suspended'
+                                            ? AppColors.kmAmber
+                                            : AppColors.kmRose,
+                                    fg: AppColors.kmInk),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 8,
+                              children: [
+                                if (accountStatus != 'active')
+                                  OutlinedButton(
+                                    onPressed:
+                                        _busy ? null : () => _setAccountStatus('active'),
+                                    child: const Text('Activate'),
+                                  ),
+                                if (accountStatus != 'suspended')
+                                  OutlinedButton(
+                                    onPressed: _busy
+                                        ? null
+                                        : () => _setAccountStatus('suspended'),
+                                    child: const Text('Suspend',
+                                        style: TextStyle(color: AppColors.kmAmber)),
+                                  ),
+                                if (accountStatus != 'blocked')
+                                  OutlinedButton(
+                                    onPressed:
+                                        _busy ? null : () => _setAccountStatus('blocked'),
+                                    child: const Text('Block',
+                                        style: TextStyle(color: AppColors.kmRose)),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+
+                      // ── (४) Ride & Earnings History ──
+                      _sectionLabel('④ Ride & Earnings History'),
+                      GlassPanel(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 16,
+                              runSpacing: 8,
+                              children: [
+                                _statChip('Active rides', '$active'),
+                                _statChip('Completed', '${completed.length}'),
+                                _statChip('Rating',
+                                    ratingCount > 0 ? avgRating.toStringAsFixed(1) : '—'),
+                                _statChip('Gross earned', 'Rs. ${gross.round()}'),
+                              ],
+                            ),
+                            Divider(height: 24, color: AppColors.kmGlassBorder),
+                            const Text('Recent rides',
+                                style: TextStyle(
+                                    color: AppColors.kmText,
+                                    fontWeight: FontWeight.w700)),
+                            const SizedBox(height: 8),
+                            if (completed.isEmpty)
+                              const Text('No completed rides yet',
+                                  style: TextStyle(
+                                      fontSize: 12.5, color: AppColors.kmMuted))
+                            else
+                              for (final r in completed.take(10)) _rideRow(r),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionLabel(String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 8, left: 2),
+        child: Text(text,
+            style: const TextStyle(
+                color: AppColors.kmText,
+                fontWeight: FontWeight.w800,
+                fontSize: 13.5)),
+      );
+
+  Widget _statChip(String label, String value) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(value,
+              style: const TextStyle(
+                  color: AppColors.kmText,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 15)),
+          Text(label,
+              style: const TextStyle(fontSize: 10.5, color: AppColors.kmMuted)),
+        ],
+      );
+
+  Widget _rideRow(Map<String, dynamic> d) {
+    final service = (d['service'] ?? '').toString();
+    final amount = (d['finalPrice'] ?? d['proposedPrice'] ?? 0) as num;
+    final employer = (d['employerName'] ?? '').toString();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text('${S.serviceName(service)} · $employer',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: AppColors.kmMuted, fontSize: 12.5)),
+          ),
+          Text('Rs. ${amount.round()}',
+              style: const TextStyle(
+                  color: AppColors.kmText,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkerRatingsTab extends StatefulWidget {
+  const _WorkerRatingsTab();
+
+  @override
+  State<_WorkerRatingsTab> createState() => _WorkerRatingsTabState();
+}
+
+class _WorkerRatingsTabState extends State<_WorkerRatingsTab> {
+  _RatingSort _sort = _RatingSort.highToLow;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+          child: Row(
+            children: [
+              const Icon(Icons.star_rounded,
+                  color: AppColors.kmOrange, size: 18),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text('Rating → monthly order quota',
+                    style: TextStyle(
+                        color: AppColors.kmText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13)),
+              ),
+              DropdownButton<_RatingSort>(
+                value: _sort,
+                dropdownColor: AppColors.kmSurface,
+                underline: const SizedBox.shrink(),
+                iconEnabledColor: AppColors.kmMuted,
+                style: const TextStyle(color: AppColors.kmText, fontSize: 12.5),
+                items: const [
+                  DropdownMenuItem(
+                      value: _RatingSort.highToLow,
+                      child: Text('High → Low')),
+                  DropdownMenuItem(
+                      value: _RatingSort.lowToHigh,
+                      child: Text('Low → High')),
+                ],
+                onChanged: (v) =>
+                    setState(() => _sort = v ?? _RatingSort.highToLow),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance
+                .collection('registeredWorkers')
+                .snapshots(),
+            builder: (context, snap) {
+              final docs = [
+                ...(snap.data?.docs ??
+                    const <QueryDocumentSnapshot<Map<String, dynamic>>>[])
+              ];
+              if (docs.isEmpty) {
+                return const _EmptyState(
+                    Icons.star_border_rounded, 'No workers yet');
+              }
+              docs.sort((a, b) {
+                final ra =
+                    double.tryParse((a.data()['rating'] ?? '0').toString()) ??
+                        0;
+                final rb =
+                    double.tryParse((b.data()['rating'] ?? '0').toString()) ??
+                        0;
+                return _sort == _RatingSort.highToLow
+                    ? rb.compareTo(ra)
+                    : ra.compareTo(rb);
+              });
+              return ListView.builder(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 20),
+                itemCount: docs.length,
+                itemBuilder: (context, i) => _WorkerRatingCard(doc: docs[i]),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _WorkerRatingCard extends StatelessWidget {
+  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+  const _WorkerRatingCard({required this.doc});
+
+  @override
+  Widget build(BuildContext context) {
+    final data = doc.data();
+    final uid = (data['uid'] ?? '').toString();
+    final name = (data['name'] ?? '—').toString();
+    final service = (data['service'] ?? '').toString();
+    final rating = (data['rating'] ?? '0.0').toString();
+    final reviews = (data['reviews'] ?? '0').toString();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GlassPanel(
+        radius: 22,
+        padding: const EdgeInsets.all(14),
+        child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: uid.isEmpty
+            ? null
+            : FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+        builder: (context, userSnap) {
+          final u = userSnap.data?.data();
+          final ratingOverride = (u?['ratingOverride'] as num?);
+          final orderLimitOverride = (u?['orderLimitOverride'] as num?);
+          final ratingSum = (u?['ratingSum'] as num?) ?? 0;
+          final ratingCount = ((u?['ratingCount'] as num?) ?? 0).toInt();
+          final computedLimit = orderLimitOverride?.toInt() ??
+              (ratingOverride != null
+                  ? monthlyOrderQuotaForRating(
+                      ratingSum: ratingOverride, reviewCount: 1)
+                  : monthlyOrderQuotaForRating(
+                      ratingSum: ratingSum, reviewCount: ratingCount));
+          final storedMonth = (u?['orderQuotaMonth'] ?? '').toString();
+          final used = storedMonth == currentQuotaMonthKey()
+              ? ((u?['orderQuotaUsed'] as num?) ?? 0).toInt()
+              : 0;
+          final hasOverride =
+              ratingOverride != null || orderLimitOverride != null;
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(name,
+                            style: const TextStyle(
+                                color: AppColors.kmText,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14.5)),
+                        if (hasOverride) ...[
+                          const SizedBox(width: 6),
+                          const Icon(Icons.edit_note_rounded,
+                              size: 15, color: AppColors.kmLilac),
+                        ],
+                      ],
+                    ),
+                    Text(service,
+                        style: const TextStyle(
+                            color: AppColors.kmMuted, fontSize: 12.5)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        const Icon(Icons.star_rounded,
+                            size: 15, color: AppColors.kmOrange),
+                        const SizedBox(width: 3),
+                        Text('$rating  ($reviews reviews)',
+                            style: const TextStyle(
+                                color: AppColors.kmText,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text('This month: $used / $computedLimit orders used',
+                        style: const TextStyle(
+                            color: AppColors.kmMuted, fontSize: 12.5)),
+                  ],
+                ),
+              ),
+              GestureDetector(
+                onTap: uid.isEmpty
+                    ? null
+                    : () => _showOverrideSheet(
+                          context,
+                          uid: uid,
+                          name: name,
+                          ratingOverride: ratingOverride,
+                          orderLimitOverride: orderLimitOverride,
+                        ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.kmOrange.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                        color: AppColors.kmOrange.withValues(alpha: 0.5)),
+                  ),
+                  child: const Text('Manage',
+                      style: TextStyle(
+                          color: AppColors.kmOrange,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12.5)),
+                ),
+              ),
+            ],
+          );
+        },
+        ),
+      ),
+    );
+  }
+}
+
+void _showOverrideSheet(
+  BuildContext context, {
+  required String uid,
+  required String name,
+  required num? ratingOverride,
+  required num? orderLimitOverride,
+}) {
+  final ratingCtrl =
+      TextEditingController(text: ratingOverride?.toString() ?? '');
+  final limitCtrl =
+      TextEditingController(text: orderLimitOverride?.toString() ?? '');
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) => Padding(
+      padding: EdgeInsets.only(
+          bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
+      child: ClipRRect(
+        borderRadius:
+            const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.kmSurface.withValues(alpha: 0.94),
+              borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(AppRadius.lg)),
+              border: Border(top: BorderSide(color: AppColors.kmGlassBorder)),
+            ),
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Manage $name',
+                    style: const TextStyle(
+                        color: AppColors.kmText,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16)),
+                const SizedBox(height: 4),
+                const Text(
+                  'Leave blank to use the automatic rating/quota. '
+                  'Set a value to override it for this worker only.',
+                  style: TextStyle(color: AppColors.kmMuted, fontSize: 12.5),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: ratingCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(color: AppColors.kmText),
+                  decoration: kmInputDecoration('Rating override (0-5)',
+                      hint: 'e.g. 3 — starter grace period'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: limitCtrl,
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(color: AppColors.kmText),
+                  decoration: kmInputDecoration(
+                      'Order limit override (per month)',
+                      hint: 'e.g. 0 to block, or a custom cap'),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: KmDialogAction(
+                        label: 'Clear overrides',
+                        onPressed: () async {
+                          await FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(uid)
+                              .set({
+                            'ratingOverride': FieldValue.delete(),
+                            'orderLimitOverride': FieldValue.delete(),
+                          }, SetOptions(merge: true));
+                          if (sheetContext.mounted) {
+                            Navigator.pop(sheetContext);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: KmCtaButton(
+                        label: 'Save',
+                        onPressed: () async {
+                          final ratingVal =
+                              double.tryParse(ratingCtrl.text.trim());
+                          final limitVal =
+                              int.tryParse(limitCtrl.text.trim());
+                          await FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(uid)
+                              .set({
+                            'ratingOverride': ratingVal ?? FieldValue.delete(),
+                            'orderLimitOverride':
+                                limitVal ?? FieldValue.delete(),
+                          }, SetOptions(merge: true));
+                          if (sheetContext.mounted) {
+                            Navigator.pop(sheetContext);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 // ── Reports ──────────────────────────────────────────────────────────────────
@@ -1386,7 +2966,8 @@ class _ReportsTab extends StatelessWidget {
       noun: S.reportWord,
       deleteOne: (id, _) =>
           FirebaseFirestore.instance.collection('reports').doc(id).delete(),
-      rowBuilder: (context, id, data, checkbox, deleteThis) => AppCard(
+      rowBuilder: (context, id, data, checkbox, deleteThis) => GlassPanel(
+        radius: 20,
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1395,17 +2976,20 @@ class _ReportsTab extends StatelessWidget {
               children: [
                 checkbox,
                 const Icon(Icons.report_problem_outlined,
-                    color: AppColors.danger, size: 18),
+                    color: AppColors.kmRose, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     (data['category'] ?? 'Report').toString(),
                     style: const TextStyle(
-                        fontWeight: FontWeight.w700, fontSize: 14.5),
+                        color: AppColors.kmText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14.5),
                   ),
                 ),
                 Text(_fmtTime(data['createdAt']),
-                    style: Theme.of(context).textTheme.bodySmall),
+                    style: const TextStyle(
+                        color: AppColors.kmMuted, fontSize: 11)),
                 _DeleteBtn(deleteThis),
               ],
             ),
@@ -1414,7 +2998,7 @@ class _ReportsTab extends StatelessWidget {
               _kv(context, Icons.person_outline, data['email'].toString()),
             const SizedBox(height: 4),
             Text((data['details'] ?? '').toString(),
-                style: Theme.of(context).textTheme.bodyMedium),
+                style: const TextStyle(color: AppColors.kmMuted)),
           ],
         ),
       ),
@@ -1440,7 +3024,8 @@ class _SupportTab extends StatelessWidget {
           .collection('supportMessages')
           .doc(id)
           .delete(),
-      rowBuilder: (context, id, data, checkbox, deleteThis) => AppCard(
+      rowBuilder: (context, id, data, checkbox, deleteThis) => GlassPanel(
+        radius: 20,
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1449,17 +3034,20 @@ class _SupportTab extends StatelessWidget {
               children: [
                 checkbox,
                 const Icon(Icons.support_agent_rounded,
-                    color: AppColors.lime, size: 18),
+                    color: AppColors.kmOrange, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     (data['topic'] ?? 'Message').toString(),
                     style: const TextStyle(
-                        fontWeight: FontWeight.w700, fontSize: 14.5),
+                        color: AppColors.kmText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14.5),
                   ),
                 ),
                 Text(_fmtTime(data['createdAt']),
-                    style: Theme.of(context).textTheme.bodySmall),
+                    style: const TextStyle(
+                        color: AppColors.kmMuted, fontSize: 11)),
                 _DeleteBtn(deleteThis),
               ],
             ),
@@ -1468,7 +3056,7 @@ class _SupportTab extends StatelessWidget {
               _kv(context, Icons.person_outline, data['email'].toString()),
             const SizedBox(height: 4),
             Text((data['message'] ?? '').toString(),
-                style: Theme.of(context).textTheme.bodyMedium),
+                style: const TextStyle(color: AppColors.kmMuted)),
           ],
         ),
       ),
@@ -1478,14 +3066,12 @@ class _SupportTab extends StatelessWidget {
 
 // ── Users ────────────────────────────────────────────────────────────────────
 
-const String _ownerEmail = 'bikashbhandari1825@gmail.com';
-
 class _UsersTab extends StatelessWidget {
   const _UsersTab();
 
   /// user + सम्बन्धित docs सबै मेटाउने (cascade)। owner लाई कहिल्यै मेट्दैन।
   static Future<void> _deleteUser(String uid, Map<String, dynamic> data) async {
-    if ((data['email'] ?? '').toString() == _ownerEmail) return;
+    if ((data['email'] ?? '').toString() == kAdminEmail) return;
     final db = FirebaseFirestore.instance;
     await db.collection('users').doc(uid).delete();
     await db.collection('providers').doc(uid).delete();
@@ -1504,22 +3090,24 @@ class _UsersTab extends StatelessWidget {
       emptyIcon: Icons.people_outline,
       emptyText: 'No users yet',
       noun: S.userWord,
-      selectable: (_, d) => (d['email'] ?? '').toString() != _ownerEmail,
+      selectable: (_, d) => (d['email'] ?? '').toString() != kAdminEmail,
       deleteOne: _deleteUser,
       headerBuilder: (total) => Container(
         width: double.infinity,
         padding: const EdgeInsets.all(16),
-        color: AppColors.lime.withValues(alpha: 0.12),
+        color: AppColors.kmOrange.withValues(alpha: 0.14),
         child: Text('Total users: $total',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            style: const TextStyle(
+                color: AppColors.kmText,
+                fontSize: 16,
+                fontWeight: FontWeight.w800)),
       ),
       rowBuilder: (context, uid, data, checkbox, deleteThis) {
-        final theme = Theme.of(context);
         final status = (data['accountStatus'] ?? 'active').toString();
         final Color sc = switch (status) {
-          'suspended' => AppColors.warning,
-          'blocked' => AppColors.danger,
-          _ => AppColors.success,
+          'suspended' => AppColors.kmAmber,
+          'blocked' => AppColors.kmRose,
+          _ => AppColors.kmTeal,
         };
         Future<void> setStatus(String s) => FirebaseFirestore.instance
             .collection('users')
@@ -1527,11 +3115,12 @@ class _UsersTab extends StatelessWidget {
             .set({'accountStatus': s}, SetOptions(merge: true));
 
         final email = (data['email'] ?? '').toString();
-        final isOwner = email == _ownerEmail;
+        final isOwner = email == kAdminEmail;
         final name =
             '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}'.trim();
 
-        return AppCard(
+        return GlassPanel(
+          radius: 20,
           padding: const EdgeInsets.all(12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1547,16 +3136,18 @@ class _UsersTab extends StatelessWidget {
                             name.isEmpty
                                 ? (data['email'] ?? 'No email').toString()
                                 : name,
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w700)),
+                            style: const TextStyle(
+                                color: AppColors.kmText,
+                                fontWeight: FontWeight.w700)),
                         Text(
                             '${data['role'] ?? 'n/a'}'
                             '${email.isNotEmpty && name.isNotEmpty ? '  ·  $email' : ''}',
-                            style: theme.textTheme.bodySmall),
+                            style: const TextStyle(
+                                color: AppColors.kmMuted, fontSize: 12)),
                       ],
                     ),
                   ),
-                  Pill(status, bg: sc, fg: Colors.white),
+                  Pill(status, bg: sc, fg: AppColors.kmInk),
                 ],
               ),
               const SizedBox(height: 6),
@@ -1568,17 +3159,18 @@ class _UsersTab extends StatelessWidget {
                   if (status != 'active')
                     TextButton(
                         onPressed: () => setStatus('active'),
-                        child: const Text('Activate')),
+                        child: const Text('Activate',
+                            style: TextStyle(color: AppColors.kmTeal))),
                   if (status != 'suspended')
                     TextButton(
                         onPressed: () => setStatus('suspended'),
                         child: const Text('Suspend',
-                            style: TextStyle(color: AppColors.warning))),
+                            style: TextStyle(color: AppColors.kmAmber))),
                   if (status != 'blocked')
                     TextButton(
                         onPressed: () => setStatus('blocked'),
                         child: const Text('Block',
-                            style: TextStyle(color: AppColors.danger))),
+                            style: TextStyle(color: AppColors.kmRose))),
                   if (!isOwner) _DeleteBtn(deleteThis),
                 ],
               ),

@@ -14,6 +14,7 @@ import '../l10n/strings.dart';
 import '../services/document_service.dart';
 import '../services/upload_validation.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_ui.dart';
 
 class PortfolioScreen extends StatefulWidget {
   /// null भए current user (edit गर्न मिल्ने); दिइए त्यो कामदारको (view-only)।
@@ -36,20 +37,23 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   Future<void> _addPhoto() async {
     final src = await showModalBottomSheet<String>(
       context: context,
+      backgroundColor: AppColors.kmSurface,
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
               leading: const Icon(Icons.camera_alt_rounded,
-                  color: AppColors.igViolet),
-              title: Text(S.fromCamera),
+                  color: AppColors.kmOrange),
+              title: Text(S.fromCamera,
+                  style: const TextStyle(color: AppColors.kmText)),
               onTap: () => Navigator.pop(context, 'camera'),
             ),
             ListTile(
               leading: const Icon(Icons.photo_library_rounded,
-                  color: AppColors.igViolet),
-              title: Text(S.fromGallery),
+                  color: AppColors.kmOrange),
+              title: Text(S.fromGallery,
+                  style: const TextStyle(color: AppColors.kmText)),
               onTap: () => Navigator.pop(context, 'files'),
             ),
           ],
@@ -115,21 +119,24 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   }
 
   Future<void> _removePhoto(String url) async {
-    final ok = await showDialog<bool>(
+    final ok = await showKmDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(S.removePhoto),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(S.cancel)),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(S.delete, style: const TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
+      title: S.removePhoto,
+      icon: Icons.delete_outline_rounded,
+      iconBg: const LinearGradient(
+          colors: [AppColors.kmRose, AppColors.kmPinkDeep]),
+      actions: [
+        KmDialogAction(
+          label: S.cancel,
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        KmDialogAction(
+          label: S.delete,
+          destructive: true,
+          filled: true,
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
     );
     if (ok != true) return;
 
@@ -175,23 +182,22 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(S.workPortfolio),
+    return AuroraBackground(
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.buttonGradient),
-        ),
-      ),
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppColors.igGradient),
-        child: SafeArea(
-          child: _uid.isEmpty
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: KmScreenHeader(title: S.workPortfolio),
+              ),
+              Expanded(
+                child: _uid.isEmpty
               ? const Center(
                   child: Text('Login गर्नुहोस्',
-                      style: TextStyle(color: Colors.white)))
+                      style: TextStyle(color: AppColors.kmMuted)))
               : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                   stream: FirebaseFirestore.instance
                       .collection('providers')
@@ -214,7 +220,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                     if (urls.isEmpty && !_editable) {
                       return Center(
                         child: Text(S.portfolioEmptyOther,
-                            style: const TextStyle(color: Colors.white70)),
+                            style: const TextStyle(color: AppColors.kmMuted)),
                       );
                     }
 
@@ -229,27 +235,27 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                             onTap: _busy ? null : _addPhoto,
                             child: Container(
                               decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.16),
+                                color: Colors.white.withValues(alpha: 0.06),
                                 borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
-                                    color: Colors.white.withValues(alpha: 0.4)),
+                                    color: AppColors.kmOrange.withValues(alpha: 0.4)),
                               ),
                               child: _busy
                                   ? const Center(
                                       child: CircularProgressIndicator(
-                                          color: Colors.white,
+                                          color: AppColors.kmOrange,
                                           strokeWidth: 2.4))
                                   : Column(
                                       mainAxisAlignment:
                                           MainAxisAlignment.center,
                                       children: [
                                         const Icon(Icons.add_a_photo_rounded,
-                                            color: Colors.white, size: 26),
+                                            color: AppColors.kmOrange, size: 26),
                                         const SizedBox(height: 6),
                                         Text(S.addWorkPhoto,
                                             textAlign: TextAlign.center,
                                             style: const TextStyle(
-                                                color: Colors.white,
+                                                color: AppColors.kmText,
                                                 fontSize: 10.5)),
                                       ],
                                     ),
@@ -264,11 +270,13 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                               borderRadius: BorderRadius.circular(12),
                               child: Image.network(
                                 url,
+                                key: ValueKey(url),
                                 fit: BoxFit.cover,
+                                gaplessPlayback: true,
                                 errorBuilder: (_, __, ___) => Container(
-                                  color: Colors.white24,
+                                  color: Colors.white.withValues(alpha: 0.08),
                                   child: const Icon(Icons.broken_image_rounded,
-                                      color: Colors.white54),
+                                      color: AppColors.kmMuted),
                                 ),
                               ),
                             ),
@@ -277,6 +285,9 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                     );
                   },
                 ),
+              ),
+            ],
+          ),
         ),
       ),
     );
