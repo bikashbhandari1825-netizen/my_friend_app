@@ -327,15 +327,19 @@ class _ChatScreenState extends State<ChatScreen> {
         bytes: bytes,
       );
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      await _messages.add({
-        'senderUid': uid,
-        'type': 'image',
-        'imageUrl': url,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      await ChatMediaService.withRetry(
+        () => _messages.add({
+          'senderUid': uid,
+          'type': 'image',
+          'imageUrl': url,
+          'createdAt': FieldValue.serverTimestamp(),
+        }),
+        debugLabel: 'message image',
+      );
       _stampLast('📷 ${S.photo}');
     } catch (e) {
-      _snack(ChatMediaService.friendlyUploadError(e));
+      _snack(ChatMediaService.friendlyUploadError(e),
+          onRetry: () => _sendImage(bytes));
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }
@@ -353,17 +357,21 @@ class _ChatScreenState extends State<ChatScreen> {
         ext: ext,
       );
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      await _messages.add({
-        'senderUid': uid,
-        'type': 'video',
-        'videoUrl': url,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      await ChatMediaService.withRetry(
+        () => _messages.add({
+          'senderUid': uid,
+          'type': 'video',
+          'videoUrl': url,
+          'createdAt': FieldValue.serverTimestamp(),
+        }),
+        debugLabel: 'message video',
+      );
       _stampLast('🎥 ${S.video}');
     } on VideoTooLargeException {
       _snack(S.videoTooLarge);
     } catch (e) {
-      _snack(ChatMediaService.friendlyUploadError(e));
+      _snack(ChatMediaService.friendlyUploadError(e),
+          onRetry: () => _sendVideo(bytes, ext));
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }
@@ -521,23 +529,34 @@ class _ChatScreenState extends State<ChatScreen> {
         ext: ext,
       );
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      await _messages.add({
-        'senderUid': uid,
-        'type': 'audio',
-        'audioUrl': url,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      await ChatMediaService.withRetry(
+        () => _messages.add({
+          'senderUid': uid,
+          'type': 'audio',
+          'audioUrl': url,
+          'createdAt': FieldValue.serverTimestamp(),
+        }),
+        debugLabel: 'message voice',
+      );
       _stampLast('🎤 ${S.voiceMessage}');
     } catch (e) {
-      _snack(ChatMediaService.friendlyUploadError(e));
+      _snack(ChatMediaService.friendlyUploadError(e),
+          onRetry: () => _sendVoiceBytes(bytes, ext));
     } finally {
       if (mounted) setState(() => _sendingMedia = false);
     }
   }
 
-  void _snack(String m) {
+  /// [onRetry] दिए (media पठाउन असफल भएको खण्डमा) — SnackBar मै "फेरि
+  /// प्रयास" बटन देखिन्छ, प्रयोगकर्ताले chat पूरै फेरि खोल्नु नपरोस् भनेर।
+  void _snack(String m, {VoidCallback? onRetry}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(m),
+      action: onRetry == null
+          ? null
+          : SnackBarAction(label: S.retryWord, onPressed: onRetry),
+    ));
   }
 
   String _time(dynamic ts) {

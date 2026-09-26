@@ -18,8 +18,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 
 import '../l10n/strings.dart';
@@ -27,6 +28,61 @@ import 'document_service.dart' show DocumentService;
 
 class ChatMediaService {
   ChatMediaService._();
+
+  /// क्षणिक (transient) Storage/Firestore त्रुटि कोड — retry ले साँच्चै
+  /// मद्दत गर्न सक्छ, नत्र सधैँ फेरि खोल्नुपर्ने बन्थ्यो।
+  static const _transientRetryCodes = {
+    'retry-limit-exceeded',
+    'canceled',
+    'unknown',
+    'deadline-exceeded',
+    'unavailable',
+    'aborted',
+    'internal',
+  };
+
+  /// Upload अपलोड र त्यसपछिको Firestore message-लेखन दुवैले साझा गर्ने
+  /// retry wrapper — पहिले कुनै पनि Storage/network हिचकिचाहट भएमा सिधै
+  /// "पठाउन सकिएन — यो chat फेरि खोलेर प्रयास गर्नुहोस्" त्रुटि देखिन्थ्यो,
+  /// अनि chat फेरि खोल्दा (Firebase Auth/Storage को SDK ले भित्रभित्रै आफ्नो
+  /// ID token फेरि सिंक गर्ने मौका पाउने भएकोले) प्रायः सफलै हुन्थ्यो — जुन
+  /// देखाउँछ समस्या प्रायः वास्तविक अनुमति समस्या थिएन, ID token अझै पूर्ण
+  /// रूपमा propagate नभएको क्षणिक race थियो (विशेष गरी भर्खरै sign-in भएपछि
+  /// वा app resume भएपछि chat तुरुन्तै खोलेर पहिलो फोटो पठाउँदा)। अब:
+  ///  (१) `permission-denied`/`unauthorized` आएमा — ID token जबरजस्ती
+  ///      refresh गरेर (`getIdToken(true)`) एकपटक फेरि प्रयास,
+  ///  (२) क्षणिक network/server त्रुटिमा — छोटो backoff सहित थप पटकसम्म,
+  ///  (३) अरू (invalid-file, storage-not-setup, वास्तविक participant होइन)
+  ///      मा — retry ले सहयोग नगर्ने भएकोले सिधै असफल, ताकि प्रयोगकर्ताले
+  ///      स्पष्ट सन्देश तुरुन्तै देख्न पाओस्।
+  /// हरेक असफल प्रयास `debugPrint` मार्फत raw error/code सहित लेखिन्छ —
+  /// अझै असफल भए `flutter logs`/डिभाइस logcat बाट साँचो कारण छुट्टै भेट्टाउन।
+  static Future<T> withRetry<T>(Future<T> Function() attempt,
+      {String debugLabel = 'media'}) async {
+    Object lastError = StateError('unreachable');
+    for (var i = 0; i < 3; i++) {
+      try {
+        return await attempt();
+      } catch (e) {
+        lastError = e;
+        final code = e is FirebaseException ? e.code : null;
+        debugPrint(
+            'CHAT_MEDIA_RETRY label=$debugLabel attempt=$i code=$code error=$e');
+        if (i == 0 && (code == 'unauthorized' || code == 'permission-denied')) {
+          try {
+            await FirebaseAuth.instance.currentUser?.getIdToken(true);
+          } catch (_) {}
+          continue;
+        }
+        if (code != null && _transientRetryCodes.contains(code) && i < 2) {
+          await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
+          continue;
+        }
+        rethrow;
+      }
+    }
+    throw lastError;
+  }
 
   /// फोटो — पठाउनुअघि नै resize+re-encode (लामो छेउ बढीमा १२८०px, JPEG
   /// गुणस्तर ~७०) — मोबाइल data/Storage bandwidth दुवैमा ठूलो बचत, र
@@ -54,17 +110,19 @@ class ChatMediaService {
     required String path,
     required Uint8List bytes,
     required String contentType,
-  }) async {
-    final ref = FirebaseStorage.instance.ref(path);
-    await ref.putData(
-      bytes,
-      SettableMetadata(
-        contentType: contentType,
-        // chat media निजी कुराकानीको हिस्सा हो — public/लामो cache होइन।
-        cacheControl: 'private, max-age=3600',
-      ),
-    );
-    return ref.getDownloadURL();
+  }) {
+    return withRetry(() async {
+      final ref = FirebaseStorage.instance.ref(path);
+      await ref.putData(
+        bytes,
+        SettableMetadata(
+          contentType: contentType,
+          // chat media निजी कुराकानीको हिस्सा हो — public/लामो cache होइन।
+          cacheControl: 'private, max-age=3600',
+        ),
+      );
+      return ref.getDownloadURL();
+    }, debugLabel: 'upload $path');
   }
 
   /// फोटो — compress गरेर अपलोड, JPEG मै (सबैभन्दा साना/व्यापक रूपमा
