@@ -1239,9 +1239,18 @@ class _OfferSheetState extends State<OfferSheet> {
         ));
       }
       if (!mounted) return;
-      Navigator.pop(context);
+      // यो OfferSheet आफैं यहीँ pop हुने भएकोले, त्यसपछि (dialog देखाउन,
+      // र dialog कै OK बटनले फेरि pop गर्न) यसैको `context` फेरि प्रयोग
+      // गर्नु खतरनाक — sheet pop भएपछि यो State disposed हुन्छ, र OK बटन
+      // थिचुन्जेल त्यो disposal पूरै भइसकेको हुन्छ, जसले "This widget has
+      // been unmounted" क्र्यास दिन्थ्यो (ठ्याक्कै यो गुनासोको जड)। यसको
+      // सट्टा Navigator पोप गर्नुअघि नै त्यसको State (सधैँ mounted रहने,
+      // यो एउटा नेस्टेड route पप हुँदा असर नपर्ने) समातेर राख्ने।
+      final navigator = Navigator.of(context);
+      navigator.pop();
+      if (!navigator.mounted) return;
       showKmDialog(
-        context: context,
+        context: navigator.context,
         title: S.offerSentTitle,
         message: S.offerSentBody,
         icon: Icons.check_circle_rounded,
@@ -1257,8 +1266,8 @@ class _OfferSheetState extends State<OfferSheet> {
               // पठाइसकेकोले उही पुरानो "Post job"/नजिकका worker list
               // पर्दामा फर्किनु user लाई अन्योलमा पार्थ्यो (फेरि केही
               // गर्नुपर्ने जस्तो देखिने), सिधै अघिल्लो (home) screen मा।
-              Navigator.pop(context); // dialog
-              Navigator.pop(context); // ServiceMapScreen
+              navigator.pop(); // dialog
+              navigator.pop(); // ServiceMapScreen
             },
           ),
         ],
