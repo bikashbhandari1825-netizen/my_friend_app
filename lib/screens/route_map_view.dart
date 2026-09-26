@@ -531,20 +531,20 @@ class _RouteMapViewState extends State<RouteMapView>
           // बेग्लै `_pulse` controller ले चलेको halo) कुनै हालतमा त्यही
           // कारणले repaint हुनु पर्दैन।
           if (_pulseAt != null)
-            RepaintBoundary(
-              child: Positioned(
-                left: _pulseAt!.dx - 70,
-                top: _pulseAt!.dy - 70,
+            Positioned(
+              left: _pulseAt!.dx - 70,
+              top: _pulseAt!.dy - 70,
+              child: RepaintBoundary(
                 child: PulseRings(t: _pulse, color: AppColors.kmPurple),
               ),
             ),
 
           // ── दूरी/समय — नक्सामाथि सधैँ देखिने pill, कुनै tap नचाहिने ──
-          RepaintBoundary(
-            child: Positioned(
-              top: 14,
-              left: 12,
-              right: 12,
+          Positioned(
+            top: 14,
+            left: 12,
+            right: 12,
+            child: RepaintBoundary(
               child: Center(child: _summaryPill(theme)),
             ),
           ),
