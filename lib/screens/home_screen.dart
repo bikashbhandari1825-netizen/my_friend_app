@@ -130,6 +130,12 @@ class _HomeScreenState extends State<HomeScreen>
   static const double _sheetMin = 0.16;
   static const double _sheetMax = 0.82;
 
+  // Ride hero card को अनुमानित उचाइ — "मेरो स्थान" बटनलाई त्यसमाथि नै
+  // राख्न (माथि हेर्नुहोस्)। card कै content स्थिर (कहिल्यै dynamic worker
+  // list जस्तो नबढ्ने) भएकोले fixed constant नै पर्याप्त — GlobalKey
+  // measurement (service_map_screen.dart मा पहिले भएको जस्तो lag) चाहिँदैन।
+  static const double _kRideHeroCardHeight = 132.0;
+
   @override
   void initState() {
     super.initState();
@@ -676,14 +682,37 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ),
 
-          // ── Floating "my location" button — प्यानलभन्दा माथि सर्दै ──
+          // ── Ride-sharing hero card — प्यानलभन्दा ठ्याक्कै माथि, त्यसैसँगै
+          // (live extent, कुनै lag बिना) तान्दा/खुल्दा-बन्द हुँदा सर्दै।
+          // Worker preview card (तल) देखिएको बेला यही ठाउँमा भिड्ने भएकोले
+          // त्यसबेला लुक्छ। थिच्नेबित्तिकै सिधै ride booking (Bike/Car)
+          // बाहेक अरू कुनै सेवासँग कहिल्यै मिसिँदैन — `_openService('Driver')`
+          // ले नै (माथि हेर्नुहोस्) सधैँ त्यही isolated बाटो प्रयोग गर्छ।
+          if (_selectedWorker == null)
+            ValueListenableBuilder<double>(
+              valueListenable: _sheetExtent,
+              builder: (context, ext, __) {
+                final h = MediaQuery.of(context).size.height;
+                return Positioned(
+                  left: 14,
+                  right: 14,
+                  bottom: h * ext + 12,
+                  child: _RideHeroCard(onTap: () => _openService('Driver')),
+                );
+              },
+            ),
+
+          // ── Floating "my location" button — प्यानल र (देखिएमा) माथिको
+          // ride hero card दुवैभन्दा माथि सर्दै, कहिल्यै नछोपियोस् भनेर।
           ValueListenableBuilder<double>(
             valueListenable: _sheetExtent,
             builder: (context, ext, __) {
               final h = MediaQuery.of(context).size.height;
+              final heroOffset =
+                  _selectedWorker == null ? _kRideHeroCardHeight + 12 : 0.0;
               return Positioned(
                 right: 14,
-                bottom: h * ext + 12,
+                bottom: h * ext + 12 + heroOffset,
                 child: _MyLocationBtn(
                   loading: _locating,
                   onTap: _recenterToCurrent,
@@ -1162,6 +1191,108 @@ class _BrowseAddressCard extends StatelessWidget {
                     strokeWidth: 2, color: AppColors.kmOrange),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Ride-hailing (Bike/Car) मात्रका लागि समर्पित floating hero card — premium
+/// gradient + shadow, थिच्दा (कार्ड जुनसुकै ठाउँमा वा "BOOK NOW" बटन दुवैले)
+/// सिधै त्यही isolated ride-booking बाटो (`_openService('Driver')`) खोल्छ,
+/// अरू कुनै (Plumber/Electrician/...) सेवासँग कहिल्यै मिसिँदैन।
+class _RideHeroCard extends StatelessWidget {
+  final VoidCallback onTap;
+  const _RideHeroCard({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return SpringTap(
+      onTap: onTap,
+      pressedScale: 0.97,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(18, 16, 14, 16),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              AppColors.kmPurpleDeep,
+              AppColors.kmPurple,
+              AppColors.kmTealBlue,
+            ],
+          ),
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
+          boxShadow: [
+            BoxShadow(
+                color: AppColors.kmTealBlue.withValues(alpha: 0.35),
+                blurRadius: 26,
+                offset: const Offset(0, 12)),
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 14,
+                offset: const Offset(0, 6)),
+          ],
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(S.rideHeroTitle,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.7)),
+                  const SizedBox(height: 5),
+                  Text(S.rideHeroSubtitle,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.88),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                          height: 1.25)),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3)),
+                      ],
+                    ),
+                    child: Text(S.bookNowCta,
+                        style: const TextStyle(
+                            color: AppColors.kmPurpleDeep,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.4)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              width: 54,
+              height: 54,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.16),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+              ),
+              child: const Icon(Icons.two_wheeler_rounded,
+                  color: Colors.white, size: 28),
+            ),
           ],
         ),
       ),

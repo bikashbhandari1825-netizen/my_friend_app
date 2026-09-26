@@ -212,6 +212,9 @@ class S {
   static String get changeDestination => _t('change_destination');
   static String get requestRide => _t('request_ride');
   static String get findOffer => _t('find_offer');
+  static String get rideHeroTitle => _t('ride_hero_title');
+  static String get rideHeroSubtitle => _t('ride_hero_subtitle');
+  static String get bookNowCta => _t('book_now_cta');
   static String get autoOffer => _t('auto_offer');
   static String get offerSentToPassenger => _t('offer_sent_to_passenger');
   static String get offerNoLongerAvailable => _t('offer_no_longer_available');
@@ -1279,6 +1282,15 @@ class S {
     'change_destination': {'en': 'Change', 'ne': 'बदलनुहोस्'},
     'request_ride': {'en': 'Request ride', 'ne': 'राइड माग्नुहोस्'},
     'find_offer': {'en': 'Find Offer', 'ne': 'Offer खोज्नुहोस्'},
+    'ride_hero_title': {
+      'en': 'RIDE-SHARING & MOBILITY',
+      'ne': 'राइड-सेयरिङ र यातायात',
+    },
+    'ride_hero_subtitle': {
+      'en': 'Secure & Instant Bike & Car Booking',
+      'ne': 'सुरक्षित र तुरुन्त बाइक तथा कार बुकिङ',
+    },
+    'book_now_cta': {'en': 'BOOK NOW', 'ne': 'अहिले बुक गर्नुहोस्'},
     'auto_offer': {'en': 'Auto-Offer', 'ne': 'Auto-Offer'},
     'offer_sent_to_passenger': {
       'en': 'Your offer has been sent to the passenger',
