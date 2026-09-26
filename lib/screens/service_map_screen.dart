@@ -44,7 +44,7 @@ class ServiceMapScreen extends StatefulWidget {
 }
 
 class _ServiceMapScreenState extends State<ServiceMapScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   GoogleMapController? _map;
   StreamSubscription<Position>? _posSub;
 
@@ -70,7 +70,37 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
   // माथि स्वाइप (वा header tap) गरेपछि मात्र पूरा (worker chips, भाडा
   // stepper, Post job बटन) देखिने। बन्द छँदा header row (icon + "N
   // providers nearby") मात्र देखिन्छ।
-  bool _panelExpanded = false;
+  //
+  // 0 = बन्द/peek, 1 = पूरा खुला — live drag बेला हरेक फ्रेममा औंलासँगै
+  // सिधै (कुनै setState/animation-lag बिना) अपडेट हुन्छ, छोड्दा नजिकैको
+  // छेउमा (0 वा 1) SpringSimulation ले settle गर्छ। पहिले यो साधारण
+  // `bool` थियो र panel को visual आकार `AnimatedSize` ले आफ्नै गतिमा
+  // (छुट्टै, प्यानलको साँचो rendered height पछि-मात्र GlobalKey बाट नापेर)
+  // बदल्थ्यो — ती दुई (animation कति पुग्यो vs माथिको `_RideSummaryCard`/
+  // `_ProviderCard` कहाँ टाँसिने) कहिल्यै एउटै फ्रेममा synchronized थिएनन्,
+  // त्यसैले प्यानल तान्दा/खुल्दा-बन्द हुँदा माथिको ठेगाना/सारांश बक्स
+  // एक फ्रेम ढिलो गएर छोटो समयको लागि ओभरल्याप/जर्क देखिन्थ्यो — ठ्याक्कै
+  // "प्यानल तान्दा माथिको ठेगाना बक्स नमिलेर ओभरल्याप हुने" गुनासोको साँचो
+  // जड। अब दुवै (प्यानलको आफ्नै आकार + सारांश बक्सको `bottom:`) यही एउटै
+  // `AnimationController` बाट, एउटै build/frame मा गणना हुन्छन् — कहिल्यै
+  // एक-अर्कोभन्दा फरक हुनै सक्दैन्।
+  late final AnimationController _panelCtrl = AnimationController(
+    vsync: this,
+    value: 0,
+  );
+
+  Future<void> _animatePanelTo(double target, {double velocity = 0}) {
+    // iOS/Android bottom-sheet जस्तै — critically-damped स्प्रिङ, बाउन्स
+    // नगरी सफा/छिटो settle हुने (`_pinLiftCtrl` कै damping 14 चाहिँ त्यो
+    // "nail drop" bounce-effect कै लागि जानाजानी कम राखिएको हो, यहाँ
+    // प्यानलको लागि उपयुक्त होइन)।
+    return _panelCtrl.animateWith(SpringSimulation(
+      const SpringDescription(mass: 1, stiffness: 340, damping: 30),
+      _panelCtrl.value,
+      target,
+      velocity,
+    ));
+  }
 
   // InDrive-style: ग्राहकको प्रस्तावित मूल्य (अनुमानित भाडाबाट सुरु)।
   int? _offer;
@@ -226,19 +256,54 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
   RoadRoute? _route;
   bool _routeLoading = false;
 
-  // तल्लो orange panel को उचाइ स्थिर छैन — worker chip row देखिए/नदेखिए
+  // तल्लो orange panel को "peek+chrome" (handle+header +
+  // कहिलेकाहीं vehicle-chip-row/trust-banner, + वरपरको Container
+  // padding/SafeArea) भाग को उचाइ स्थिर छैन — worker chip row देखिए/नदेखिए
   // अनुसार बढ्छ/घट्छ। _ProviderCard लाई त्यसमाथि सधैं पूरै देखिने गरी राख्न
   // (अघि hardcoded `bottom: 270` ले chip row देखिँदा panel यो भन्दा अग्लो
-  // भएर card को तल्लो भाग ढाकिदिन्थ्यो) यो panel को साँचो rendered height
-  // नाप्ने — GlobalKey बाट।
+  // भएर card को तल्लो भाग ढाकिदिन्थ्यो) यो भाग को साँचो rendered height
+  // नाप्ने — GlobalKey बाट। यो `key` सिधै पूरै panel (`ClipRRect`, peek +
+  // हाल जति खुलेको छ त्यो animated भाग दुवै सामेल) माथि छ, त्यसैले तलको
+  // measurement मा हाल कति खुलेको छ (`_panelExpandedHeight * _panelCtrl.value`)
+  // घटाएर मात्र साँचो "बन्द छँदाको" baseline निकालिन्छ — नत्र सोही अंश
+  // दोहोरिएर (एकपटक यहाँ raw measurement मार्फत, अर्कोपटक `_RideSummaryCard`
+  // को सूत्रमा छुट्टै थपिँदा) प्यानलभन्दा बढी माथि गलत ठाउँमा card पुग्थ्यो।
+  // यो भाग `_panelCtrl` ले जति नै बदलिए पनि यो baseline आफैं स्थिर रहन्छ
+  // (worker सूची/मोड बदलिँदा मात्र फेरिन्छ) — त्यसैले सामान्य post-frame
+  // measurement (एक फ्रेम ढिलो भए पनि हानि छैन, किनभने drag/animation
+  // बेला यो बदलिँदै बदलिँदैन) पर्याप्त छ।
   final _panelKey = GlobalKey();
-  double _panelHeight = 260;
+  double _panelHeight = 96;
+
+  // प्यानलको खुल्ने/बन्द हुने (animated) भागको साँचो प्राकृतिक उचाइ — worker
+  // chips + भाडा stepper + CTA + आदि। `_panelCtrl` ले जे मान भए पनि (0..1,
+  // drag/spring जुनसुकै बेला) यो भाग सधैँ पूरै (natural size मै) layout
+  // हुन्छ (`Align(heightFactor:)` ले केवल कति देखिने भन्ने मात्र नियन्त्रण
+  // गर्छ, child को आफ्नै layout कहिल्यै साँघुर्‍याउँदैन) — त्यसैले यो उचाइ
+  // drag/animation-बेला कहिल्यै बदलिँदैन (worker सूची/मोड बदलिँदा मात्र
+  // बदलिन्छ), र `_RideSummaryCard`/`_ProviderCard` को `bottom:` गणना गर्न
+  // (`_panelHeight + _panelExpandedHeight * _panelCtrl.value`) कुनै lag
+  // बिना प्रयोग गर्न मिल्छ — दुवै एउटै build/frame मै एउटै source बाट आउने
+  // भएकोले सधैँ ठ्याक्कै synchronized।
+  final _expandedKey = GlobalKey();
+  double _panelExpandedHeight = 300;
 
   void _measurePanel() {
+    final expandedBox =
+        _expandedKey.currentContext?.findRenderObject() as RenderBox?;
+    final eh = expandedBox?.size.height;
+    if (eh != null && eh > 0 && (eh - _panelExpandedHeight).abs() > 0.5) {
+      setState(() => _panelExpandedHeight = eh);
+    }
     final box = _panelKey.currentContext?.findRenderObject() as RenderBox?;
-    final h = box?.size.height;
-    if (h != null && h > 0 && (h - _panelHeight).abs() > 0.5) {
-      setState(() => _panelHeight = h);
+    final rawTotal = box?.size.height;
+    if (rawTotal != null && rawTotal > 0) {
+      final visibleExtra =
+          _panelExpandedHeight * _panelCtrl.value.clamp(0.0, 1.0);
+      final peekBaseline = rawTotal - visibleExtra;
+      if ((peekBaseline - _panelHeight).abs() > 0.5) {
+        setState(() => _panelHeight = peekBaseline);
+      }
     }
   }
 
@@ -312,6 +377,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
     _posSub?.cancel();
     _addrDebounce?.cancel();
     _pinLiftCtrl.dispose();
+    _panelCtrl.dispose();
     _map?.dispose();
     super.dispose();
   }
@@ -1053,7 +1119,16 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
               widget.serviceType, (_isRide ? rideKm : null) ?? nearestKm ?? 2.0);
           _offer ??= estFare;
 
-          return Stack(
+          // प्यानल drag/spring जुनसुकै बेला (`_panelCtrl` कै हरेक tick मा)
+          // तल्लो प्यानल आफैं र माथिको `_RideSummaryCard`/`_ProviderCard`/
+          // "Where & for how much?" बार — तीनैवटा — एउटै frame मा, एउटै
+          // स्रोतबाट फेरि rebuild होऊन् भनेर। यसैले "प्यानल तान्दा माथिको
+          // ठेगाना बक्स एक फ्रेम ढिलो गएर ओभरल्याप हुने" समस्या जरैदेखि
+          // हट्छ — दुवैको स्थिति गणना गर्ने सूत्र (तल हेर्नुहोस्) कहिल्यै
+          // फरक-फरक frame मा मूल्याङ्कन हुँदैन।
+          return AnimatedBuilder(
+            animation: _panelCtrl,
+            builder: (context, _) => Stack(
             children: [
               GoogleMap(
                 initialCameraPosition: CameraPosition(
@@ -1212,8 +1287,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                       hint: _isRide && _pickingDestination
                           ? S.whereToHint
                           : S.moveMapHint,
-                      onOpenProviders: () =>
-                          setState(() => _panelExpanded = true),
+                      onOpenProviders: () => _animatePanelTo(1),
                     ),
                   ),
                 ),
@@ -1226,7 +1300,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                 Positioned(
                   left: 12,
                   right: 12,
-                  bottom: _panelHeight + 12,
+                  bottom: _panelHeight + _panelExpandedHeight * _panelCtrl.value + 12,
                   child: _bottomSearchOpen
                       ? _DestinationSearchBar(
                           key: const ValueKey('browseSearchBar'),
@@ -1251,7 +1325,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                 Positioned(
                   left: 12,
                   right: 12,
-                  bottom: _panelHeight + 12,
+                  bottom: _panelHeight + _panelExpandedHeight * _panelCtrl.value + 12,
                   child: _RideSummaryCard(
                     pickupAddress: _pickupAddress,
                     destAddress: _destAddress,
@@ -1266,7 +1340,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                 Positioned(
                   left: 12,
                   right: 12,
-                  bottom: _panelHeight + 12,
+                  bottom: _panelHeight + _panelExpandedHeight * _panelCtrl.value + 12,
                   child: _ProviderCard(
                     data: _selData!,
                     workerId: _selId!,
@@ -1319,14 +1393,37 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () =>
-                              setState(() => _panelExpanded = !_panelExpanded),
+                              _animatePanelTo(_panelCtrl.value > 0.5 ? 0 : 1),
+                          // तान्दा हरेक फ्रेम औंलासँगै सिधै (कुनै setState/
+                          // measurement-lag बिना, `AnimationController.value`
+                          // सेट गर्दा आफैं listener हरूलाई notify गर्छ) —
+                          // पहिले यहाँ `onVerticalDragUpdate` नै थिएन (केवल
+                          // `onVerticalDragEnd` को velocity हेरेर खुला/बन्द
+                          // दुई अवस्थामध्ये एक छान्ने मात्र), त्यसैले प्यानल
+                          // औंलासँगै "तानिँदै" कहिल्यै देखिँदैनथ्यो — छोड्नेबित्तिकै
+                          // मात्र एकैचोटि (220ms) जम्प हुन्थ्यो।
+                          onVerticalDragStart: (_) => _panelCtrl.stop(),
+                          onVerticalDragUpdate: (details) {
+                            final range =
+                                _panelExpandedHeight <= 0 ? 300.0 : _panelExpandedHeight;
+                            _panelCtrl.value =
+                                (_panelCtrl.value - details.delta.dy / range)
+                                    .clamp(0.0, 1.0);
+                          },
                           onVerticalDragEnd: (details) {
-                            final v = details.primaryVelocity ?? 0;
-                            if (v < -150) {
-                              setState(() => _panelExpanded = true);
-                            } else if (v > 150) {
-                              setState(() => _panelExpanded = false);
-                            }
+                            final range =
+                                _panelExpandedHeight <= 0 ? 300.0 : _panelExpandedHeight;
+                            // px/s लाई हाम्रै 0..1 scale मा — SpringSimulation
+                            // लाई सुरुवाती वेगको रूपमा चाहिन्छ।
+                            final velocity = -(details.primaryVelocity ?? 0) / range;
+                            // छोटो/ढिलो drag भए — अहिले कति पुगिसक्यो सोही
+                            // अनुसार नजिकैको छेउ; तर छिटो (निर्णायक) फ्लिक
+                            // भए — त्यही बेलाको स्थिति जे भए पनि फ्लिकको
+                            // दिशा नै जित्छ (सामान्य bottom-sheet UX)।
+                            final target = velocity.abs() > 1.2
+                                ? (velocity > 0 ? 1.0 : 0.0)
+                                : (_panelCtrl.value > 0.5 ? 1.0 : 0.0);
+                            _animatePanelTo(target, velocity: velocity);
                           },
                           child: Column(
                             children: [
@@ -1353,7 +1450,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                                     ),
                                   ),
                                   Icon(
-                                    _panelExpanded
+                                    _panelCtrl.value > 0.5
                                         ? Icons.keyboard_arrow_down_rounded
                                         : Icons.keyboard_arrow_up_rounded,
                                     color: Colors.white70,
@@ -1384,13 +1481,24 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                             ],
                           ),
                         ),
-                        AnimatedSize(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOut,
+                        // `AnimatedSize` (implicit-duration, केवल दुई
+                        // अवस्था — पूरा/खाली — बीच toggle) कै सट्टा —
+                        // `Align(heightFactor:)`: यसको child (तल
+                        // `key: _expandedKey`) सधैँ (जुनसुकै `_panelCtrl.value`
+                        // मा पनि) पूरै/natural size मै layout हुन्छ, केवल
+                        // parent ले कति देखाउने भन्ने मात्र `heightFactor`
+                        // ले तय गर्छ — त्यसैले drag/spring जुनसुकै फ्रेममा
+                        // यो सधैँ ठ्याक्कै `_panelCtrl.value` अनुरूप नै
+                        // देखिन्छ (कुनै छुट्टै 220ms animation चलिरहनु
+                        // पर्दैन, माथिकै AnimatedBuilder ले सिधै रिबिल्ड
+                        // गर्छ)। `ClipRect` ले heightFactor < 1 हुँदा
+                        // तल्लो भाग नदेखियोस् भनेर काट्छ।
+                        ClipRect(
+                          child: Align(
                           alignment: Alignment.topCenter,
-                          child: !_panelExpanded
-                              ? const SizedBox(width: double.infinity)
-                              : Column(
+                          heightFactor: _panelCtrl.value.clamp(0.0, 1.0),
+                          child: Column(
+                                  key: _expandedKey,
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                         // ── Ride-Hailing — गन्तव्य अझै छानिएको छैन भने,
@@ -1575,6 +1683,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                         ],
                                   ],
                                 ),
+                          ),
                         ),
                       ],
                     ),
@@ -1728,6 +1837,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                   ),
                 ),
             ],
+          ),
           );
         },
       ),
