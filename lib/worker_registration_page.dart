@@ -8,17 +8,21 @@
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:country_picker/country_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'auth/dev_login.dart';
+import 'auth/phone_format.dart';
 import 'l10n/strings.dart';
+import 'screens/nearby_common.dart' show serviceImageFor;
 import 'services/document_service.dart';
 import 'services/upload_validation.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_ui.dart' show SecondaryButton;
+import 'widgets/country_phone_field.dart';
 import 'widgets/glass_ui.dart';
 
 class WorkerRegistrationPage extends StatefulWidget {
@@ -33,6 +37,8 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
   final _firstName = TextEditingController();
   final _lastName = TextEditingController();
   final _phone = TextEditingController();
+  Country _phoneCountry =
+      CountryService().findByCode('NP') ?? CountryService().getAll().first;
   final _price = TextEditingController(text: '500');
   final _area = TextEditingController();
 
@@ -495,7 +501,9 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
       final priceStr = 'Rs. ${_price.text.trim()}';
       final address = '${_area.text.trim()}, $_district, Nepal';
       final name = '${_firstName.text.trim()} ${_lastName.text.trim()}'.trim();
-      final phone = _phone.text.trim();
+      final phone = _phone.text.trim().isEmpty
+          ? ''
+          : resolveE164(_phoneCountry, _phone.text);
       final email = _service == 'Driver' && _email.text.trim().isNotEmpty
           ? _email.text.trim()
           : (user.email ?? '');
@@ -780,6 +788,55 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
+  /// "Start Fresh" — rejected भएपछि यही Worker/Driver role मा नै फेरि फस्नु
+  /// नपरोस् भनेर, पूरै account मेटाएर landing page बाट फेरि कुनै पनि role
+  /// (Worker/Rider/Employer) छान्न दिने।
+  Future<void> _startFresh() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final phone = FirebaseAuth.instance.currentUser?.phoneNumber;
+    final confirm = await showKmDialog<bool>(
+      context: context,
+      title: 'फेरि सुरु गर्ने?',
+      message:
+          'यो दर्ता र account पूर्ण रूपमा मेटिनेछ। तपाईं फेरि फोन नम्बरबाट '
+          'login गरेर जुनसुकै प्रकार (Worker, Rider/Driver, Employer) '
+          'छान्न सक्नुहुन्छ।',
+      icon: Icons.restart_alt_rounded,
+      iconBg: const LinearGradient(
+          colors: [AppColors.kmRose, AppColors.kmPinkDeep]),
+      actions: [
+        KmDialogAction(
+            label: 'रद्द गर्नुहोस्', onPressed: () => Navigator.pop(context, false)),
+        KmDialogAction(
+          label: 'मेटाएर फेरि सुरु गर्नुहोस्',
+          destructive: true,
+          filled: true,
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
+    );
+    if (confirm != true) return;
+    setState(() => _saving = true);
+    try {
+      await deleteAccountCascade(uid, phone: phone);
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      final msg = e.code == 'requires-recent-login'
+          ? 'सुरक्षा कारणले, कृपया लगआउट गरेर फेरि लगइन गरी प्रयास गर्नुहोस्।'
+          : '${S.errorWord}: ${e.message}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -907,6 +964,14 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
                           fontWeight: FontWeight.w600),
                     ),
                   ),
+                  TextButton(
+                    onPressed: _saving ? null : _startFresh,
+                    child: const Text('Change role',
+                        style: TextStyle(
+                            color: AppColors.kmRose,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12.5)),
+                  ),
                 ],
               ),
             ),
@@ -927,12 +992,14 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
                 (v == null || v.trim().isEmpty) ? S.enterName : null,
           ),
           const SizedBox(height: 14),
-          TextFormField(
+          CountryPhoneField(
             controller: _phone,
-            keyboardType: TextInputType.phone,
+            country: _phoneCountry,
+            onCountryChanged: (c) => setState(() => _phoneCountry = c),
             decoration: _dec(S.phone),
-            validator: (v) =>
-                (v == null || v.trim().length < 7) ? S.enterPhone : null,
+            validator: (v) => isPlausiblePhoneDigits(digitsOnly(v ?? ''))
+                ? null
+                : S.enterPhone,
           ),
           const SizedBox(height: 14),
           DropdownButtonFormField<String>(
@@ -956,13 +1023,11 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
             Row(
               children: [
                 Expanded(
-                  child: _vehicleChip(theme, 'Bike', Icons.two_wheeler_rounded,
-                      S.bikeWord),
+                  child: _vehicleChip(theme, 'Bike', S.bikeWord),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: _vehicleChip(
-                      theme, 'Car', Icons.local_taxi_rounded, S.carWord),
+                  child: _vehicleChip(theme, 'Car', S.carWord),
                 ),
               ],
             ),
@@ -1037,8 +1102,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
     );
   }
 
-  Widget _vehicleChip(
-      ThemeData theme, String value, IconData icon, String label) {
+  Widget _vehicleChip(ThemeData theme, String value, String label) {
     final selected = _vehicleType == value;
     return GestureDetector(
       onTap: () => setState(() {
@@ -1046,7 +1110,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
         _licenseCategory ??= value == 'Bike' ? 'A' : 'B';
       }),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
         decoration: BoxDecoration(
           color: selected
               ? AppColors.kmOrange.withValues(alpha: 0.14)
@@ -1060,7 +1124,11 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
         ),
         child: Column(
           children: [
-            Icon(icon, color: selected ? AppColors.kmOrange : AppColors.kmMuted),
+            SizedBox(
+              height: 52,
+              width: double.infinity,
+              child: Image.asset(serviceImageFor(value), fit: BoxFit.contain),
+            ),
             const SizedBox(height: 6),
             Text(label,
                 style: TextStyle(

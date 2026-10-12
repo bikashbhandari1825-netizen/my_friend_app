@@ -1,13 +1,16 @@
 // employer_registration_page.dart
 // रोजगारदाता (Employer) को छुट्टै दर्ता — नाम, फोन, GPS स्थान → सिधै app मा।
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:country_picker/country_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'auth/dev_login.dart';
+import 'auth/phone_format.dart';
 import 'l10n/strings.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_ui.dart' show LocationField;
+import 'widgets/country_phone_field.dart';
 import 'widgets/glass_ui.dart';
 
 class EmployerRegistrationPage extends StatefulWidget {
@@ -23,6 +26,8 @@ class _EmployerRegistrationPageState extends State<EmployerRegistrationPage> {
   final _firstName = TextEditingController();
   final _lastName = TextEditingController();
   final _phone = TextEditingController();
+  Country _phoneCountry =
+      CountryService().findByCode('NP') ?? CountryService().getAll().first;
 
   double? _lat;
   double? _lng;
@@ -48,7 +53,7 @@ class _EmployerRegistrationPageState extends State<EmployerRegistrationPage> {
         'name': '${_firstName.text.trim()} ${_lastName.text.trim()}'.trim(),
         'phone': _phone.text.trim().isEmpty
             ? (user.phoneNumber ?? '')
-            : _phone.text.trim(),
+            : resolveE164(_phoneCountry, _phone.text),
         'email': user.email ?? '',
         'role': 'employer',
         'accountStatus': 'active',
@@ -148,14 +153,17 @@ class _EmployerRegistrationPageState extends State<EmployerRegistrationPage> {
                                 : null,
                           ),
                           const SizedBox(height: 14),
-                          TextFormField(
+                          CountryPhoneField(
                             controller: _phone,
-                            keyboardType: TextInputType.phone,
+                            country: _phoneCountry,
+                            onCountryChanged: (c) =>
+                                setState(() => _phoneCountry = c),
                             style: const TextStyle(color: AppColors.kmText),
                             decoration: kmInputDecoration(S.phone),
-                            validator: (v) => (v == null || v.trim().length < 7)
-                                ? S.enterPhone
-                                : null,
+                            validator: (v) =>
+                                isPlausiblePhoneDigits(digitsOnly(v ?? ''))
+                                    ? null
+                                    : S.enterPhone,
                           ),
                           const SizedBox(height: 20),
                           Text(S.locationSection,

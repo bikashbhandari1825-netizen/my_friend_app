@@ -10,7 +10,6 @@ import 'package:image_picker/image_picker.dart';
 
 import '../app_globals.dart';
 import '../auth/dev_login.dart';
-import '../auth/phone_landing_page.dart';
 import '../l10n/strings.dart';
 import '../report_page.dart';
 import '../saved_places_screen.dart';
@@ -101,7 +100,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('क्यामेरा खोल्न मिलेन: $e')),
+        SnackBar(content: Text(S.cameraOpenFailed(e))),
       );
     }
   }
@@ -117,7 +116,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('फाइल छान्न मिलेन: $e')),
+        SnackBar(content: Text(S.filePickFailed(e))),
       );
     }
   }
@@ -125,7 +124,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _showConfirmDialog() {
     showKmDialog(
       context: context,
-      title: 'Profile Photo राख्ने?',
+      title: S.keepProfilePhotoTitle,
       content: SizedBox(
         width: 150,
         height: 150,
@@ -151,7 +150,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             });
             Navigator.pop(context);
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Profile Photo राखियो!')),
+              SnackBar(content: Text(S.profilePhotoSaved)),
             );
           },
         ),
@@ -182,11 +181,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (ok != true) return;
     await signOutClean();
     if (!mounted) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const PhoneLandingPage()),
-      (_) => false,
-    );
+    // नयाँ PhoneLandingPage() push नगर्ने — root StreamBuilder<User?>
+    // (app.dart) लाई नै signOut() पछिको auth state अनुसार देखाउन दिने।
+    // पहिले यहाँ pushAndRemoveUntil ले त्यो reactive root route नै
+    // हटाएर एउटा static PhoneLandingPage राख्दिन्थ्यो — त्यसपछि फेरि
+    // नयाँ नम्बरले OTP verify सफल भए पनि otp_verification_page.dart कै
+    // `popUntil((route) => route.isFirst)` त्यही static page मै फर्केर
+    // अडिन्थ्यो (login सफल भए पनि welcome screen मै फर्किएको जस्तो)।
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   @override
@@ -327,8 +329,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                   ? const Icon(
                                                       Icons.person_rounded,
                                                       size: 32,
-                                                      color:
-                                                          AppColors.kmLilac)
+                                                      color: AppColors.kmLilac)
                                                   : null,
                                             ),
                                           ),
@@ -343,8 +344,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                 gradient:
                                                     AppColors.kmCtaGradient,
                                                 border: Border.all(
-                                                    color:
-                                                        AppColors.kmSurface,
+                                                    color: AppColors.kmSurface,
                                                     width: 2.5),
                                               ),
                                               child: const Icon(
@@ -369,27 +369,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                               style: const TextStyle(
                                                   color: AppColors.kmText,
                                                   fontSize: 18,
-                                                  fontWeight:
-                                                      FontWeight.w700)),
+                                                  fontWeight: FontWeight.w700)),
                                           if (email.toString().isNotEmpty)
                                             Padding(
-                                              padding: const EdgeInsets.only(
-                                                  top: 3),
+                                              padding:
+                                                  const EdgeInsets.only(top: 3),
                                               child: Text(email,
                                                   style: const TextStyle(
-                                                      color:
-                                                          AppColors.kmMuted,
+                                                      color: AppColors.kmMuted,
                                                       fontSize: 12.5)),
                                             ),
                                           if (dobFormatted.isNotEmpty)
                                             Padding(
-                                              padding: const EdgeInsets.only(
-                                                  top: 2),
+                                              padding:
+                                                  const EdgeInsets.only(top: 2),
                                               child: Text(
-                                                  'जन्ममिति: $dobFormatted',
+                                                  '${S.dob}: $dobFormatted',
                                                   style: const TextStyle(
-                                                      color:
-                                                          AppColors.kmMuted,
+                                                      color: AppColors.kmMuted,
                                                       fontSize: 12.5)),
                                             ),
                                           if (role.toString().isNotEmpty) ...[
@@ -400,16 +397,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                             ),
                                           ],
                                           if (experience != null &&
-                                              experience
-                                                  .toString()
-                                                  .isNotEmpty)
+                                              experience.toString().isNotEmpty)
                                             Padding(
-                                              padding: const EdgeInsets.only(
-                                                  top: 6),
+                                              padding:
+                                                  const EdgeInsets.only(top: 6),
                                               child: Text('अनुभव: $experience',
                                                   style: const TextStyle(
-                                                      color:
-                                                          AppColors.kmMuted,
+                                                      color: AppColors.kmMuted,
                                                       fontSize: 12.5)),
                                             ),
                                           if (role == 'worker') ...[
@@ -432,9 +426,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       .toString(),
                                   documentsPending:
                                       data['documentsPending'] == true,
-                                  reason:
-                                      (data['rejectionReason'] ?? '')
-                                          .toString(),
+                                  reason: (data['rejectionReason'] ?? '')
+                                      .toString(),
                                 ),
                               ],
                               const SizedBox(height: 14),
@@ -454,8 +447,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   )
                                 else if (role == 'worker') ...[
                                   _ProfileRow(
-                                    icon:
-                                        Icons.account_balance_wallet_rounded,
+                                    icon: Icons.account_balance_wallet_rounded,
                                     label: S.myEarnings,
                                     onTap: () => Navigator.push(
                                         context,
@@ -576,8 +568,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     side: BorderSide(
                                         color: AppColors.kmRoseSoft
                                             .withValues(alpha: 0.5)),
-                                    backgroundColor: AppColors.kmPink
-                                        .withValues(alpha: 0.1),
+                                    backgroundColor:
+                                        AppColors.kmPink.withValues(alpha: 0.1),
                                     shape: RoundedRectangleBorder(
                                         borderRadius:
                                             BorderRadius.circular(25)),
@@ -727,10 +719,16 @@ class _KycCard extends StatelessWidget {
           if (status == 'rejected' && reason.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text('${S.reasonLabel}: $reason',
-                style:
-                    const TextStyle(fontSize: 12, color: AppColors.kmMuted)),
+                style: const TextStyle(fontSize: 12, color: AppColors.kmMuted)),
           ],
-          if (documentsPending || status == 'rejected') ...[
+          // Verification पहिल्यै 'approved' भइसकेपछि फेरि कहिल्यै re-upload/
+          // resubmit बटन नदेखियोस् — पहिले `documentsPending` झन्डा (जुन
+          // status सँग स्वतन्त्र थियो) approved भइसकेपछि पनि true नै रहन
+          // सक्थ्यो, जसले गर्दा हरियो "Verified" badge र "Re-upload
+          // Documents" बटन एकैचोटि देखिन्थे — पहिलोपटक approve भइसकेपछि
+          // फेरि verify गर्नु पर्दैन भन्ने आवश्यकता विपरीत।
+          if (status != 'approved' &&
+              (documentsPending || status == 'rejected')) ...[
             const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
@@ -772,10 +770,16 @@ class _RoleBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Rider vs Worker Terminology — Bike/Car सवारी चलाउने worker लाई
+    // "{Service} Worker" (जस्तै "Bike Worker") भन्दा "{Service} Rider"
+    // ("Bike Rider") बुझ्न सजिलो — साधारण job-service worker (Plumber
+    // आदि) मा भने पहिलेकै "Worker" यथावत्।
+    final isRide = service == 'Bike' || service == 'Car';
+    final roleWord = isRide ? S.riderRoleWord : S.workerRoleWord;
     final label = isWorker
         ? (service.isNotEmpty
-            ? '${S.serviceName(service)} ${S.workerRoleWord}'
-            : S.workerRoleWord)
+            ? '${S.serviceName(service)} $roleWord'
+            : roleWord)
         : S.employerRoleWord;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),

@@ -22,7 +22,10 @@ import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
 import '../widgets/glass_ui.dart';
 import '../widgets/status_badge.dart';
+import 'admin_settlement_screen.dart';
+import 'fare_matrix_editor_screen.dart';
 import 'help_content_editor_screen.dart';
+import 'payment_config_editor_screen.dart';
 import 'job_actions.dart'
     show
         currentQuotaMonthKey,
@@ -283,7 +286,7 @@ class _AdminSelectableListState extends State<_AdminSelectableList> {
             tristate: true,
             activeColor: AppColors.kmOrange,
             checkColor: AppColors.kmInk,
-            side: BorderSide(color: AppColors.kmMuted, width: 1.6),
+            side: const BorderSide(color: AppColors.kmMuted, width: 1.6),
             onChanged: (_busy || selectableIds.isEmpty)
                 ? null
                 : (_) => setState(() {
@@ -499,28 +502,44 @@ class OwnerDashboardScreen extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
                   child: Row(
                     children: [
-                      Expanded(
+                      const Expanded(
                         child: KmScreenHeader(title: 'Admin'),
                       ),
-                      IconTheme.merge(
-                        data: const IconThemeData(color: AppColors.kmText),
-                        child: const Row(children: [
-                          _SupportNumberButton(),
-                          _HelpContentButton(),
-                          _AppUpdateButton(),
-                          _NotifBell(),
-                        ]),
+                      // सातवटा action icon (Support/Help/Fare/Payment/
+                      // Settlement/AppUpdate/Notif) — साँघुरो/साना फोनमा
+                      // यी सबै एकैचोटि Row मा नअटी दायाँतर्फ RenderFlex
+                      // "RIGHT OVERFLOWED" पट्टी देखिने भएकोले (नयाँ
+                      // Payment/Settlement बटन थपेपछि झन् बिग्रिएको),
+                      // Flexible + horizontal-scroll भित्र राखेर जुनसुकै
+                      // स्क्रिन चौडाइमा पनि कहिल्यै overflow नहोस् भनेर —
+                      // साँघुरो फोनमा बाँकी icon स्वाइप गरेर भेटिन्छन्।
+                      Flexible(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: IconTheme.merge(
+                            data: const IconThemeData(color: AppColors.kmText),
+                            child: const Row(children: [
+                              _SupportNumberButton(),
+                              _HelpContentButton(),
+                              _FareMatrixButton(),
+                              _PaymentConfigButton(),
+                              _SettlementButton(),
+                              _AppUpdateButton(),
+                              _NotifBell(),
+                            ]),
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 4),
                     ],
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 14, 16, 0),
                   child: GlassPanel(
                     radius: 22,
-                    padding: const EdgeInsets.all(4),
-                    child: const TabBar(
+                    padding: EdgeInsets.all(4),
+                    child: TabBar(
                       isScrollable: true,
                       dividerColor: Colors.transparent,
                       labelColor: AppColors.kmInk,
@@ -639,6 +658,63 @@ class _HelpContentButton extends StatelessWidget {
       onPressed: () => Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const HelpContentEditorScreen()),
+      ),
+    );
+  }
+}
+
+/// भाडा दर (base/per-km/per-minute/minimum/round-to) — यहाँबाट
+/// FareMatrixEditorScreen खोल्ने (`config/fareMatrix`,
+/// config/app_config.dart::FareMatrixConfig)।
+class _FareMatrixButton extends StatelessWidget {
+  const _FareMatrixButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: const Icon(Icons.payments_outlined),
+      tooltip: 'Fare Management',
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const FareMatrixEditorScreen()),
+      ),
+    );
+  }
+}
+
+/// Commission % र gateway (eSewa/Khalti/Bank-ConnectIPS) enable/credential
+/// सेटिङ — यहाँबाट PaymentConfigEditorScreen खोल्ने (`config/payments`,
+/// config/app_config.dart::PaymentConfig)।
+class _PaymentConfigButton extends StatelessWidget {
+  const _PaymentConfigButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: const Icon(Icons.account_balance_outlined),
+      tooltip: 'Payment & Commission',
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const PaymentConfigEditorScreen()),
+      ),
+    );
+  }
+}
+
+/// Wallet & Commission Ledger — worker हरूको pending settlement हेर्ने/
+/// settle गर्ने (`walletLedger`/`settlements` collection, हेर्नुहोस्
+/// admin_settlement_screen.dart)।
+class _SettlementButton extends StatelessWidget {
+  const _SettlementButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: const Icon(Icons.account_balance_wallet_outlined),
+      tooltip: 'Wallet Settlement',
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const AdminSettlementScreen()),
       ),
     );
   }
@@ -1233,10 +1309,31 @@ class _PendingTab extends StatelessWidget {
       emptyText: 'No pending verifications',
       noun: S.pendingWorkerWord,
       onData: _precacheWorkerDocs,
-      deleteOne: (id, _) => FirebaseFirestore.instance
-          .collection('pendingWorkers')
-          .doc(id)
-          .delete(),
+      // DATA-SYNC FIX — पहिले यहाँ `pendingWorkers` doc मात्र मेटिन्थ्यो,
+      // सम्बन्धित `users/{uid}` कहिल्यै छोइँदैनथ्यो। Admin ले trash icon
+      // (Reject बटन होइन) थिचेर entry हटाए, Pending tab मा "No pending
+      // verifications" देखिन्थ्यो (entry गइसक्यो), तर worker को आफ्नै
+      // `users` doc मा verificationStatus अझै 'pending' नै रहन्थ्यो —
+      // त्यो worker अब कहिल्यै Pending tab मा नफर्किने भएकोले फोनमा सधैंको
+      // लागि "Your registration is submitted" मै अडिन्थ्यो। अब यहाँ पनि
+      // `_rejectWorker()` कै उस्तै `users/{uid}` लाई rejected मा सिंक गर्ने,
+      // ताकि WorkerApprovalPendingPage को live listener ले तुरुन्तै rejected
+      // UI देखाओस्।
+      deleteOne: (id, data) async {
+        final uid = (data['uid'] ?? '').toString();
+        if (uid.isNotEmpty) {
+          await FirebaseFirestore.instance.collection('users').doc(uid).set({
+            'verificationStatus': 'rejected',
+            'workerVerificationStatus': 'rejected',
+            'isVerified': false,
+            'rejectionReason': 'Application removed by admin — please register again.',
+          }, SetOptions(merge: true));
+        }
+        await FirebaseFirestore.instance
+            .collection('pendingWorkers')
+            .doc(id)
+            .delete();
+      },
       rowBuilder: (context, docId, data, checkbox, deleteThis) {
         final uid = (data['uid'] ?? '').toString();
         final name =
@@ -1250,7 +1347,7 @@ class _PendingTab extends StatelessWidget {
               Row(
                 children: [
                   checkbox,
-                  _KmIconBadge(Icons.person, size: 44),
+                  const _KmIconBadge(Icons.person, size: 44),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1450,7 +1547,7 @@ class _HistoryCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              _KmIconBadge(Icons.person, size: 44),
+              const _KmIconBadge(Icons.person, size: 44),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -1539,7 +1636,7 @@ class _RequestsTab extends StatelessWidget {
               Row(
                 children: [
                   checkbox,
-                  _KmIconBadge(Icons.assignment_rounded, size: 40),
+                  const _KmIconBadge(Icons.assignment_rounded, size: 40),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1606,8 +1703,8 @@ class DriversControlDashboard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AuroraBackground(
-      orbs: const [
+    return const AuroraBackground(
+      orbs: [
         KmOrb(Alignment.topLeft, AppColors.kmOrangeDeep),
         KmOrb(Alignment.bottomRight, AppColors.kmPurple),
       ],
@@ -1615,7 +1712,7 @@ class DriversControlDashboard extends StatelessWidget {
         backgroundColor: Colors.transparent,
         body: SafeArea(
           child: Column(
-            children: const [
+            children: [
               Padding(
                 padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
                 child: KmScreenHeader(title: 'Drivers Control Dashboard'),
@@ -1864,7 +1961,7 @@ class _DriverAdminCardState extends State<_DriverAdminCard> {
               Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  _KmIconBadge(Icons.local_taxi_rounded, size: 44),
+                  const _KmIconBadge(Icons.local_taxi_rounded, size: 44),
                   Positioned(
                     right: -1,
                     bottom: -1,
@@ -2327,7 +2424,7 @@ class _DriverAdminDetailPageState extends State<_DriverAdminDetailPage> {
                         padding: const EdgeInsets.all(16),
                         child: Row(
                           children: [
-                            _KmIconBadge(Icons.local_taxi_rounded, size: 52),
+                            const _KmIconBadge(Icons.local_taxi_rounded, size: 52),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(

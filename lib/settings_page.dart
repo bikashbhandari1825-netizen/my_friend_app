@@ -1,10 +1,8 @@
 // settings_page.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'app_globals.dart';
 import 'auth/dev_login.dart';
-import 'auth/phone_landing_page.dart';
 import 'l10n/strings.dart';
 import 'main.dart'; // themeNotifier / localeNotifier प्रयोग गर्नको लागि
 import 'theme/app_theme.dart';
@@ -127,11 +125,14 @@ class _SettingsPageState extends State<SettingsPage> {
     if (confirm == true) {
       await signOutClean();
       if (!mounted) return;
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => const PhoneLandingPage()),
-        (route) => false,
-      );
+      // नयाँ PhoneLandingPage() push नगर्ने — root StreamBuilder<User?>
+      // (app.dart) लाई नै signOut() पछिको auth state अनुसार देखाउन दिने।
+      // पहिले यहाँ pushAndRemoveUntil ले त्यो reactive root route नै
+      // हटाएर एउटा static PhoneLandingPage राख्दिन्थ्यो — त्यसपछि फेरि
+      // नयाँ नम्बरले OTP verify सफल भए पनि otp_verification_page.dart कै
+      // `popUntil((route) => route.isFirst)` त्यही static page मै फर्केर
+      // अडिन्थ्यो (login सफल भए पनि welcome screen मै फर्किएको जस्तो)।
+      Navigator.of(context).popUntil((route) => route.isFirst);
     }
   }
 
@@ -164,47 +165,21 @@ class _SettingsPageState extends State<SettingsPage> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      final uid = user.uid;
-
-      // registeredWorkers collection बाट यो uid को सबै Entry हटाउने
-      final registeredSnap = await FirebaseFirestore.instance
-          .collection('registeredWorkers')
-          .where('uid', isEqualTo: uid)
-          .get();
-      for (final doc in registeredSnap.docs) {
-        await doc.reference.delete();
-      }
-
-      // pendingWorkers collection बाट यो uid को सबै Entry हटाउने
-      final pendingSnap = await FirebaseFirestore.instance
-          .collection('pendingWorkers')
-          .where('uid', isEqualTo: uid)
-          .get();
-      for (final doc in pendingSnap.docs) {
-        await doc.reference.delete();
-      }
-
-      // notifications collection पनि सफा गर्ने
-      final notifSnap = await FirebaseFirestore.instance
-          .collection('notifications')
-          .where('uid', isEqualTo: uid)
-          .get();
-      for (final doc in notifSnap.docs) {
-        await doc.reference.delete();
-      }
-
-      // युजरको मुख्य प्रोफाइल मेटाउने
-      await FirebaseFirestore.instance.collection('users').doc(uid).delete();
-
-      // Firebase Auth बाट खाता मेटाउने
-      await user.delete();
+      // CRITICAL FIX — डिलिट गर्नुअघि यही फोन नम्बर समातिराख्ने (real
+      // phone-auth भए `user.phoneNumber`, test-mode भए `activeTestPhone`)।
+      // `deleteAccountCascade` भित्र `phoneAccounts` index पूरै मेटाउनको
+      // लागि चाहिने — नत्र त्यो index पुरानै uid तिर नै देखाइरहने (नयाँ
+      // account auth मात्र मेटिएर, index भने बाँकी रहने) र भोलि उही
+      // नम्बरले फेरि login गर्दा `linkPhoneToUid()` ले त्यो (अब नष्ट
+      // भइसकेको) पुरानो uid बाट "migrate" प्रयास गर्ने।
+      final deletedPhone = user.phoneNumber ?? activeTestPhone;
+      await deleteAccountCascade(user.uid, phone: deletedPhone);
 
       if (!mounted) return;
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => const PhoneLandingPage()),
-        (route) => false,
-      );
+      // नयाँ PhoneLandingPage() push नगर्ने — root StreamBuilder<User?>
+      // (app.dart) लाई नै signOut() पछिको auth state अनुसार देखाउन दिने
+      // (हेर्नुहोस् माथिकै logout बटनको उस्तै fix)।
+      Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       if (e.code == 'requires-recent-login') {

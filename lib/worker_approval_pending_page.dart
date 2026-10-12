@@ -6,11 +6,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'app_globals.dart' show activeTestPhone;
 import 'auth/dev_login.dart';
 import 'driver_registration_flow.dart';
 import 'l10n/strings.dart';
 import 'screens/document_resync_page.dart';
 import 'theme/app_theme.dart';
+import 'widgets/app_ui.dart' show SecondaryButton;
 import 'widgets/glass_ui.dart';
 import 'worker_registration_page.dart';
 
@@ -27,12 +29,65 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
   // (WorkerApprovedCelebration मार्फत)। यो page ले बस् static _approved()
   // देखाउँछ — gate ले तुरुन्तै अर्को screen मा लैजान्छ।
 
+  bool _startingFresh = false;
+
   Future<void> _logout() async {
     await signOutClean();
     if (!mounted) return;
     // नयाँ KaamMitraApp() नबनाउने — same rootNavigatorKey collision bug
     // (देख्नुहोस् email_auth_page.dart मा विस्तृत note)।
     Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
+  /// "Start Fresh" — rejected भएपछि worker/driver role मा नै फेरि फस्नु
+  /// नपरोस् भनेर, पूरै account (users/providers/pendingWorkers/
+  /// registeredWorkers/notifications + phoneAccounts index + Firebase
+  /// Auth) मेटाएर landing page बाट फेरि कुनै पनि role (Worker/Rider/
+  /// Employer) छान्न दिने।
+  Future<void> _startFresh() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final phone = FirebaseAuth.instance.currentUser?.phoneNumber;
+    final confirm = await showKmDialog<bool>(
+      context: context,
+      title: 'फेरि सुरु गर्ने?',
+      message:
+          'यो दर्ता र account पूर्ण रूपमा मेटिनेछ। तपाईं फेरि फोन नम्बरबाट '
+          'login गरेर जुनसुकै प्रकार (Worker, Rider/Driver, Employer) '
+          'छान्न सक्नुहुन्छ।',
+      icon: Icons.restart_alt_rounded,
+      iconBg: const LinearGradient(
+          colors: [AppColors.kmRose, AppColors.kmPinkDeep]),
+      actions: [
+        KmDialogAction(
+            label: 'रद्द गर्नुहोस्', onPressed: () => Navigator.pop(context, false)),
+        KmDialogAction(
+          label: 'मेटाएर फेरि सुरु गर्नुहोस्',
+          destructive: true,
+          filled: true,
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
+    );
+    if (confirm != true) return;
+    setState(() => _startingFresh = true);
+    try {
+      await deleteAccountCascade(uid, phone: phone ?? activeTestPhone);
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _startingFresh = false);
+      final msg = e.code == 'requires-recent-login'
+          ? 'सुरक्षा कारणले, कृपया लगआउट गरेर फेरि लगइन गरी प्रयास गर्नुहोस्।'
+          : '${S.errorWord}: ${e.message}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _startingFresh = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
+    }
   }
 
   void _reRegister({bool driverEntry = false}) {
@@ -58,10 +113,10 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
-      return AuroraBackground(
+      return const AuroraBackground(
         child: Scaffold(
           backgroundColor: Colors.transparent,
-          body: const Center(
+          body: Center(
               child: Text('Login गर्नुहोस्',
                   style: TextStyle(color: AppColors.kmMuted))),
         ),
@@ -281,6 +336,17 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
               label: S.isNepali ? 'फेरि दर्ता गर्नुहोस्' : 'Register again',
               icon: Icons.refresh_rounded,
               onPressed: () => _reRegister(driverEntry: driverEntry),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: SecondaryButton(
+              label: S.isNepali
+                  ? 'खाता मेटाएर भूमिका बदल्नुहोस्'
+                  : 'Delete & change account type',
+              color: AppColors.kmRose,
+              onPressed: _startingFresh ? null : _startFresh,
             ),
           ),
         ],
