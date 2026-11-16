@@ -6,7 +6,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:ui' show ImageFilter;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -15,7 +14,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show PlatformException;
+import 'package:flutter/services.dart' show HapticFeedback, PlatformException;
 import 'package:image_picker/image_picker.dart';
 
 import '../app_globals.dart';
@@ -23,13 +22,14 @@ import '../l10n/strings.dart';
 import '../services/chat_media_service.dart';
 import '../services/pending_media_queue.dart';
 import '../theme/app_theme.dart';
+import '../widgets/futuristic_ui.dart';
 import '../widgets/glass_ui.dart';
 import '../widgets/online_badge.dart';
 import '../widgets/spring_tap.dart';
 import '../widgets/voice_recorder_bar.dart';
 import 'call_screen.dart';
 import 'image_preview_screen.dart';
-import 'job_actions.dart' show isCommunicationUnlocked;
+import 'job_actions.dart' show kActiveJobStatuses;
 import 'video_preview_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -44,11 +44,38 @@ class ChatScreen extends StatefulWidget {
   /// default (locked) मानिन्छ।
   final String? initialStatus;
 
+  /// `requestId` कुन collection भित्रको doc हो (live status watch गर्न,
+  /// अर्को पक्षको uid नलेटे पत्ता लगाउन, र lastMessage stamp गर्न) —
+  /// Ride/service job हरूका लागि default `serviceRequests`; Hotel booking
+  /// communication (hotel_booking_pass_screen.dart/
+  /// hotel_partner_dashboard_screen.dart) ले `hotel_bookings` दिन्छ।
+  final String statusCollection;
+
+  /// caller लाई पहिल्यै थाहा भएको अर्को पक्षको uid (दिए) — दिएमा
+  /// `statusCollection` बाट uid लुकअप गर्दै जानु पर्दैन (hotel booking docs
+  /// मा `employerUid`/`workerUid` field हुँदैनन्, त्यसैले hotel काल hरूले
+  /// यो सधैं दिनुपर्छ — guest तर्फबाट `hotel.ownerId`, partner तर्फबाट
+  /// `booking.userId`)।
+  final String? otherUid;
+
+  /// कुन status मान हरूमा chat/call unlocked मानिने — ride/service job
+  /// हरूका लागि default `kActiveJobStatuses`; hotel booking ले
+  /// `kActiveHotelBookingStatuses` दिन्छ।
+  final Set<String> unlockedStatuses;
+
+  /// null = केही गर्दैन (सामान्य chat); false = खुल्नेबित्तिकै voice call;
+  /// true = video call। Salon विवरण पेजको "Call"/"Video" बटनले प्रयोग गर्छ।
+  final bool? autoStartCallVideo;
+
   const ChatScreen({
     super.key,
     required this.requestId,
     required this.workerName,
     this.initialStatus,
+    this.statusCollection = 'serviceRequests',
+    this.otherUid,
+    this.unlockedStatuses = kActiveJobStatuses,
+    this.autoStartCallVideo,
   });
 
   @override
@@ -60,13 +87,17 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scroll = ScrollController();
   bool _recordingVoice = false;
   bool _canSend = false;
-  // requestId कै live status — स्वीकृति (`accepted`/`confirmed`/
-  // `in_progress`) भएकै क्षणदेखि call/message खुल्ला रहन्छन्; काम completed
-  // भइसकेपछि फेरि लक्ड। पहिलो snapshot नआएसम्म पनि (सुरक्षित default) लक्ड
-  // नै मानिन्छ। हेर्नुहोस् `isCommunicationUnlocked` (job_actions.dart)।
+  // Communication Never Locks — booking/job status जे भए पनि (completed/
+  // cancelled/declined/pending समेत) Call/Video/Chat सधैं खुला। पहिले
+  // `_requestStatus`/`widget.unlockedStatuses` अनुसार मात्र (accepted/
+  // confirmed/in_progress) सक्रिय हुन्थ्यो — काम/booking completed भएपछि
+  // "This job is completed. Chat & calls are closed" देखिने र Call/Video
+  // बटन नै हराउने गुनासोको जड। `_requestStatus` अझै live-track हुन्छ
+  // (भविष्यमा अन्य display-मात्र प्रयोजनका लागि), तर अब communication
+  // gate गर्दैन।
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statusSub;
   late String? _requestStatus = widget.initialStatus;
-  bool get _chatActive => isCommunicationUnlocked(_requestStatus);
+  bool get _chatActive => true;
   // कल बटन थिचेपछि CallScreen तुरुन्तै (उही frame मा) push हुन्छ — कुनै
   // network round-trip पर्खिनु पर्दैन, त्यसैले छुट्टै "busy" spinner
   // चाहिँदैन। `_inCall` ले मात्र double-tap (दुइटा CallScreen एकैचोटि
@@ -117,13 +148,16 @@ class _ChatScreenState extends State<ChatScreen> {
       final can = _controller.text.trim().isNotEmpty;
       if (can != _canSend) setState(() => _canSend = can);
     });
-    _loadMyName();
+    _loadMyName().then((_) {
+      final autoVideo = widget.autoStartCallVideo;
+      if (autoVideo != null && mounted) _startCall(video: autoVideo);
+    });
     _markRead();
     _otherPartyUid().then((uid) {
       if (mounted && uid != null) setState(() => _otherUid = uid);
     });
     _statusSub = FirebaseFirestore.instance
-        .collection('serviceRequests')
+        .collection(widget.statusCollection)
         .doc(widget.requestId)
         .snapshots()
         .listen((snap) {
@@ -173,9 +207,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// (tab-independent) watcher ले गर्छ — त्यसैले यो screen खुला नभए पनि
   /// अर्को tab/screen मा भए पनि कल आएको देखिन्छ।
   Future<String?> _otherPartyUid() async {
+    if (widget.otherUid != null) return widget.otherUid;
     try {
       final doc = await FirebaseFirestore.instance
-          .collection('serviceRequests')
+          .collection(widget.statusCollection)
           .doc(widget.requestId)
           .get();
       final data = doc.data();
@@ -284,7 +319,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _stampLast(String preview) async {
     try {
       await FirebaseFirestore.instance
-          .collection('serviceRequests')
+          .collection(widget.statusCollection)
           .doc(widget.requestId)
           .set({
         'lastMessage': preview,
@@ -623,7 +658,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ? '?'
         : widget.workerName.trim()[0].toUpperCase();
 
-    return AuroraBackground(
+    return OledBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         extendBodyBehindAppBar: true,
@@ -632,14 +667,12 @@ class _ChatScreenState extends State<ChatScreen> {
         foregroundColor: AppColors.kmText,
         elevation: 0,
         flexibleSpace: ClipRRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              decoration: BoxDecoration(
-                color: AppColors.kmSurface.withValues(alpha: 0.7),
-                border: Border(
-                    bottom: BorderSide(color: AppColors.kmGlassBorder)),
-              ),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.88),
+              border: Border(
+                  bottom: BorderSide(
+                      color: kNeonTeal.withValues(alpha: 0.18))),
             ),
           ),
         ),
@@ -647,16 +680,31 @@ class _ChatScreenState extends State<ChatScreen> {
         title: Row(
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: 40,
+              height: 40,
               alignment: Alignment.center,
-              decoration: const BoxDecoration(
-                  gradient: AppColors.kmCtaGradient, shape: BoxShape.circle),
-              child: Text(initial,
-                  style: const TextStyle(
-                      color: AppColors.kmInk, fontWeight: FontWeight.w800)),
+              decoration: BoxDecoration(
+                gradient: const SweepGradient(
+                    colors: [kNeonTeal, kNeonViolet, kNeonPink, kNeonTeal]),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                      color: kNeonViolet.withValues(alpha: 0.45),
+                      blurRadius: 12),
+                ],
+              ),
+              child: Container(
+                width: 35,
+                height: 35,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                    color: Color(0xFF05050A), shape: BoxShape.circle),
+                child: Text(initial,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w800)),
+              ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -672,7 +720,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       ? Text(S.activeRecently,
                           style: const TextStyle(
                               color: AppColors.kmMuted, fontSize: 11))
-                      : OnlineBadge(uid: _otherUid, onDark: true),
+                      : OnlineBadge(uid: _otherUid, onDark: true, neon: true),
                 ],
               ),
             ),
@@ -853,9 +901,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final caption =
         completed ? S.chatLockedCompleted : S.contactLockedCaption;
     return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
+      child: glassBackdrop(sigma: 20, child: Container(
           padding: EdgeInsets.fromLTRB(
               16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
           decoration: BoxDecoration(
@@ -1000,9 +1046,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _inputBar(ThemeData theme) {
     if (_recordingVoice) {
       return ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: Container(
+        child: glassBackdrop(sigma: 20, child: Container(
             padding: EdgeInsets.fromLTRB(
                 8, 6, 8, 6 + MediaQuery.of(context).padding.bottom),
             decoration: BoxDecoration(
@@ -1019,9 +1063,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (_sendingMedia) {
       return ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: Container(
+        child: glassBackdrop(sigma: 20, child: Container(
             height: 52,
             padding: EdgeInsets.fromLTRB(
                 16, 6, 16, 6 + MediaQuery.of(context).padding.bottom),
@@ -1046,88 +1088,96 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     }
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
+    // तैरिरहेको ग्लास क्याप्सुल (OLED कालो माथि) — logic अपरिवर्तित।
+    return Padding(
       padding: EdgeInsets.fromLTRB(
-          8, 6, 8, 6 + MediaQuery.of(context).padding.bottom),
-      decoration: BoxDecoration(
-        color: AppColors.kmSurface.withValues(alpha: 0.75),
-        border: Border(top: BorderSide(color: AppColors.kmGlassBorder)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.camera_alt_rounded,
-                color: AppColors.kmOrange),
-            onPressed: _pickCamera,
-          ),
-          IconButton(
-            icon: const Icon(Icons.image_rounded, color: AppColors.kmPink),
-            onPressed: _pickGallery,
-          ),
-          IconButton(
-            icon: const Icon(Icons.videocam_rounded,
-                color: AppColors.kmTealBlue),
-            onPressed: _showVideoSourceSheet,
-          ),
-          IconButton(
-            icon: const Icon(Icons.mic_rounded, color: AppColors.kmTealBlue),
-            onPressed: () => setState(() => _recordingVoice = true),
-          ),
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              minLines: 1,
-              maxLines: 4,
-              textCapitalization: TextCapitalization.sentences,
-              style: const TextStyle(color: AppColors.kmText, fontSize: 14.5),
-              cursorColor: AppColors.kmOrange,
-              decoration: InputDecoration(
-                hintText: S.typeMessage,
-                hintStyle: const TextStyle(color: AppColors.kmMuted),
-                filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.06),
-                isDense: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(22),
-                  borderSide: BorderSide.none,
+          10, 4, 10, 10 + MediaQuery.of(context).padding.bottom),
+      child: GlassCapsule(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            CapsuleIcon(
+                icon: Icons.camera_alt_rounded,
+                color: kNeonTeal,
+                onTap: _pickCamera),
+            CapsuleIcon(
+                icon: Icons.image_rounded,
+                color: kNeonPink,
+                onTap: _pickGallery),
+            CapsuleIcon(
+                icon: Icons.videocam_rounded,
+                color: kNeonBlue,
+                onTap: _showVideoSourceSheet),
+            CapsuleIcon(
+                icon: Icons.mic_rounded,
+                color: kNeonViolet,
+                onTap: () => setState(() => _recordingVoice = true)),
+            const SizedBox(width: 4),
+            Expanded(
+              child: TextField(
+                controller: _controller,
+                minLines: 1,
+                maxLines: 4,
+                textCapitalization: TextCapitalization.sentences,
+                style: const TextStyle(color: Colors.white, fontSize: 14.5),
+                cursorColor: kNeonTeal,
+                decoration: InputDecoration(
+                  hintText: S.typeMessage,
+                  hintStyle: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.4)),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 10),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                ),
+                onSubmitted: (_) => _sendText(),
+              ),
+            ),
+            const SizedBox(width: 4),
+            AnimatedScale(
+              scale: _canSend ? 1.0 : 0.92,
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutBack,
+              child: SpringTap(
+                onTap: _canSend
+                    ? () {
+                        HapticFeedback.lightImpact();
+                        _sendText();
+                      }
+                    : null,
+                pressedScale: 0.82,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    gradient: _canSend
+                        ? const LinearGradient(
+                            colors: [kNeonTeal, kNeonViolet],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight)
+                        : null,
+                    color:
+                        _canSend ? null : Colors.white.withValues(alpha: 0.08),
+                    shape: BoxShape.circle,
+                    boxShadow: _canSend
+                        ? [
+                            BoxShadow(
+                                color: kNeonTeal.withValues(alpha: 0.55),
+                                blurRadius: 16,
+                                spreadRadius: 1),
+                          ]
+                        : null,
+                  ),
+                  child: Icon(Icons.send_rounded,
+                      size: 20,
+                      color: _canSend ? Colors.black : AppColors.kmMuted),
                 ),
               ),
-              onSubmitted: (_) => _sendText(),
             ),
-          ),
-          const SizedBox(width: 6),
-          SpringTap(
-            onTap: _canSend ? _sendText : null,
-            pressedScale: 0.82,
-            child: Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                gradient: _canSend ? AppColors.kmCtaGradient : null,
-                color: _canSend ? null : Colors.white.withValues(alpha: 0.08),
-                shape: BoxShape.circle,
-                boxShadow: _canSend
-                    ? [
-                        BoxShadow(
-                            color: AppColors.kmPink.withValues(alpha: 0.4),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4)),
-                      ]
-                    : null,
-              ),
-              child: Icon(Icons.send_rounded,
-                  size: 20,
-                  color: _canSend ? AppColors.kmInk : AppColors.kmMuted),
-            ),
-          ),
-        ],
-      ),
+          ],
         ),
       ),
     );

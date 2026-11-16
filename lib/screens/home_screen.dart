@@ -3,7 +3,6 @@
 // status banner + bottom search + horizontal service-category selector।
 import 'dart:async';
 import 'dart:typed_data' show Uint8List;
-import 'dart:ui' show ImageFilter;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -12,8 +11,10 @@ import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-import '../config/app_config.dart' show kAdminEmail;
+import '../app_globals.dart' show requestedMainTabIndex;
+import '../config/app_config.dart' show SocialLinksConfig, kAdminEmail;
 import '../l10n/strings.dart';
 import '../location_util.dart' show reverseGeocode;
 import '../saved_places_screen.dart';
@@ -25,13 +26,18 @@ import '../widgets/spring_tap.dart';
 import '../widgets/vehicle_type_picker.dart';
 import '../worker_registration_page.dart';
 import 'bookings_screen.dart';
+import 'earnings_screen.dart';
+import 'handyman_categories_screen.dart';
 import 'help_support_screen.dart';
+import 'hotel_search_screen.dart';
+import 'salon_list_screen.dart';
+import 'hotel_verification_admin_screen.dart';
 import 'messages_screen.dart';
+import 'admin_dashboard_screen.dart';
 import 'my_reviews_screen.dart';
 import 'nearby_common.dart';
 import 'nearby_screen.dart';
 import 'notification_screen.dart';
-import 'owner_dashboard_screen.dart';
 import 'payment_methods_screen.dart';
 import '../watchlist_screen.dart';
 import 'service_map_screen.dart';
@@ -54,31 +60,19 @@ class _HomeScreenState extends State<HomeScreen>
   // एकपटक मात्र subscribe — प्यानल drag हुँदा नक्सा rebuild हुँदा पनि
   // Firestore stream पुनः नजोडियोस्।
   final Stream<QuerySnapshot<Map<String, dynamic>>> _workersStream =
-      FirebaseFirestore.instance.collection('registeredWorkers').snapshots();
-
-  // तल्लो शीट release पछि नजिकको snap मा सहज रूपमा पुर्‍याउने animation।
-  late final AnimationController _sheetCtrl = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 260),
-  )..addListener(() {
-      final t = Curves.easeOutCubic.transform(_sheetCtrl.value);
-      _sheetExtent.value = _sheetFrom + (_sheetTarget - _sheetFrom) * t;
-    });
-  double _sheetFrom = _sheetInitial;
-  double _sheetTarget = _sheetInitial;
+      FirebaseFirestore.instance.collection('registeredWorkers')
+          .limit(300) // पूरै collection होइन — सर्भर भार/बिल सीमित
+          .snapshots();
 
   double _lat = fallbackLat;
   double _lng = fallbackLng;
-  double _originLat = fallbackLat;
-  double _originLng = fallbackLng;
   // प्रयोगकर्ताको वास्तविक GPS स्थान (camera सर्दा नबदलिने) — custom user pin।
   double _meLat = fallbackLat;
   double _meLng = fallbackLng;
   bool _locReady = false;
-  bool _locating = false;
-  // category chip थिच्दा अब सिधै `NearbyScreen` खुल्ने भएकोले (माथि
-  // `_openCategory` हेर्नुहोस्) यो home screen कै आफ्नै नक्सा-फिल्टर अब
-  // कहिल्यै बदलिँदैन — सधैँ 'सबै' (unfiltered) नै रहन्छ।
+  // home screen बाट अब कुनै category chip देखिँदैन (ride-sharing hero card
+  // बाहेकका सबै अरू सेवा grid हटाइएको) — यो नक्सा-फिल्टर त्यसैले सधैँ 'सबै'
+  // (unfiltered) नै रहन्छ।
   final String _pickedCategory = '';
 
   // क्याटेगोरी → custom marker bitmap (initState मा एकपटक बन्छ)।
@@ -101,10 +95,30 @@ class _HomeScreenState extends State<HomeScreen>
     duration: const Duration(milliseconds: 140),
   );
 
+  // ── ठेगाना बक्स — InDrive-शैली pin-tracking tooltip ──
+  // डिफल्टमा लुकेको रहन्छ; प्रयोगकर्ताले नक्सा touch/drag गर्नेबित्तिकै
+  // (`onCameraMoveStarted`) देखिन्छ, पिन "ड्रप" भएपछि (`onCameraIdle`) केही
+  // क्षण (~1.8s) देखिएर आफैं fade-out भई लुक्छ (`_addrHideTimer`)।
+  bool _addrVisible = false;
+  Timer? _addrHideTimer;
+
   void _scheduleBrowseGeocode() {
     _browseAddrDebounce?.cancel();
     _browseAddrDebounce =
         Timer(const Duration(milliseconds: 400), _reverseGeocodeBrowsePin);
+  }
+
+  /// झन्डाको भिजुअल टुप्पो स्क्रिनको तल्लो किनाराबाट कति माथि पर्छ —
+  /// ठेगाना बक्सलाई त्यही बिन्दुको ठ्याक्कै माथि टाँस्न (service_map_screen.dart
+  /// कै `_pinTipBottomOffset` सँगै उही सूत्र — यहाँ नक्सा/पिन overlay दुवैले
+  /// `padding: top: 70` मात्र प्रयोग गर्ने भएकोले `bottomPad = 0`)।
+  double _pinTipBottomOffset(BuildContext context) {
+    const topPad = 70.0;
+    const displayHeight = 60.0;
+    const scale = displayHeight / FlagPinGeometry.displayH;
+    final tipAboveCenter = FlagPinGeometry.anchor.dy * scale;
+    final h = MediaQuery.of(context).size.height;
+    return (h - topPad) / 2 + tipAboveCenter;
   }
 
   Future<void> _reverseGeocodeBrowsePin() async {
@@ -123,18 +137,12 @@ class _HomeScreenState extends State<HomeScreen>
   Map<String, dynamic>? _selectedWorker;
   double _selectedKm = 0;
 
-  // ड्र्यागेबल तल्लो प्यानलको अहिलेको उचाइ (screen अनुपात) — floating button
-  // सधैँ प्यानलभन्दा माथि राख्न।
-  final ValueNotifier<double> _sheetExtent = ValueNotifier<double>(0.36);
-  static const double _sheetInitial = 0.36;
-  static const double _sheetMin = 0.16;
-  static const double _sheetMax = 0.82;
-
-  // Ride hero card को अनुमानित उचाइ — "मेरो स्थान" बटनलाई त्यसमाथि नै
-  // राख्न (माथि हेर्नुहोस्)। card कै content स्थिर (कहिल्यै dynamic worker
-  // list जस्तो नबढ्ने) भएकोले fixed constant नै पर्याप्त — GlobalKey
-  // measurement (service_map_screen.dart मा पहिले भएको जस्तो lag) चाहिँदैन।
-  static const double _kRideHeroCardHeight = 132.0;
+  // worker preview card (अब practically अप्रयुक्त, माथि `_markers()` हेर्नुहोस्)
+  // लाई तल्लो किनाराबाट कति माथि राख्ने भन्ने अनुमानित offset — पहिले यहाँ
+  // देखिने Primary Action Bar/"मेरो स्थान" बटनको उचाइसँग मिलाइएको थियो, अब
+  // ती दुवै पूरा-स्क्रिन `_HomeServiceOverlay` ले replace गरिसकेकोले यो मान
+  // अब केवल legacy spacing का लागि मात्र बाँकी छ।
+  static const double _kActionBarHeight = 108.0;
 
   @override
   void initState() {
@@ -164,95 +172,10 @@ class _HomeScreenState extends State<HomeScreen>
   void dispose() {
     _posSub?.cancel();
     _browseAddrDebounce?.cancel();
+    _addrHideTimer?.cancel();
     _pinLiftCtrl.dispose();
-    _sheetCtrl.dispose();
-    _sheetExtent.dispose();
     _map?.dispose();
     super.dispose();
-  }
-
-  // ── तल्लो draggable शीट: कहीँ पनि समातेर माथि-तल तान्दा सहज स्लाइड ────────
-  static const List<double> _sheetSnaps = [
-    _sheetMin,
-    _sheetInitial,
-    _sheetMax,
-  ];
-
-  void _onSheetDrag(DragUpdateDetails d) {
-    if (_sheetCtrl.isAnimating) _sheetCtrl.stop();
-    final h = MediaQuery.of(context).size.height;
-    // माथि तान्दा (primaryDelta ऋणात्मक) शीट ठूलो हुन्छ।
-    _sheetExtent.value =
-        (_sheetExtent.value - d.primaryDelta! / h).clamp(_sheetMin, _sheetMax);
-  }
-
-  void _onSheetDragEnd(DragEndDetails d) {
-    final vy = d.velocity.pixelsPerSecond.dy; // <0 = माथि, >0 = तल
-    final cur = _sheetExtent.value;
-    double target;
-    if (vy < -350) {
-      target = _sheetSnaps.firstWhere((s) => s > cur + 0.005,
-          orElse: () => _sheetMax);
-    } else if (vy > 350) {
-      target = _sheetSnaps.lastWhere((s) => s < cur - 0.005,
-          orElse: () => _sheetMin);
-    } else {
-      target = _sheetSnaps
-          .reduce((a, b) => (a - cur).abs() <= (b - cur).abs() ? a : b);
-    }
-    _animateSheetTo(target);
-  }
-
-  void _animateSheetTo(double target) {
-    _sheetFrom = _sheetExtent.value;
-    _sheetTarget = target;
-    final dist = (_sheetTarget - _sheetFrom).abs();
-    _sheetCtrl.duration =
-        Duration(milliseconds: (140 + dist * 460).clamp(140, 460).round());
-    _sheetCtrl.forward(from: 0);
-  }
-
-  /// Pathao-style: location icon थिच्दा GPS बाट current location म्यापमा केन्द्र।
-  Future<void> _recenterToCurrent() async {
-    if (_locating) return;
-    setState(() => _locating = true);
-    try {
-      LocationPermission perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.denied ||
-          perm == LocationPermission.deniedForever) {
-        if (mounted) _showLocationModal();
-        return;
-      }
-      final p = await Geolocator.getCurrentPosition(
-        locationSettings:
-            const LocationSettings(accuracy: LocationAccuracy.high),
-      ).timeout(const Duration(seconds: 12));
-      if (!mounted) return;
-      setState(() {
-        _lat = p.latitude;
-        _lng = p.longitude;
-        _meLat = p.latitude;
-        _meLng = p.longitude;
-      });
-      _programmaticCameraMove = true;
-      await _map?.animateCamera(
-        CameraUpdate.newLatLngZoom(LatLng(_meLat, _meLng), 15.5),
-      );
-      _programmaticCameraMove = false;
-      _reverseGeocodeBrowsePin();
-      if (_posSub == null) _startTracking();
-    } catch (_) {
-      _programmaticCameraMove = true;
-      await _map?.animateCamera(
-        CameraUpdate.newLatLngZoom(LatLng(_lat, _lng), 15),
-      );
-      _programmaticCameraMove = false;
-    } finally {
-      if (mounted) setState(() => _locating = false);
-    }
   }
 
   Future<void> _initLocation() async {
@@ -279,8 +202,6 @@ class _HomeScreenState extends State<HomeScreen>
         _lng = p.longitude;
         _meLat = p.latitude;
         _meLng = p.longitude;
-        _originLat = p.latitude;
-        _originLng = p.longitude;
         _locReady = true;
       });
       _programmaticCameraMove = true;
@@ -408,25 +329,77 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// क्याटेगोरी चिपमा थिच्दा — पूरा (rating/price/review सहित) provider
-  /// directory (`NearbyScreen`, त्यही सेवामा पहिल्यै फिल्टर भएर) सिधै
-  /// खुल्छ। पहिले यहाँ home screen कै आफ्नै सानो नक्सामा inline marker-फिल्टर
-  /// मात्र हुन्थ्यो — 'Driver' चिपले भने कहिल्यै यो प्रयोग गर्दैन —
-  /// ride-hailing (Bike/Car) को booking+bidding UI सधैँ छुट्टै समर्पित
-  /// screen (`_openService` कै जस्तो, ServiceMapScreen) मार्फत मात्र
-  /// खुल्नुपर्छ, सामान्य home screen को आफ्नै map/directory मा कहिल्यै
-  /// नआओस् भनेर।
-  void _openCategory(String name) async {
-    if (name == 'Driver') {
-      _openService(name);
-      return;
-    }
-    final resolved = await _resolveServiceName(name);
-    if (resolved == null || !mounted) return;
+  /// मुख्य ग्रिडको "Handyman" कार्ड — सबै trade (Mechanic/Plumber/
+  /// Electrician/Carpenter/Painter/Cleaner/Tutor/...) छान्ने छुट्टै
+  /// category-selection पेज खोल्छ (`HandymanCategoriesScreen`) — त्यहाँ
+  /// हरेक trade आफ्नै icon कार्डमा, थिचेपछि सोही trade मा फिल्टर भएको
+  /// `NearbyScreen(initialFilter: ...)` provider directory मा पुग्छ।
+  void _openHandymanCategories() {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => NearbyScreen(initialFilter: resolved),
+      MaterialPageRoute(builder: (_) => const HandymanCategoriesScreen()),
+    );
+  }
+
+  /// मुख्य ग्रिडको "Hotel Booking" कार्ड — खोजी फारम (destination/date/
+  /// guest/filter) देखाउने `HotelSearchScreen` खोल्छ (Hotel Booking System
+  /// Phase 2)।
+  void _openHotelSearch() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const HotelSearchScreen()),
+    );
+  }
+
+  /// मुख्य ग्रिडको "Salon & Beauty" कार्ड — salon/barber/beauty provider
+  /// browse गर्ने `SalonListScreen` (Booksy-style appointment booking)।
+  void _openSalonList() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SalonListScreen()),
+    );
+  }
+
+  /// Global Search — maathiko search bar थिच्दा खुल्ने bottom sheet।
+  /// तीनै category (Services/Places/Settings) `_SearchSheet` भित्रै
+  /// filter/render हुन्छन्; सेवा मात्र यहाँको `_openService`/`_openHotelSearch`/
+  /// `_openHandymanCategories` (यो screen कै state-निर्भर) प्रयोग गर्छ,
+  /// बाँकी दुई category आफैं self-contained (उनको गन्तव्य screen state-
+  /// स्वतन्त्र)।
+  void _openGlobalSearch() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _SearchSheet(
+        onPickService: (name) {
+          Navigator.pop(context);
+          // सवारी (Bike/Car/Auto/Driver) मात्र सिधै नक्सामा; Plumber/Electrician/
+          // Mechanic जस्ता trade पहिले कामदार-सूची (asking price सहित) मा जान्छन्,
+          // नक्सा (live tracking) त्यहाँबाट चाहिएमा मात्र।
+          const rideNames = {'Bike', 'Car', 'Auto', 'Driver'};
+          if (rideNames.contains(name)) {
+            _openService(name);
+          } else {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => NearbyScreen(initialFilter: name)),
+            );
+          }
+        },
+        onPickHotel: () {
+          Navigator.pop(context);
+          _openHotelSearch();
+        },
+        onPickHandyman: () {
+          Navigator.pop(context);
+          _openHandymanCategories();
+        },
+        onPickSalon: () {
+          Navigator.pop(context);
+          _openSalonList();
+        },
       ),
     );
   }
@@ -457,27 +430,16 @@ class _HomeScreenState extends State<HomeScreen>
         'vehicleDetails': (d['vehicleDetails'] ?? '').toString(),
       };
 
-  void _openSearch() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => _SearchSheet(onPick: (name) {
-        Navigator.pop(ctx);
-        _openService(name);
-      }),
-    );
-  }
-
   Set<Marker> _markers(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
     final out = <Marker>{};
 
     // ── प्रयोगकर्ताको current-location झन्डा हटाइयो — यो जहिल्यै नक्सा
     // खुल्दा screen-center को "pick location" (Pin Drop) overlay झन्डा
     // सँगै ठ्याक्कै उही ठाउँमा देखिने भएकोले दुईवटा झन्डा (एउटा ठूलो,
-    // ओभरल्यापिङ) देखिने बग हुन्थ्यो। "मेरो स्थान" मा फर्कने माथिको
-    // round FAB बटन (`_MyLocationBtn` → `_recenterToCurrent`) ले नै
-    // यो काम गर्छ, त्यसैले छुट्टै marker आवश्यक थिएन।
+    // ओभरल्यापिङ) देखिने बग हुन्थ्यो। अब यो नक्सा जहिल्यै
+    // `_HomeServiceOverlay` ले नै छोपिएको हुन्छ (कुनै सेवा नछानेसम्म user ले
+    // नक्सा कहिल्यै देख्दैनन्), त्यसैले छुट्टै current-location marker
+    // आवश्यक थिएन।
     final filter = _pickedCategory.toLowerCase().trim();
 
     // ── नक्सा default मा सफा राख्ने ──
@@ -502,7 +464,9 @@ class _HomeScreenState extends State<HomeScreen>
       // ठ्याक्कै छानिएको क्याटेगोरीका worker मात्र।
       if (svc != filter) continue;
 
-      final wp = workerPos(data, d.id, _originLat, _originLng);
+      // नक्कली स्थान होइन — असली र ताजा (५ मिनेटभित्र) मात्र; नत्र नदेखाउने।
+      final wp = realWorkerPos(data);
+      if (wp == null) continue;
       final selected = d.id == _selectedWorkerId;
       out.add(Marker(
         markerId: MarkerId(d.id),
@@ -520,7 +484,10 @@ class _HomeScreenState extends State<HomeScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      drawer: const _HomeDrawer(),
+      // `const` हटाइयो — `_HomeDrawer.build()` ले `S.*` (locale) प्रयोग गर्छ,
+      // `const` ले भाषा बदलिँदा पनि कहिल्यै rebuild नहुने बग निम्त्याउँथ्यो।
+      // ignore: prefer_const_constructors
+      drawer: _HomeDrawer(),
       body: Stack(
         children: [
           // ── Map ──
@@ -544,7 +511,7 @@ class _HomeScreenState extends State<HomeScreen>
                     return GoogleMap(
                           initialCameraPosition: CameraPosition(
                               target: LatLng(_lat, _lng), zoom: 13),
-                          style: kCleanMapStyle,
+                          mapId: kCloudMapId,
                           onMapCreated: (c) {
                             _map = c;
                             if (_locReady) {
@@ -563,6 +530,13 @@ class _HomeScreenState extends State<HomeScreen>
                             if (!_programmaticCameraMove) {
                               HapticFeedback.selectionClick();
                               _pinLiftCtrl.forward();
+                              // Drag सुरु हुनेबित्तिकै ठेगाना बक्स तुरुन्तै
+                              // देखिने — अघिल्लो auto-hide timer (यदि चलिरहेको
+                              // भए) रद्द गरेर।
+                              _addrHideTimer?.cancel();
+                              if (!_addrVisible) {
+                                setState(() => _addrVisible = true);
+                              }
                             }
                           },
                           // hरेक frame मा सस्तो थाती राख्ने मात्र, pan
@@ -588,6 +562,14 @@ class _HomeScreenState extends State<HomeScreen>
                             // छुट्टै explicit geocode गर्छन् (माथि हेर्नुहोस्)।
                             if (_pinLiftCtrl.value > 0) {
                               _scheduleBrowseGeocode();
+                              // पिन "ड्रप" भएको ~1.8 सेकेन्डपछि ठेगाना बक्स
+                              // आफैं fade-out भई लुक्ने — बीचमै फेरि pan
+                              // गरे (`onCameraMoveStarted`) माथि नै रद्द हुन्छ।
+                              _addrHideTimer?.cancel();
+                              _addrHideTimer =
+                                  Timer(const Duration(milliseconds: 1800), () {
+                                if (mounted) setState(() => _addrVisible = false);
+                              });
                             }
                             // "Nail Drop" — spring physics सहित तल फर्काउने,
                             // settle भएकै क्षणमा कडा haptic।
@@ -639,162 +621,857 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     ),
 
-                    // ── ठेगाना floating card — टप बारको मुनि ──
-                    SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 66, 14, 0),
-                        child: _BrowseAddressCard(
-                          address: _browseAddress,
-                          loading: _loadingBrowseAddress,
+                    // ── ठेगाना कार्ड — झन्डाको भिजुअल टुप्पोको ठ्याक्कै माथि,
+                    // सानो/compact पिल — डिफल्टमा लुकेको, drag गर्दा देखिने,
+                    // "ड्रप" भएपछि केही क्षणमै आफैं fade-out (माथिको
+                    // `_addrVisible`/`_addrHideTimer` हेर्नुहोस्)।
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: _pinTipBottomOffset(context) + 8,
+                      child: Center(
+                        child: IgnorePointer(
+                          ignoring: !_addrVisible,
+                          child: AnimatedOpacity(
+                            opacity: _addrVisible ? 1 : 0,
+                            duration: const Duration(milliseconds: 220),
+                            child: _BrowseAddressCard(
+                              address: _browseAddress,
+                              loading: _loadingBrowseAddress,
+                            ),
+                          ),
                         ),
                       ),
                     ),
                 ],
               ),
             ),
-
-          // ── Top bar (hamburger + bell) ──
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      _RoundBtn(
-                        icon: Icons.menu_rounded,
-                        onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                      ),
-                      const Spacer(),
-                      _RoundBtn(
-                        icon: Icons.notifications_none_rounded,
-                        dot: true,
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const NotificationScreen()),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // ── Ride-sharing hero card — प्यानलभन्दा ठ्याक्कै माथि, त्यसैसँगै
-          // (live extent, कुनै lag बिना) तान्दा/खुल्दा-बन्द हुँदा सर्दै।
-          // Worker preview card (तल) देखिएको बेला यही ठाउँमा भिड्ने भएकोले
-          // त्यसबेला लुक्छ। थिच्नेबित्तिकै सिधै ride booking (Bike/Car)
-          // बाहेक अरू कुनै सेवासँग कहिल्यै मिसिँदैन — `_openService('Driver')`
-          // ले नै (माथि हेर्नुहोस्) सधैँ त्यही isolated बाटो प्रयोग गर्छ।
-          if (_selectedWorker == null)
-            ValueListenableBuilder<double>(
-              valueListenable: _sheetExtent,
-              builder: (context, ext, __) {
-                final h = MediaQuery.of(context).size.height;
-                return Positioned(
-                  left: 14,
-                  right: 14,
-                  bottom: h * ext + 12,
-                  child: _RideHeroCard(onTap: () => _openService('Driver')),
-                );
-              },
-            ),
-
-          // ── Floating "my location" button — प्यानल र (देखिएमा) माथिको
-          // ride hero card दुवैभन्दा माथि सर्दै, कहिल्यै नछोपियोस् भनेर।
-          ValueListenableBuilder<double>(
-            valueListenable: _sheetExtent,
-            builder: (context, ext, __) {
-              final h = MediaQuery.of(context).size.height;
-              final heroOffset =
-                  _selectedWorker == null ? _kRideHeroCardHeight + 12 : 0.0;
-              return Positioned(
-                right: 14,
-                bottom: h * ext + 12 + heroOffset,
-                child: _MyLocationBtn(
-                  loading: _locating,
-                  onTap: _recenterToCurrent,
-                ),
-              );
-            },
-          ),
-
-          // ── Draggable bottom panel: कहीँ पनि समातेर माथि/तल तान्न मिल्ने ──
-          ValueListenableBuilder<double>(
-            valueListenable: _sheetExtent,
-            builder: (context, ext, child) {
-              final h = MediaQuery.of(context).size.height;
-              return Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: (h * ext).clamp(0.0, h),
-                child: GestureDetector(
-                  // प्यानलको पूरै क्षेत्रले touch/drag यहीँ समात्छ: vertical pan
-                  // ले शीट सार्छ, tap सोसिन्छ। `opaque` + नक्सा प्यानलमुनि
-                  // नभएकाले तल Google Map मा कुनै pointer bleed हुँदैन।
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {},
-                  onVerticalDragUpdate: _onSheetDrag,
-                  onVerticalDragEnd: _onSheetDragEnd,
-                  child: child,
-                ),
-              );
-            },
-            child: _SheetBody(
-              pickedCategory: _pickedCategory,
-              onSearch: _openSearch,
-              onCategory: _openCategory,
-            ),
-          ),
 
           // ── Marker थिचेपछिको worker preview card ──
           if (_selectedWorker != null)
-            ValueListenableBuilder<double>(
-              valueListenable: _sheetExtent,
-              builder: (context, ext, __) {
-                final h = MediaQuery.of(context).size.height;
-                return Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: h * ext + 14,
-                  child: _WorkerPreviewCard(
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 20 +
+                  MediaQuery.of(context).padding.bottom +
+                  _kActionBarHeight +
+                  14,
+              child: _WorkerPreviewCard(
+                data: _selectedWorker!,
+                km: _selectedKm,
+                onClose: _clearSelection,
+                onViewDetails: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => WorkerProfileScreen(
+                      worker:
+                          _workerMap(_selectedWorkerId ?? '', _selectedWorker!),
+                    ),
+                  ),
+                ),
+                onSendOffer: () => showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => OfferSheet(
                     data: _selectedWorker!,
-                    km: _selectedKm,
-                    onClose: _clearSelection,
-                    onViewDetails: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => WorkerProfileScreen(
-                          worker: _workerMap(
-                              _selectedWorkerId ?? '', _selectedWorker!),
+                    workerId: _selectedWorkerId ?? '',
+                    distanceKm: _selectedKm,
+                    // _meLat/_meLng = साँचो GPS स्थान (job हुने ठाउँ) —
+                    // _lat/_lng त map pan गर्दा मात्र बदलिन्छ, त्यो होइन।
+                    employerLat: _meLat,
+                    employerLng: _meLng,
+                  ),
+                ),
+              ),
+            ),
+
+          // ── Full-Screen Service Picker Overlay ── नक्सा (माथि) र
+          // MainContainer को तल्लो ट्याब बार दुवै यो overlay ले नदेखाएसम्म
+          // पर्दा पछाडि नै रहन्छन् (नक्सा धैरहन्छ/चलिरहन्छ, केवल पर्दामाथि
+          // छोपिएको — तल्लो ट्याब बार भने MainContainer कै Scaffold मा
+          // अलग्गै रहेकोले, यहाँबाट छुन मिल्दैन, तर यो overlay पूरै स्क्रिन
+          // ओगट्ने भएकोले दृश्यात्मक रूपमा त्यही प्रभाव दिन्छ)। कुनै एउटा
+          // सक्रिय सेवा कार्ड थिचेपछि मात्र (`_openService`/`_openHandymanCategories`
+          // ले छुट्टै पूरा-स्क्रिन route खोल्छ, जसले यो overlay सहित
+          // तल्लो ट्याब बार दुवै स्वतः छोप्छ) अघि बढिन्छ — पछाडि फर्किंदा
+          // (pop) यही overlay नै फेरि देखिन्छ, किनभने यो homescreen को सधैँको
+          // default/स्थिर अवस्था हो (कुनै toggle/close-button छैन)।
+          //
+          // नयाँ सक्रिय सेवा थप्न `activeServices` मा, र नयाँ "Coming Soon"
+          // सेवा थप्न `comingSoonServices` मा एउटै थप entry मात्र पर्याप्त छ
+          // — दुवै grid आफ्नै सूची अनुसार विस्तार हुन्छन्, कुनै नयाँ
+          // layout/widget लेख्नु पर्दैन।
+          Positioned.fill(
+            child: _HomeServiceOverlay(
+              // image_18.png कै ५ neon रङ: Bike=cyan, Car=blue, Auto=green,
+              // Hotel=purple, Handyman=orange — यी सबै `serviceMarkerColor`
+              // (nearby_common.dart) कै उस्तै brand रङ, नयाँ arbitrary
+              // hex होइन।
+              activeServices: [
+                _HomeQuickService(
+                    name: 'Bike',
+                    icon: Icons.two_wheeler_rounded,
+                    glow: const Color(0xFF00BCD4),
+                    imageAsset: 'assets/images/home_bike.png',
+                    onTap: () => _openService('Bike')),
+                _HomeQuickService(
+                    name: 'Car',
+                    icon: Icons.directions_car_rounded,
+                    glow: const Color(0xFF3B82F6),
+                    imageAsset: 'assets/images/home_car.png',
+                    imageFit: BoxFit.cover,
+                    onTap: () => _openService('Car')),
+                _HomeQuickService(
+                    name: 'Auto',
+                    icon: Icons.electric_rickshaw_rounded,
+                    glow: const Color(0xFF2ED573),
+                    imageAsset: 'assets/images/home_auto.png',
+                    onTap: () => _openService('Auto')),
+                _HomeQuickService(
+                    name: 'Hotel Booking',
+                    icon: Icons.hotel_rounded,
+                    glow: AppColors.kmPurple,
+                    imageAsset: 'assets/images/home_hotel.png',
+                    onTap: _openHotelSearch),
+                _HomeQuickService(
+                    name: 'Handyman',
+                    icon: Icons.handyman_rounded,
+                    glow: AppColors.kmOrange,
+                    imageAsset: 'assets/images/home_handyman.png',
+                    onTap: _openHandymanCategories),
+                // Salon & Beauty — "Sahyatri Salon" poster (assets/images/
+                // home_salon.png, पोस्टरबाट वर्गाकार crop)। grid ३×२ भएकोले
+                // यसले पहिले "+ More" (Coming Soon: Rental/City to City/
+                // Parcel) को ठाउँ लिएको छ — ती आउँदा grid ३ पङ्क्तिमा
+                // बढाउनुपर्छ (banner को उचाइ जाँचेर)।
+                _HomeQuickService(
+                    name: 'Salon & Beauty',
+                    icon: Icons.content_cut_rounded,
+                    glow: AppColors.kmPink,
+                    imageAsset: 'assets/images/home_salon.png',
+                    imageFit: BoxFit.cover,
+                    onTap: _openSalonList),
+              ],
+            ),
+          ),
+
+          // ── Top bar (search + bell) — माथिको overlay भन्दा पनि माथि,
+          // सधैँ छुन मिल्ने (drawer/notification कहिल्यै नछोपियोस् भनेर)।
+          // image_18.png मा search bar + bell मात्र देखिन्छ (menu icon
+          // छैन) — तर menu/drawer (City/Request history/Providers/...)
+          // खोल्ने अर्को कुनै उपाय नभएकोले त्यो हटाउनु functionality
+          // भाँच्नु हुन्थ्यो; त्यसैले सानो menu icon search bar को ठीक
+          // अगाडि नै राखिएको — भिजुअल आशय (search prominent, bell दायाँ)
+          // त्यही रहन्छ, navigation कहीं हराउँदैन।
+          //
+          // BUG FIX — यो header यो outer `Stack` को नै एकमात्र
+          // non-`Positioned` direct child थियो (map/overlay दुवै
+          // `Positioned`/`Positioned.fill` मै छन्)। `Stack` ले आफ्नो
+          // `fit` नतोकिएमा (default `StackFit.loose`) आफ्नै साइज
+          // non-positioned child बाट लिन्छ — त्यसैले पूरै Stack (र
+          // त्यसभित्रको नक्सा/overlay दुवै) यही सानो header-matra-जति
+          // (~90 logical px) मा खुम्चिएर grid/banner पूरै "disappear"
+          // भएको देखिन्थ्यो (LayoutBuilder diagnostic ले यही पुष्टि
+          // गर्‍यो)। अब `Positioned` मा बेरेर यसले Stack को size
+          // निर्धारण नगरोस् भनेर।
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+              child: Row(
+                children: [
+                  _RoundBtn(
+                    icon: Icons.menu_rounded,
+                    onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: SpringTap(
+                      onTap: _openGlobalSearch,
+                      pressedScale: 0.97,
+                      child: RepaintBoundary(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: glassBackdrop(sigma: 16, child: Container(
+                              height: 46,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              decoration: BoxDecoration(
+                                color: AppColors.kmGlass2Fill,
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                    color: AppColors.kmGlass2Border),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.search_rounded,
+                                      size: 19, color: AppColors.kmMuted),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(S.homeSearchHint,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            color: AppColors.kmMuted,
+                                            fontSize: 13.5,
+                                            fontWeight: FontWeight.w600)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                    onSendOffer: () => showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      builder: (_) => OfferSheet(
-                        data: _selectedWorker!,
-                        workerId: _selectedWorkerId ?? '',
-                        distanceKm: _selectedKm,
-                        // _meLat/_meLng = साँचो GPS स्थान (job हुने ठाउँ) —
-                        // _lat/_lng त map pan गर्दा मात्र बदलिन्छ, त्यो होइन।
-                        employerLat: _meLat,
-                        employerLng: _meLng,
-                      ),
+                  ),
+                  const SizedBox(width: 10),
+                  _RoundBtn(
+                    icon: Icons.notifications_none_rounded,
+                    dot: true,
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const NotificationScreen()),
                     ),
                   ),
-                );
-              },
+                ],
+              ),
             ),
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+/// घर-पेजको पूरा-स्क्रिन सेवा-छनोट overlay — नक्सा/तल्लो ट्याब बार दुवैलाई
+/// छोप्ने यही एउटै स्थिर तह (माथि `build()` मा z-order हेर्नुहोस्)। "सुपर
+/// एप" संरचना: (१) सक्रिय सेवाको मुख्य grid, (२) बीचमा promo banner, (३)
+/// तल "Coming Soon" सेवाहरू — सबै सूची-driven भएकोले भविष्यमा थप सेवा
+/// (सक्रिय वा आउँदो दुवै) थप्न यहाँ कुनै नयाँ widget/layout लेख्नु पर्दैन,
+/// `HomeScreen.build()` मा एउटै थप entry मात्र पुग्छ।
+class _HomeQuickService {
+  final String name;
+  final IconData icon;
+  final Color glow;
+  final VoidCallback onTap;
+  // Full-Bleed Illustration Override — दिइएमा `_NeonServiceTile` ले
+  // साधारण glyph+glass-panel शैलीको सट्टा यही तस्बिर पूरै tile भरिने गरी
+  // देखाउँछ (Bike/Car/Auto-मात्र, हाल)। `null` भए (Hotel/Handyman/More)
+  // पुरानै glyph शैली अपरिवर्तित।
+  final String? imageAsset;
+  final BoxFit imageFit;
+  const _HomeQuickService({
+    required this.name,
+    required this.icon,
+    required this.glow,
+    required this.onTap,
+    this.imageAsset,
+    this.imageFit = BoxFit.contain,
+  });
+}
+
+class _HomeServiceOverlay extends StatelessWidget {
+  final List<_HomeQuickService> activeServices;
+  const _HomeServiceOverlay({
+    required this.activeServices,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // image_18.png कै निरन्तर गहिरो बैजनी gradient — माथि बीचतिर हल्का
+    // बैजनी glow, तल/किनारातिर झन्डै कालो। पहिले यहाँ साधारण `DecoratedBox`
+    // प्रयोग हुन्थ्यो — त्यसले `Positioned.fill` बाट आउने tight constraint
+    // सिधै `SafeArea`/content मा pass-through गर्छ भन्ने अनुमान गरिएको
+    // थियो, तर व्यवहारमा grid/banner पूरै खाली/कालो देखिने गरायो (content
+    // नै render नभएको जस्तो — screenshot/uiautomator दुवैले पुष्टि गरे)।
+    // `AuroraBackground` भने `Stack(fit: StackFit.expand)` प्रयोग गरेर
+    // आफ्नो child लाई जबरजस्ती पूरै स्क्रिन साइजमा तन्काउँछ — यही app भरि
+    // (home screen आफैंले अघि पनि) प्रमाणित/काम गरिरहेको बाटो, त्यसैले अब
+    // त्यही पुनः प्रयोग गरेर मात्र रङ/grid अनुकूलित गरिएको।
+    return AuroraBackground(
+      grid: false,
+      orbs: const [
+        KmOrb(Alignment.topLeft, Color(0xFF6B3FD4), size: 560),
+        KmOrb(Alignment.topRight, Color(0xFF6B3FD4), size: 560),
+      ],
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 76, 20, 20),
+          // Bottom Tiles Removed — "Coming Soon" (Rental/City to City/Parcel)
+          // हटाइएपछि फुर्सद भएको ठाउँ `_PremiumBanner` ले नै (Expanded)
+          // तल bottom-nav सम्मै भरोस् भनेर — अब यो `SingleChildScrollView`
+          // होइन, स्थिर `Column`: grid (intrinsic height) + banner
+          // (बाँकी सबै जति ठाउँ)। grid + banner दुवैको content सानो/
+          // सीमित भएकोले (coming-soon हटेपछि) कुनै सामान्य फोनमा overflow
+          // हुँदैन।
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GridView.count(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 3,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                childAspectRatio: 0.9,
+                children: [
+                  for (final s in activeServices)
+                    _NeonServiceTile(
+                      label: S.serviceName(s.name),
+                      icon: s.icon,
+                      glow: s.glow,
+                      onTap: s.onTap,
+                      imageAsset: s.imageAsset,
+                      imageFit: s.imageFit,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              // नोट: `const` राख्नु हुँदैन — `S.*` (locale) मा निर्भर भएकोले,
+              // भाषा बदलिँदा यो subtree पनि पुनः-build हुनैपर्छ। `const` ले
+              // Dart-कै canonicalization/identical() शर्टकटका कारण build()
+              // फेरि कहिल्यै नचल्ने (पहिलोपटक भाषा जे थियो त्यहीं "अड्किने")
+              // बग निम्त्याउँछ।
+              // ignore: prefer_const_constructors
+              Expanded(child: _PremiumBanner()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// नयाँ premium grid tile — neon-glow रेखाचित्र शैली। कुनै फोटो/illustration
+/// होइन, `glow` रङमै outline icon + border + glow shadow। `glow == null`
+/// भएमा ("+ More") बेग्लै muted/gray शैली (image_18.png कै "+" tile जस्तै)।
+///
+/// Full-Bleed Illustration Variant — `imageAsset` दिइएमा (हाल Bike/Car/Auto/
+/// Hotel Booking/Handyman — सबै ५ मुख्य सेवा) माथिकै glyph+glass-panel
+/// छोडेर illustration आफैं tile भरि (frame भित्रै, border/glow भने उस्तै
+/// brand रङमा कायम राखेर अरू tile सँग दृश्यात्मक तालमेल मिलोस् भनेर)
+/// देखाउँछ। "+ More" (imageAsset == null, एकमात्र बाँकी) मा पुरानै
+/// glyph शैली अपरिवर्तित।
+class _NeonServiceTile extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color? glow;
+  final VoidCallback onTap;
+  final String? imageAsset;
+  final BoxFit imageFit;
+  const _NeonServiceTile({
+    required this.label,
+    required this.icon,
+    required this.glow,
+    required this.onTap,
+    this.imageAsset,
+    this.imageFit = BoxFit.contain,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = glow ?? AppColors.kmMuted;
+    return SpringTap(
+      onTap: onTap,
+      pressedScale: 0.95,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Expanded(
+            child: AspectRatio(
+              aspectRatio: 1,
+              child: imageAsset != null
+                  ? _buildImageTile(color)
+                  : _buildGlyphTile(color),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.kmText)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGlyphTile(Color color) => Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+              color: color.withValues(alpha: glow == null ? 0.3 : 0.8),
+              width: 1.4),
+          boxShadow: glow == null
+              ? null
+              : [
+                  BoxShadow(
+                      color: color.withValues(alpha: 0.45),
+                      blurRadius: 18,
+                      spreadRadius: 0.5),
+                ],
+        ),
+        child: Icon(icon, color: color, size: 30),
+      );
+
+  Widget _buildImageTile(Color color) => Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+                color: color.withValues(alpha: 0.45),
+                blurRadius: 18,
+                spreadRadius: 0.5),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.3),
+              border: Border.all(color: color.withValues(alpha: 0.7), width: 1.4),
+            ),
+            child: Image.asset(imageAsset!, fit: imageFit),
+          ),
+        ),
+      );
+}
+
+/// Neon glass promo banner — top dashboard tile (`_NeonServiceTile`) कै
+/// उस्तै cyan/blue glow-border भाषा। ठूलो/crisp SY logo + ३ वटा सक्रिय
+/// feature-tag chip (Instant Rides/Verified Hotels/Local Handymen —
+/// Hotel/Rental/Parcel जस्ता अझै नआएका कुरा यहाँ छैनन्)। "Coming Soon"
+/// section हटाइसकेपछि फुर्सद भएको ठाउँ यही card ले (caller मा `Expanded`
+/// भित्र राखिएर) तल bottom-nav सम्मै भर्छ — `Spacer()` ले तल सामाजिक-
+/// सञ्जाल बटन (`_SocialLinksSection`) लाई card कै पिँधमा टाँस्छ।
+class _PremiumBanner extends StatelessWidget {
+  const _PremiumBanner();
+
+  Widget _tag(Color dot, String label) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 6),
+            Text(label,
+                style: const TextStyle(
+                    color: AppColors.kmText,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700)),
+          ],
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: glassBackdrop(sigma: 22, child: Container(
+          // Social-Icon-Row Overflow Fix — यो card कै fixed/bounded उचाइ
+          // (parent Expanded) पहिले `_SocialLinksSection` सधैं खाली
+          // (SizedBox.shrink, कुनै URL सेट नभएको) हुँदा मात्र ठीक्क
+          // अट्थ्यो। अब साँचो icon row देखिनेबित्तिकै (admin ले URL सेटेपछि)
+          // "BOTTOM OVERFLOWED" हुन्थ्यो — त्यसैले यहाँभित्रका padding/gap/
+          // आकार अलिकति कसिएको, logo/branding भने दृश्यगत रूपमा उस्तै नै
+          // रहन्छ, बस अलि सानो।
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                AppColors.kmTealBlue.withValues(alpha: 0.18),
+                AppColors.kmTeal.withValues(alpha: 0.05),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(24),
+            border:
+                Border.all(color: AppColors.kmTealBlue.withValues(alpha: 0.55), width: 1.4),
+            boxShadow: [
+              BoxShadow(
+                  color: AppColors.kmTealBlue.withValues(alpha: 0.35),
+                  blurRadius: 28,
+                  spreadRadius: 1),
+              BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.3),
+                  blurRadius: 24,
+                  offset: const Offset(0, 10)),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Column(
+                    children: [
+                      Text(S.homeBannerBrandLabel,
+                          style: const TextStyle(
+                              color: AppColors.kmMuted,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 4),
+                      Container(
+                        width: 84,
+                        height: 84,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                              color: AppColors.kmTealBlue.withValues(alpha: 0.6),
+                              width: 1.2),
+                          boxShadow: [
+                            BoxShadow(
+                                color: AppColors.kmTealBlue.withValues(alpha: 0.4),
+                                blurRadius: 14,
+                                spreadRadius: 0.5),
+                            BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.18),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2)),
+                          ],
+                        ),
+                        child: Image.asset(
+                          'assets/icon/app_icon_foreground.png',
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.high,
+                          errorBuilder: (_, __, ___) => const Icon(
+                              Icons.workspace_premium_rounded,
+                              color: AppColors.kmOrangeDeep,
+                              size: 40),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 18),
+                      // Logo-matching purple→coral brand gradient — `srcIn`
+                      // tints the text glyphs' alpha with the shader, so the
+                      // underlying TextStyle colour below just needs to be
+                      // fully opaque (white) for the gradient to show true.
+                      child: ShaderMask(
+                        blendMode: BlendMode.srcIn,
+                        shaderCallback: (bounds) => const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [AppColors.kmPurple, AppColors.kmOrangeDeep],
+                        ).createShader(bounds),
+                        child: RichText(
+                          text: TextSpan(
+                            style: const TextStyle(
+                                fontFamily: 'Cinzel',
+                                color: Colors.white,
+                                fontSize: 19,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.4,
+                                height: 1.3),
+                            children: [
+                              TextSpan(text: '${S.homeBannerTitlePrefix} '),
+                              TextSpan(text: S.homeBannerTitleRest),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  _tag(AppColors.kmTeal, S.homeTagInstantRides),
+                  _tag(AppColors.kmPurple, S.homeTagVerifiedHotels),
+                  _tag(AppColors.kmOrange, S.homeTagLocalHandymen),
+                ],
+              ),
+              const Spacer(),
+              // ignore: prefer_const_constructors
+              _SocialLinksSection(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Facebook/Instagram/TikTok/X बटन (माथि divider सहित) — `config/socialLinks`
+/// (`SocialLinksConfig`, config/app_config.dart) बाट live पढ्छ; URL
+/// खाली/नसेट भएको प्लेटफर्म देखिँदैन, र कुनै पनि URL नभए (admin ले अझै
+/// नसेट गरेको) divider+row दुवै सँगै लुक्छन् — banner को तल्लो किनारामा
+/// नीरस/खाली divider रेखा मात्र बाँकी नरहोस् भनेर।
+class _SocialLinksSection extends StatelessWidget {
+  const _SocialLinksSection();
+
+  static const _platforms = [
+    _SocialPlatform(key: 'facebook', color: Color(0xFF1877F2)),
+    _SocialPlatform(key: 'instagram', color: Color(0xFFE1306C)),
+    _SocialPlatform(key: 'tiktok', color: Color(0xFF25F4EE)),
+    _SocialPlatform(key: 'twitter', color: Colors.white),
+  ];
+
+  Future<void> _open(BuildContext context, String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not open $url')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Map<String, String>>(
+      stream: SocialLinksConfig.stream(),
+      builder: (context, snap) {
+        final links = snap.data;
+        if (links == null) return const SizedBox.shrink();
+        final visible =
+            _platforms.where((p) => (links[p.key] ?? '').isNotEmpty).toList();
+        if (visible.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 10),
+            Container(height: 1, color: Colors.white.withValues(alpha: 0.12)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                for (final p in visible) ...[
+                  _SocialIconButton(
+                    platformKey: p.key,
+                    color: p.color,
+                    onTap: () => _open(context, links[p.key]!),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _SocialPlatform {
+  final String key;
+  final Color color;
+  const _SocialPlatform({required this.key, required this.color});
+}
+
+class _SocialIconButton extends StatelessWidget {
+  final String platformKey;
+  final Color color;
+  final VoidCallback onTap;
+  const _SocialIconButton(
+      {required this.platformKey, required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      customBorder: const CircleBorder(),
+      child: Container(
+        width: 34,
+        height: 34,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color.withValues(alpha: 0.16),
+          border: Border.all(color: color.withValues(alpha: 0.85), width: 1.2),
+          boxShadow: [
+            BoxShadow(
+                color: color.withValues(alpha: 0.5),
+                blurRadius: 10,
+                spreadRadius: 0.5),
+          ],
+        ),
+        child: _BrandGlyph(platformKey: platformKey, color: color, size: 18),
+      ),
+    );
+  }
+}
+
+/// Real vector brand marks — no new package dependency (pubspec.yaml stays
+/// untouched), built purely from Flutter primitives (Icon/Container/
+/// Transform.rotate), so they scale cleanly at any size like a true SVG.
+/// Facebook uses Flutter's own bundled `Icons.facebook` glyph; Instagram/
+/// TikTok/X are composed from simple shapes that closely mirror each
+/// platform's official mark silhouette.
+class _BrandGlyph extends StatelessWidget {
+  final String platformKey;
+  final Color color;
+  final double size;
+  const _BrandGlyph(
+      {required this.platformKey, required this.color, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    switch (platformKey) {
+      case 'facebook':
+        return Icon(Icons.facebook, color: color, size: size + 4);
+      case 'instagram':
+        return _instagramMark();
+      case 'tiktok':
+        return _tiktokMark();
+      case 'twitter':
+        return _xMark();
+      default:
+        return SizedBox(width: size, height: size);
+    }
+  }
+
+  // Rounded-square camera outline + lens circle + flash dot — Instagram's
+  // classic simplified glyph.
+  Widget _instagramMark() => SizedBox(
+        width: size,
+        height: size,
+        child: Stack(
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(size * 0.32),
+                border: Border.all(color: color, width: size * 0.11),
+              ),
+            ),
+            Center(
+              child: Container(
+                width: size * 0.46,
+                height: size * 0.46,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: color, width: size * 0.11),
+                ),
+              ),
+            ),
+            Positioned(
+              top: size * 0.14,
+              right: size * 0.14,
+              child: Container(
+                width: size * 0.12,
+                height: size * 0.12,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+            ),
+          ],
+        ),
+      );
+
+  // TikTok's real note-mark silhouette — notehead + stem + curling flag
+  // unioned into ONE solid vector path (not stacked primitives), painted
+  // twice with the brand's signature cyan/red offset ("glitch") accent
+  // behind a crisp white/teal top layer, same as the official mark.
+  Widget _tiktokMark() => CustomPaint(
+        size: Size(size, size),
+        painter: _TikTokNotePainter(primary: color),
+      );
+
+  // Two bold crossing diagonal bars — X's geometric wordmark.
+  Widget _xMark() => SizedBox(
+        width: size,
+        height: size,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Transform.rotate(
+              angle: 0.7853981634, // 45°
+              child: Container(
+                  width: size * 0.95,
+                  height: size * 0.17,
+                  color: color),
+            ),
+            Transform.rotate(
+              angle: -0.7853981634, // -45°
+              child: Container(
+                  width: size * 0.95,
+                  height: size * 0.17,
+                  color: color),
+            ),
+          ],
+        ),
+      );
+}
+
+/// एउटै solid Path (notehead + stem + curling flag, `Path.combine` ले
+/// fuse गरिएको — छुट्टाछुट्टै आकृति होइन) दुईपटक, TikTok कै साँचो cyan/red
+/// दुई-रङ "glitch" offset सहित — `_BrandGlyph._tiktokMark()` ले प्रयोग गर्छ।
+class _TikTokNotePainter extends CustomPainter {
+  final Color primary;
+  static const _cyan = Color(0xFF25F4EE);
+  static const _red = Color(0xFFFE2C55);
+
+  const _TikTokNotePainter({required this.primary});
+
+  Path _notePath(Size s) {
+    final w = s.width, h = s.height;
+    final body = Path()
+      ..addOval(Rect.fromCenter(
+          center: Offset(w * 0.35, h * 0.76), width: w * 0.56, height: h * 0.42))
+      ..addRRect(RRect.fromRectAndRadius(
+        Rect.fromLTRB(w * 0.55, h * 0.06, w * 0.74, h * 0.80),
+        Radius.circular(w * 0.09),
+      ));
+    final flag = Path()
+      ..moveTo(w * 0.74, h * 0.06)
+      ..cubicTo(w * 0.92, h * 0.06, w * 0.98, h * 0.18, w * 0.92, h * 0.30)
+      ..cubicTo(w * 0.87, h * 0.38, w * 0.78, h * 0.38, w * 0.70, h * 0.32)
+      ..lineTo(w * 0.70, h * 0.20)
+      ..cubicTo(w * 0.75, h * 0.24, w * 0.84, h * 0.22, w * 0.86, h * 0.17)
+      ..cubicTo(w * 0.88, h * 0.11, w * 0.82, h * 0.07, w * 0.74, h * 0.07)
+      ..close();
+    return Path.combine(PathOperation.union, body, flag);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final note = _notePath(size);
+    final dx = size.width * 0.05;
+    final dy = size.height * 0.035;
+
+    canvas.save();
+    canvas.translate(-dx, dy);
+    canvas.drawPath(note, Paint()..color = _cyan.withValues(alpha: 0.9));
+    canvas.restore();
+
+    canvas.save();
+    canvas.translate(dx, -dy);
+    canvas.drawPath(note, Paint()..color = _red.withValues(alpha: 0.75));
+    canvas.restore();
+
+    canvas.drawPath(note, Paint()..color = primary);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TikTokNotePainter oldDelegate) =>
+      oldDelegate.primary != primary;
 }
 
 /// नक्साको custom marker थिच्दा देखिने preview card — avatar glyph, नाम, rating,
@@ -850,24 +1527,16 @@ class _WorkerPreviewCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Container(
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Color.lerp(color, Colors.white, 0.35)!,
-                        color,
-                      ],
-                    ),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                          color: color.withValues(alpha: 0.5), blurRadius: 12),
+                ServiceIconBadge(
+                  service: service,
+                  size: 46,
+                  iconColor: Colors.white,
+                  gradient: LinearGradient(
+                    colors: [
+                      Color.lerp(color, Colors.white, 0.35)!,
+                      color,
                     ],
                   ),
-                  child: Icon(serviceIconFor(service),
-                      color: Colors.white, size: 24),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -940,180 +1609,6 @@ class _WorkerPreviewCard extends StatelessWidget {
   }
 }
 
-/// तल्लो draggable शीटको सामग्री — handle + "Drag up for more" + search pill +
-/// horizontal category strip। शीट drag हुँदा rebuild नहोस् भनेर छुट्टै widget
-/// (ValueListenableBuilder को स्थिर `child`)। भित्री vertical scroll छैन —
-/// जुनसुकै ठाउँ तान्दा शीट आफैँ सर्छ; सानो हुँदा सामग्री काटिन्छ।
-class _SheetBody extends StatelessWidget {
-  final String pickedCategory;
-  final VoidCallback onSearch;
-  final void Function(String) onCategory;
-
-  const _SheetBody({
-    required this.pickedCategory,
-    required this.onSearch,
-    required this.onCategory,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-        child: Container(
-          decoration: BoxDecoration(
-            color: AppColors.kmSurface.withValues(alpha: 0.92),
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(30)),
-            border: Border(
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
-            ),
-          ),
-          child: Column(
-            children: [
-              const SizedBox(height: 8),
-              Container(
-                width: 44,
-                height: 5,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.28),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(S.dragForMore,
-                  style: const TextStyle(
-                      color: AppColors.kmMuted, fontSize: 10.5)),
-              const SizedBox(height: 10),
-              Expanded(
-                child: SingleChildScrollView(
-                  physics: const NeverScrollableScrollPhysics(),
-                  padding: EdgeInsets.fromLTRB(
-                      14, 0, 14, 14 + MediaQuery.of(context).padding.bottom),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Search pill — gradient CTA
-                      GestureDetector(
-                        onTap: onSearch,
-                        child: Container(
-                          height: 54,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          decoration: BoxDecoration(
-                            gradient: AppColors.kmCtaGradient,
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.3),
-                                  blurRadius: 18,
-                                  offset: const Offset(0, 6)),
-                            ],
-                          ),
-                          child: const Row(
-                            children: [
-                              Icon(Icons.search_rounded,
-                                  color: AppColors.kmInk),
-                              SizedBox(width: 12),
-                              Expanded(child: _SearchHint()),
-                              Icon(Icons.arrow_forward_rounded,
-                                  size: 18, color: AppColors.kmInk),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      // Horizontal service selector — real profession photo cards
-                      SizedBox(
-                        height: 114,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          physics: const BouncingScrollPhysics(),
-                          itemCount: serviceFilters.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(width: 10),
-                          itemBuilder: (context, i) {
-                            final s = serviceFilters[i];
-                            final name = s['name'] as String;
-                            // 'Driver' ले home screen को map filter कहिल्यै
-                            // छुँदैन (छुट्टै screen मा जान्छ) — त्यसैले यो
-                            // chip कहिल्यै "active" देखिँदैन, अरू category
-                            // जस्तै toggle-highlight हुँदैन।
-                            final active =
-                                name != 'Driver' && pickedCategory == name;
-                            return GestureDetector(
-                              onTap: () => onCategory(name),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 200),
-                                curve: Curves.easeOut,
-                                width: 88,
-                                transform: Matrix4.diagonal3Values(
-                                    active ? 1.06 : 1.0,
-                                    active ? 1.06 : 1.0,
-                                    1.0),
-                                transformAlignment: Alignment.center,
-                                padding: const EdgeInsets.all(5),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.06),
-                                  borderRadius: BorderRadius.circular(18),
-                                  border: Border.all(
-                                      color: active
-                                          ? AppColors.kmOrange
-                                          : Colors.white.withValues(alpha: 0.14),
-                                      width: active ? 2.2 : 1),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Expanded(
-                                      child: ClipRRect(
-                                        borderRadius:
-                                            BorderRadius.circular(13),
-                                        child: Image.asset(
-                                          serviceImageFor(name),
-                                          fit: BoxFit.cover,
-                                          width: double.infinity,
-                                          errorBuilder: (_, __, ___) =>
-                                              Container(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.06),
-                                            child: Icon(s['icon'] as IconData,
-                                                color: AppColors.kmOrange),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      S.serviceName(name),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                          fontSize: 10.5,
-                                          fontWeight: FontWeight.w800,
-                                          color: active
-                                              ? AppColors.kmOrange
-                                              : AppColors.kmText),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Pin Drop — स्क्रिनको बीचमा स्थिर झन्डा, touch-lift/nail-drop animation
 /// सहित (service_map_screen.dart कै उही भिजुअल, यहाँ browse-only प्रयोग)।
 class _BrowsePinIcon extends StatelessWidget {
@@ -1152,7 +1647,9 @@ class _BrowsePinIcon extends StatelessWidget {
 }
 
 /// Pin Drop — बीचको झन्डाले छोपेको ठाउँको ठेगाना (browse-only, booking
-/// स्थान बदल्दैन) — dark glass pill, नयाँ डिजाइनसँग मिल्ने।
+/// स्थान बदल्दैन) — सानो/compact dark-glass pill (service_map_screen.dart
+/// कै `_PinAddressCard` सँगै उही आकार/शैली), पूरै स्क्रिन-चौडाइ कहिल्यै
+/// नओगट्ने गरी `maxWidth` ले सीमित।
 class _BrowseAddressCard extends StatelessWidget {
   final String address;
   final bool loading;
@@ -1160,16 +1657,26 @@ class _BrowseAddressCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassPanel2(
-      radius: 18,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 190),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 7, 12, 7),
+        decoration: BoxDecoration(
+          color: AppColors.kmVoid2.withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          boxShadow: const [
+            BoxShadow(
+                color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+          ],
+        ),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(Icons.place_rounded,
-                size: 18, color: AppColors.kmOrange),
-            const SizedBox(width: 8),
-            Expanded(
+                size: 15, color: AppColors.kmOrange),
+            const SizedBox(width: 6),
+            Flexible(
               child: Text(
                 loading
                     ? S.fetchingAddress
@@ -1179,14 +1686,15 @@ class _BrowseAddressCard extends StatelessWidget {
                 style: const TextStyle(
                     color: AppColors.kmText,
                     fontWeight: FontWeight.w600,
-                    fontSize: 12.5),
+                    fontSize: 11.5,
+                    height: 1.25),
               ),
             ),
             if (loading) ...[
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               const SizedBox(
-                width: 14,
-                height: 14,
+                width: 12,
+                height: 12,
                 child: CircularProgressIndicator(
                     strokeWidth: 2, color: AppColors.kmOrange),
               ),
@@ -1196,158 +1704,6 @@ class _BrowseAddressCard extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Ride-hailing (Bike/Car) मात्रका लागि समर्पित floating hero card — premium
-/// gradient + shadow, थिच्दा (कार्ड जुनसुकै ठाउँमा वा "BOOK NOW" बटन दुवैले)
-/// सिधै त्यही isolated ride-booking बाटो (`_openService('Driver')`) खोल्छ,
-/// अरू कुनै (Plumber/Electrician/...) सेवासँग कहिल्यै मिसिँदैन।
-class _RideHeroCard extends StatelessWidget {
-  final VoidCallback onTap;
-  const _RideHeroCard({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return SpringTap(
-      onTap: onTap,
-      pressedScale: 0.97,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(18, 16, 14, 16),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              AppColors.kmPurpleDeep,
-              AppColors.kmPurple,
-              AppColors.kmTealBlue,
-            ],
-          ),
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
-          boxShadow: [
-            BoxShadow(
-                color: AppColors.kmTealBlue.withValues(alpha: 0.35),
-                blurRadius: 26,
-                offset: const Offset(0, 12)),
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.35),
-                blurRadius: 14,
-                offset: const Offset(0, 6)),
-          ],
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(S.rideHeroTitle,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.7)),
-                  const SizedBox(height: 5),
-                  Text(S.rideHeroSubtitle,
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.88),
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w500,
-                          height: 1.25)),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 9),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(AppRadius.pill),
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3)),
-                      ],
-                    ),
-                    child: Text(S.bookNowCta,
-                        style: const TextStyle(
-                            color: AppColors.kmPurpleDeep,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.4)),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              width: 54,
-              height: 54,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.16),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
-              ),
-              child: const Icon(Icons.two_wheeler_rounded,
-                  color: Colors.white, size: 28),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Pathao-style current-location button (map मा current location केन्द्र गर्ने)।
-class _MyLocationBtn extends StatelessWidget {
-  final bool loading;
-  final VoidCallback onTap;
-  const _MyLocationBtn({required this.loading, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return SpringTap(
-      onTap: onTap,
-      pressedScale: 0.85,
-      child: ClipOval(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Container(
-            width: 46,
-            height: 46,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.09),
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.kmGlassBorder),
-            ),
-            child: loading
-                ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2.4, color: AppColors.kmOrange),
-                  )
-                : const Icon(Icons.my_location_rounded,
-                    size: 22, color: AppColors.kmOrange),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Search bar भित्रको placeholder text (const बनाउन छुट्टै widget)।
-class _SearchHint extends StatelessWidget {
-  const _SearchHint();
-  @override
-  Widget build(BuildContext context) => Text(
-        S.whereAndPrice,
-        style: const TextStyle(
-            color: AppColors.kmInk, fontSize: 15, fontWeight: FontWeight.w700),
-      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1366,19 +1722,22 @@ class _RoundBtn extends StatelessWidget {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          ClipOval(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-              child: Container(
-                width: 46,
-                height: 46,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.09),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: AppColors.kmGlassBorder),
+          // यो बटन नक्साको माथि tair-रहेको हुन्छ — blur (BackdropFilter)
+          // लाई RepaintBoundary ले नक्सा pan/pin-lift/sheet-drag जस्ता
+          // छेउछाउका ऐनिमेसनबाट isolate गर्छ, हरेक frame फेरि नदोहोरियोस्।
+          RepaintBoundary(
+            child: ClipOval(
+              child: glassBackdrop(sigma: 16, child: Container(
+                  width: 46,
+                  height: 46,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: AppColors.kmGlass2Fill,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.kmGlass2Border),
+                  ),
+                  child: Icon(icon, size: 22, color: AppColors.kmText),
                 ),
-                child: Icon(icon, size: 22, color: AppColors.kmText),
               ),
             ),
           ),
@@ -1395,17 +1754,147 @@ class _RoundBtn extends StatelessWidget {
   }
 }
 
+/// Global Search — सेवा (Bike/Car/Auto/Hotel/Handyman/Plumber/...), सेभ
+/// गरिएका ठेगाना (Home/Work/अन्य), र app settings/navigation link (Profile/
+/// Earnings/Security/Language/...) तीनै एकै ठाउँबाट खोज्ने। टाइप गर्नेबित्तिकै
+/// तीनै category आफ्नो-आफ्नो section मा (matching भए मात्र) देखिन्छन् —
+/// सेवा-सूची मात्र खाली query मा पनि (पुरानै व्यवहार, पूरै सेवा-ग्रिड) देखिने।
 class _SearchSheet extends StatefulWidget {
-  final void Function(String serviceName) onPick;
-  const _SearchSheet({required this.onPick});
+  final void Function(String serviceName) onPickService;
+  final VoidCallback onPickHotel;
+  final VoidCallback onPickHandyman;
+  final VoidCallback onPickSalon;
+  const _SearchSheet({
+    required this.onPickService,
+    required this.onPickHotel,
+    required this.onPickHandyman,
+    required this.onPickSalon,
+  });
 
   @override
   State<_SearchSheet> createState() => _SearchSheetState();
 }
 
+/// App settings/navigation link — ठेगाना (Places) बाहेक बाँकी सबै static,
+/// गन्तव्य screen आफैं state-स्वतन्त्र भएकोले सिधै यहीँबाट push गर्न मिल्छ।
+class _NavSearchEntry {
+  final String label;
+  final IconData icon;
+
+  /// नाम बाहेक थप खोज्न मिल्ने शब्द (synonym) — lowercase, space-separated।
+  final String keywords;
+  final void Function(BuildContext context) onTap;
+  const _NavSearchEntry(this.label, this.icon, this.keywords, this.onTap);
+}
+
+final List<_NavSearchEntry> _navSearchEntries = [
+  _NavSearchEntry('Profile', Icons.person_rounded, 'account my profile', (ctx) {
+    // Profile MainContainer कै tab हो (छुट्टै पेज होइन) — त्यही tab मा
+    // फर्काउने (job_feed_screen.dart कै DashboardExitBar सँगै प्रयोग हुने
+    // साझा global, app_globals.dart हेर्नुहोस्)।
+    requestedMainTabIndex.value = 4;
+    Navigator.of(ctx).popUntil((r) => r.isFirst);
+  }),
+  _NavSearchEntry(
+      'Earnings', Icons.account_balance_wallet_rounded, 'wallet income payouts money',
+      (ctx) => Navigator.push(
+          ctx, MaterialPageRoute(builder: (_) => const EarningsScreen()))),
+  _NavSearchEntry(
+      'Security', Icons.lock_rounded, 'biometric passkey fingerprint lock',
+      (ctx) => Navigator.push(
+          ctx, MaterialPageRoute(builder: (_) => const SettingsPage()))),
+  _NavSearchEntry(
+      'Language', Icons.language_rounded, 'nepali english bhasa', (ctx) =>
+          Navigator.push(
+              ctx, MaterialPageRoute(builder: (_) => const SettingsPage()))),
+  _NavSearchEntry('Settings', Icons.settings_rounded, 'preferences', (ctx) =>
+      Navigator.push(
+          ctx, MaterialPageRoute(builder: (_) => const SettingsPage()))),
+  _NavSearchEntry(
+      'My Bookings', Icons.history_rounded, 'booking history requests orders',
+      (ctx) => Navigator.push(
+          ctx, MaterialPageRoute(builder: (_) => const BookingsScreen()))),
+  _NavSearchEntry('Messages', Icons.message_rounded, 'chat inbox', (ctx) =>
+      Navigator.push(
+          ctx, MaterialPageRoute(builder: (_) => const MessagesScreen()))),
+  _NavSearchEntry('Payment Methods', Icons.payment_rounded,
+      'card wallet khalti esewa', (ctx) => Navigator.push(ctx,
+          MaterialPageRoute(builder: (_) => const PaymentMethodsScreen()))),
+  _NavSearchEntry(
+      'My Reviews', Icons.star_border_rounded, 'ratings feedback', (ctx) =>
+          Navigator.push(
+              ctx, MaterialPageRoute(builder: (_) => const MyReviewsScreen()))),
+  _NavSearchEntry(
+      'Notifications', Icons.notifications_none_rounded, 'alerts', (ctx) =>
+          Navigator.push(ctx,
+              MaterialPageRoute(builder: (_) => const NotificationScreen()))),
+  _NavSearchEntry('Help & Support', Icons.help_outline_rounded,
+      'contact faq support', (ctx) => Navigator.push(ctx,
+          MaterialPageRoute(builder: (_) => const HelpSupportScreen()))),
+  _NavSearchEntry('Saved Places', Icons.place_rounded,
+      'home work address location manage', (ctx) => Navigator.push(ctx,
+          MaterialPageRoute(builder: (_) => const SavedPlacesScreen()))),
+];
+
 class _SearchSheetState extends State<_SearchSheet> {
   final _c = TextEditingController();
   String _q = '';
+
+  // सेवा-सूची — serviceFilters (Mechanic/Plumber/Electrician/.../Tutor) कै
+  // trade हरू + Bike/Car/Auto/Hotel Booking/Handyman (यी serviceFilters मा
+  // छैनन्, home screen कै मुख्य 3x2 grid बाट) सबै एकै search index मा।
+  late final List<({String label, IconData icon, String image, VoidCallback onTap})>
+      _serviceEntries = [
+    (
+      label: 'Bike',
+      icon: Icons.two_wheeler_rounded,
+      image: serviceImageFor('Bike'),
+      onTap: () => widget.onPickService('Bike'),
+    ),
+    (
+      label: 'Car',
+      icon: Icons.directions_car_rounded,
+      image: serviceImageFor('Car'),
+      onTap: () => widget.onPickService('Car'),
+    ),
+    (
+      label: 'Auto',
+      icon: Icons.electric_rickshaw_rounded,
+      image: serviceImageFor('Car'),
+      onTap: () => widget.onPickService('Auto'),
+    ),
+    (
+      label: 'Hotel Booking',
+      icon: Icons.hotel_rounded,
+      image: serviceImageFor('Handyman'),
+      onTap: widget.onPickHotel,
+    ),
+    (
+      label: 'Handyman',
+      icon: Icons.handyman_rounded,
+      image: serviceImageFor('Handyman'),
+      onTap: widget.onPickHandyman,
+    ),
+    (
+      label: 'Salon & Beauty',
+      icon: Icons.content_cut_rounded,
+      image: serviceImageFor('Handyman'),
+      onTap: widget.onPickSalon,
+    ),
+    for (final s in serviceFilters)
+      (
+        label: s['name'] as String,
+        icon: s['icon'] as IconData,
+        image: serviceImageFor(s['name'] as String),
+        onTap: () => widget.onPickService(s['name'] as String),
+      ),
+  ];
+
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _userDocStream =
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(FirebaseAuth.instance.currentUser?.uid ?? '__none__')
+          .snapshots();
 
   @override
   void dispose() {
@@ -1413,12 +1902,91 @@ class _SearchSheetState extends State<_SearchSheet> {
     super.dispose();
   }
 
+  List<({String label, String address})> _places(Map<String, dynamic> data) {
+    final out = <({String label, String address})>[];
+    final home = data['homePlace'];
+    if (home is Map && (home['address'] ?? '').toString().isNotEmpty) {
+      out.add((label: 'Home', address: home['address'].toString()));
+    }
+    final work = data['workPlace'];
+    if (work is Map && (work['address'] ?? '').toString().isNotEmpty) {
+      out.add((label: 'Work', address: work['address'].toString()));
+    }
+    final others = data['otherPlaces'];
+    if (others is List) {
+      for (final o in others) {
+        if (o is Map && (o['address'] ?? '').toString().isNotEmpty) {
+          out.add((
+            label: (o['label'] ?? 'Place').toString(),
+            address: o['address'].toString(),
+          ));
+        }
+      }
+    }
+    return out;
+  }
+
+  Widget _sectionHeader(String label) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
+        child: Text(label,
+            style: const TextStyle(
+                color: AppColors.kmMuted,
+                fontWeight: FontWeight.w800,
+                fontSize: 11.5,
+                letterSpacing: 0.4)),
+      );
+
+  Widget _resultTile({
+    required Widget leading,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Material(
+          color: Colors.white.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(16),
+          child: ListTile(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            leading: leading,
+            title: Text(title,
+                style: const TextStyle(
+                    color: AppColors.kmText, fontWeight: FontWeight.w700)),
+            subtitle: Text(subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: AppColors.kmMuted)),
+            onTap: onTap,
+          ),
+        ),
+      );
+
+  Widget _iconLeading(IconData icon, {String? image}) => Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: image != null
+            ? Image.asset(image,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) =>
+                    Icon(icon, color: AppColors.kmOrange, size: 20))
+            : Icon(icon, color: AppColors.kmOrange, size: 20),
+      );
+
   @override
   Widget build(BuildContext context) {
-    final results = serviceFilters.where((s) {
-      final n = (s['name'] as String).toLowerCase();
-      final np = S.serviceName(s['name'] as String);
-      return _q.isEmpty || n.contains(_q.toLowerCase()) || np.contains(_q);
+    final q = _q.trim().toLowerCase();
+
+    final serviceResults = _serviceEntries.where((s) {
+      final n = s.label.toLowerCase();
+      final np = S.serviceName(s.label).toLowerCase();
+      return q.isEmpty || n.contains(q) || np.contains(q);
     }).toList();
 
     // किबोर्ड खुल्दा (विशेष गरी सानो फोन/landscape मा) search box + ८ वटै
@@ -1436,9 +2004,7 @@ class _SearchSheetState extends State<_SearchSheet> {
             maxHeight: maxSheetHeight.clamp(200, double.infinity)),
         child: ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-            child: Container(
+          child: glassBackdrop(sigma: 26, child: Container(
               decoration: BoxDecoration(
                 color: AppColors.kmSurface.withValues(alpha: 0.94),
                 borderRadius:
@@ -1449,83 +2015,121 @@ class _SearchSheetState extends State<_SearchSheet> {
                 ),
               ),
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 4,
-                      margin: const EdgeInsets.only(bottom: 14),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.28),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                    TextField(
-                      controller: _c,
-                      autofocus: true,
-                      style: const TextStyle(color: AppColors.kmText),
-                      onChanged: (v) => setState(() => _q = v),
-                      decoration: InputDecoration(
-                        hintText: S.searchHint,
-                        hintStyle:
-                            const TextStyle(color: AppColors.kmMuted),
-                        prefixIcon: const Icon(Icons.search_rounded,
-                            color: AppColors.kmOrange),
-                        filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.06),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: BorderSide(
-                              color: Colors.white.withValues(alpha: 0.14)),
-                        ),
-                        focusedBorder: const OutlineInputBorder(
-                          borderRadius: BorderRadius.all(Radius.circular(16)),
-                          borderSide:
-                              BorderSide(color: AppColors.kmOrange, width: 1.4),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    ...results.map((s) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Material(
-                            color: Colors.white.withValues(alpha: 0.06),
-                            borderRadius: BorderRadius.circular(16),
-                            child: ListTile(
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16)),
-                              leading: Container(
-                                width: 44,
-                                height: 44,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.08),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                clipBehavior: Clip.antiAlias,
-                                child: Image.asset(
-                                  serviceImageFor(s['name'] as String),
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => Icon(
-                                      s['icon'] as IconData,
-                                      color: AppColors.kmOrange,
-                                      size: 20),
-                                ),
-                              ),
-                              title: Text(S.serviceName(s['name'] as String),
-                                  style: const TextStyle(
-                                      color: AppColors.kmText,
-                                      fontWeight: FontWeight.w700)),
-                              subtitle: Text(s['name'] as String,
-                                  style: const TextStyle(
-                                      color: AppColors.kmMuted)),
-                              onTap: () => widget.onPick(s['name'] as String),
+              child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: _userDocStream,
+                builder: (context, snap) {
+                  final data = snap.data?.data() ?? const {};
+                  final placeResults = q.isEmpty
+                      ? const <({String label, String address})>[]
+                      : _places(data)
+                          .where((p) =>
+                              p.label.toLowerCase().contains(q) ||
+                              p.address.toLowerCase().contains(q))
+                          .toList();
+                  final navResults = q.isEmpty
+                      ? const <_NavSearchEntry>[]
+                      : _navSearchEntries
+                          .where((e) =>
+                              e.label.toLowerCase().contains(q) ||
+                              e.keywords.contains(q))
+                          .toList();
+
+                  return SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 42,
+                            height: 4,
+                            margin: const EdgeInsets.only(bottom: 14),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.28),
+                              borderRadius: BorderRadius.circular(2),
                             ),
                           ),
-                        )),
-                  ],
-                ),
+                        ),
+                        TextField(
+                          controller: _c,
+                          autofocus: true,
+                          style: const TextStyle(color: AppColors.kmText),
+                          onChanged: (v) => setState(() => _q = v),
+                          decoration: InputDecoration(
+                            hintText: S.searchHint,
+                            hintStyle:
+                                const TextStyle(color: AppColors.kmMuted),
+                            prefixIcon: const Icon(Icons.search_rounded,
+                                color: AppColors.kmOrange),
+                            filled: true,
+                            fillColor: Colors.white.withValues(alpha: 0.06),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              borderSide: BorderSide(
+                                  color: Colors.white.withValues(alpha: 0.14)),
+                            ),
+                            focusedBorder: const OutlineInputBorder(
+                              borderRadius:
+                                  BorderRadius.all(Radius.circular(16)),
+                              borderSide: BorderSide(
+                                  color: AppColors.kmOrange, width: 1.4),
+                            ),
+                          ),
+                        ),
+                        if (q.isNotEmpty &&
+                            serviceResults.isEmpty &&
+                            placeResults.isEmpty &&
+                            navResults.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 24),
+                            child: Center(
+                              child: Text('No results found',
+                                  style: TextStyle(color: AppColors.kmMuted)),
+                            ),
+                          ),
+                        if (serviceResults.isNotEmpty) ...[
+                          _sectionHeader('Services'),
+                          ...serviceResults.map((s) => _resultTile(
+                                leading: _iconLeading(s.icon, image: s.image),
+                                title: S.serviceName(s.label),
+                                subtitle: s.label,
+                                onTap: s.onTap,
+                              )),
+                        ],
+                        if (placeResults.isNotEmpty) ...[
+                          _sectionHeader(S.savedPlacesTitle),
+                          ...placeResults.map((p) => _resultTile(
+                                leading:
+                                    _iconLeading(Icons.place_rounded),
+                                title: p.label,
+                                subtitle: p.address,
+                                onTap: () {
+                                  Navigator.pop(context);
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) =>
+                                            const SavedPlacesScreen()),
+                                  );
+                                },
+                              )),
+                        ],
+                        if (navResults.isNotEmpty) ...[
+                          _sectionHeader(S.settings),
+                          ...navResults.map((e) => _resultTile(
+                                leading: _iconLeading(e.icon),
+                                title: e.label,
+                                subtitle: e.keywords,
+                                onTap: () {
+                                  Navigator.pop(context);
+                                  e.onTap(context);
+                                },
+                              )),
+                        ],
+                      ],
+                    ),
+                  );
+                },
               ),
             ),
           ),
@@ -1721,12 +2325,20 @@ class _HomeDrawer extends StatelessWidget {
                       child: ListView(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         children: [
-                          // Owner-only: Admin Dashboard entry
-                          if (isOwner)
+                          // Owner-only: Admin Dashboard entry — अब सिधै
+                          // comprehensive Multi-Role Dashboard (Driver/
+                          // Worker-Handyman/Hotel tabs) मा, पहिले संकुचित
+                          // worker-मात्र OwnerDashboardScreen मा गइरहेको थियो।
+                          if (isOwner) ...[
                             item(
                                 Icons.admin_panel_settings_rounded,
                                 'Admin Dashboard',
-                                () => go(const OwnerDashboardScreen())),
+                                () => go(const AdminDashboardScreen())),
+                            item(
+                                Icons.verified_rounded,
+                                'Hotel Verification',
+                                () => go(const HotelVerificationAdminScreen())),
+                          ],
                           item(Icons.location_city_rounded, S.menuCity,
                               () => go(const SavedPlacesScreen())),
                           item(Icons.history_rounded, S.menuRequestHistory,

@@ -1,76 +1,64 @@
 // onboarding/sahayatri_brand.dart
 //
-// "Sahayatri" brand-mark widgets — गोलाकार gradient "S" लोगो + "सह"+"yatri"
-// wordmark। Onboarding र Welcome (phone landing) स्क्रिनमा साझा प्रयोगको लागि।
+// "Sahayatri" brand-mark widgets — गोलाकार glow ब्याजमा साँचो logo glyph +
+// "सह"+"yatri" wordmark। Onboarding र Welcome (phone landing) स्क्रिनमा
+// साझा प्रयोगको लागि।
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// गोलाकार गाढा ब्याजमा gradient "S" चिन्ह + छेउको सानो टिप्पी बिन्दु।
+/// गोलाकार गाढा glass ब्याज (हल्का purple radial gradient + neon purple
+/// border + बाहिरी glow) भित्र साँचो brand logo ("SY" road+traveler mark,
+/// `assets/icon/app_icon_foreground.png` — launcher icon कै उही transparent
+/// source, हेर्नुहोस् `pubspec.yaml`'s `flutter_launcher_icons`)। सेतो ठोस
+/// ब्याज (अघिल्लो version) landing page कै गाढा neon theme सँग नमिलेर अति
+/// उज्यालो/flat देखिन्थ्यो — अब गाढा glass background ले नै glyph (जुन
+/// आफैं उज्यालो/saturated purple-pink-orange gradient हो) लाई पर्याप्त
+/// luminance contrast दिन्छ, कुनै सेतो/flat panel बिनै।
 class SahayatriLogoMark extends StatelessWidget {
   final double size;
   const SahayatriLogoMark({super.key, this.size = 96});
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return Container(
       width: size,
       height: size,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: AppColors.kmSurface.withValues(alpha: 0.6),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.kmPurple.withValues(alpha: 0.35),
-                  blurRadius: 34,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [
+            AppColors.kmPurple.withValues(alpha: 0.24),
+            AppColors.kmSurface.withValues(alpha: 0.92),
+          ],
+        ),
+        border: Border.all(
+          color: AppColors.kmPurple.withValues(alpha: 0.55),
+          width: 1.6,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.kmPurple.withValues(alpha: 0.5),
+            blurRadius: 38,
+            spreadRadius: 3,
           ),
-          ShaderMask(
-            shaderCallback: (bounds) => const SweepGradient(
-              startAngle: 0,
-              endAngle: 6.28319,
-              colors: [
-                AppColors.kmTealBlue,
-                AppColors.kmPurple,
-                AppColors.kmPink,
-                AppColors.kmOrange,
-                AppColors.kmTealBlue,
-              ],
-            ).createShader(bounds),
-            child: Text(
-              'S',
-              style: TextStyle(
-                fontSize: size * 0.56,
-                fontWeight: FontWeight.w900,
-                height: 1,
-                color: Colors.white,
-              ),
-            ),
-          ),
-          Positioned(
-            right: size * 0.2,
-            bottom: size * 0.2,
-            child: Container(
-              width: size * 0.1,
-              height: size * 0.1,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [AppColors.kmTeal, AppColors.kmTealBlue],
-                ),
-              ),
-            ),
+          BoxShadow(
+            color: AppColors.kmOrange.withValues(alpha: 0.18),
+            blurRadius: 24,
+            spreadRadius: -4,
           ),
         ],
+      ),
+      child: Padding(
+        // `app_icon_foreground.png` भित्र आफैं थप transparent margin
+        // (launcher adaptive-icon safe-zone) बाँकी नै छ, त्यसैले यहाँ ठूलो
+        // थप padding चाहिँदैन (glyph सानो देखिने गुनासो दोहोरिने)।
+        padding: EdgeInsets.all(size * 0.06),
+        child: Image.asset(
+          'assets/icon/app_icon_foreground.png',
+          fit: BoxFit.contain,
+        ),
       ),
     );
   }

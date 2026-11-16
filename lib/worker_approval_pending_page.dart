@@ -192,6 +192,7 @@ class _WorkerApprovalPendingPageState extends State<WorkerApprovalPendingPage> {
                 final existingService = data['service']?.toString();
                 final wasDriver = existingService == 'Bike' ||
                     existingService == 'Car' ||
+                    existingService == 'Auto' ||
                     existingService == 'Driver';
                 return _rejected(
                     (data['rejectionReason'] ?? '').toString(),

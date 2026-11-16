@@ -30,6 +30,20 @@ class CallPermissionDenied implements Exception {
 
 enum CallStatus { idle, ringing, connecting, connected, ended }
 
+/// Consecutive-Call Resource Overlap Fix — CallScreen.dispose() ले
+/// `hangUp()` लाई कहिल्यै await गर्दैन (`unawaited(...)`, Flutter को
+/// dispose() synchronous नै हुनुपर्ने भएकोले) — त्यसैले पहिलो कल काटेपछि
+/// प्रयोगकर्ताले झट्टै दोस्रो/तेस्रो कल थिच्दा, पहिलो कलको camera/mic
+/// track stop + video renderer native texture release अझै background मा
+/// "in-flight" नै हुँदाहुँदै नयाँ CallSession ले आफ्नै नयाँ renderer/camera
+/// एकैचोटि acquire गर्न थाल्थ्यो — केही क्षणसम्म दुवै सेट (पुरानो अझै
+/// पूर्ण release नभएको + नयाँ भर्खरै खोलिएको) native handle एकैचोटि
+/// जीवित रहँदा RAM/GPU texture दोब्बर दबाब पर्ने, र त्यही दबाबले
+/// दोस्रो/तेस्रो कल जोडिने (connecting) क्षणमै app ब्याक (crash) हुने
+/// गुनासोको जड। अब नयाँ कल सुरु हुनुअघि (renderer initialize/camera
+/// acquire गर्नुअघि नै) अघिल्लो कलको teardown साँच्चै पूरा नभएसम्म पर्खिन्छ।
+Future<void>? _pendingTeardown;
+
 /// एउटा live कल — CallScreen ले बनाउँछ र नियन्त्रण गर्छ।
 class CallSession {
   final String requestId;
@@ -74,9 +88,51 @@ class CallSession {
   final _subs = <StreamSubscription>[];
   bool _closed = false;
 
+  // ── Native use-after-free race fix (SIGABRT on WebRTC signaling thread) ──
+  // `_closed` बुलियन जाँच (माथि/तल जताततै) ले एउटा TOCTOU (time-of-check-
+  // time-of-use) प्वाल छोड्थ्यो: Dart ले `!_closed` जाँचेर `_pc!.addCandidate()`
+  // कल गर्छ (यो platform-channel मार्फत native signaling thread मा async
+  // dispatch हुन्छ) — तर त्यही एक microtask पछि नै (उदाहरण: प्रयोगकर्ताले
+  // ठ्याक्कै त्यही क्षण Hang-up थिचे) `hangUp()` चलेर `_pc?.close()` सम्म
+  // पुगिसक्छ, जबकि पहिलेकै `addCandidate` अझै native side मा "in-flight"
+  // नै हुन्छ। बुलियन जाँचले यो दुई async operation बीचको वास्तविक race
+  // (एउटै समयमा close+addCandidate) कहिल्यै रोक्दैन — ठ्याक्कै यही थियो
+  // "video/audio call बीचमै app crash (SIGABRT, libjingle_peerconnection_so.so,
+  // signaling_threa[d])" गुनासोको साँचो जड, live logcat मा नै पक्रिएको।
+  // अब हरेक native ICE-candidate कल यही counter ले "in-flight" गनिन्छ,
+  // र `hangUp()` ले `_pc.close()` अघि (bounded समयसम्म) तिनी आफैं
+  // सकिनुको पर्खन्छ — त्यसपछि मात्र बन्द गर्छ।
+  int _inFlightPcOps = 0;
+
+  Future<T?> _guardedPcOp<T>(Future<T> Function() op) async {
+    if (_closed || _pc == null) return null;
+    _inFlightPcOps++;
+    try {
+      return await op();
+    } catch (_) {
+      return null;
+    } finally {
+      _inFlightPcOps--;
+    }
+  }
+
   // `disconnected` state पछि कल तुरुन्तै नकाटी केही समय पर्खने grace-period
   // टाइमर — तल `onConnectionState` मा हेर्नुहोस्।
   Timer? _disconnectGraceTimer;
+
+  // ── Absolute Connect Timeout (state-transition-निरपेक्ष) ──────────────
+  // `onConnectionState` का handler हरू (माथि/तल) विशिष्ट state-transition
+  // (disconnected/failed भित्र पस्दा) मा मात्र भर पर्छन् — तर वास्तविक
+  // network मा ICE कहिल्यै त्यो explicit state मै नपुगी सधैँ "checking"/
+  // "new" मै चुपचाप अड्किन पनि सक्छ (धेरै जसो restrictive mobile-carrier
+  // NAT ले plain TURN नै ब्लक गर्दा ठ्याक्कै यस्तै हुन्छ) — त्यस्तो
+  // अवस्थामा माथिका कुनै पनि timer कहिल्यै ट्रिगर हुँदैनन्, र "Connecting…"
+  // UI मा अनन्त-कालसम्म देखिइरहन्छ, कुनै audio/video नआईकनै — ठ्याक्कै
+  // "black screen, zero media, तर signaling त connect भएको देखिन्छ"
+  // गुनासोको जड। यो एउटा ठोस, ~२०s को ceiling — status साँच्चै `connected`
+  // नभएसम्म मात्र सक्रिय रहन्छ।
+  final connectTimedOut = ValueNotifier<bool>(false);
+  Timer? _absoluteConnectTimer;
 
   // ── ICE candidate race-condition fix ──────────────────────────────────
   // अर्को पक्षको ICE candidate, हाम्रो remote description सेट हुनुअघि नै
@@ -102,12 +158,9 @@ class CallSession {
     // `_pc` मा `addCandidate` कल गर्दा signaling thread मा native SIGABRT
     // (libjingle_peerconnection_so.so) आउँथ्यो — यही थियो "video call
     // बीचमै आफैं app back/close हुने" क्र्यासको साँचो जड।
-    if (_closed || _pc == null) return;
-    try {
-      await _pc!.addCandidate(c);
-    } catch (_) {
-      // कहिलेकाहीं ढिलो/duplicate candidate आउँछ — कल तोड्नु भन्दा बेवास्ता गर्ने।
-    }
+    await _guardedPcOp(() => _pc!.addCandidate(c));
+    // कहिलेकाहीं ढिलो/duplicate candidate आउँछ (`_guardedPcOp` भित्रै
+    // catch हुन्छ) — कल तोड्नु भन्दा बेवास्ता गर्ने।
   }
 
   /// पहिलो video track को id — नभए null। `setSrcObject`लाई trackId दिन
@@ -116,6 +169,80 @@ class CallSession {
   static String? _firstTrackId(List<MediaStreamTrack>? tracks) =>
       (tracks != null && tracks.isNotEmpty) ? tracks.first.id : null;
 
+  // `onTrack` हरेक track (audio/video) का लागि छुट्टाछुट्टै फायर हुन सक्छ,
+  // दुवैको `e.streams.first` भने उही (id मिल्ने) MediaStream हुन्छ। Audio
+  // को event पहिले आइपुगे (सामान्यतया यस्तै हुन्छ, `_local!.getTracks()`
+  // मा audio पहिले आउने भएकोले) त्यो बेला `stream.getVideoTracks()` अझै
+  // खाली हुन्छ — renderer लाई `trackId: null` सहित bind गरिन्छ। यहाँ कुन
+  // video trackId अन्तिमपटक bind भयो ट्र्याक गरी, फरक (नयाँ) trackId
+  // आउनेबित्तिकै पहिले `srcObject = null` (स्पष्ट clear) गरेर native-side
+  // binding पूर्ण रूपमा रिसेट गरिन्छ, अनि तुरुन्तै सही trackId सहित फेरि
+  // bind — "re-initialize" नै हुन्छ।
+  String? _remoteVideoTrackId;
+
+  /// Remote stream (`onTrack` र `onAddStream` दुवैबाट) renderer मा bind
+  /// गर्ने साझा logic। माथिकै `_remoteVideoTrackId` कमेन्ट हेर्नुहोस्।
+  Future<void> _bindRemoteStream(MediaStream stream) async {
+    if (_closed) return;
+    try {
+      final newVideoTrackId = _firstTrackId(stream.getVideoTracks());
+      if (newVideoTrackId != null && newVideoTrackId != _remoteVideoTrackId) {
+        await remoteRenderer.setSrcObject(stream: null);
+        if (_closed) return;
+        _remoteVideoTrackId = newVideoTrackId;
+      }
+      await remoteRenderer.setSrcObject(stream: stream, trackId: newVideoTrackId);
+      if (_closed) return;
+      final at = stream.getAudioTracks();
+      debugPrint('[CALL-AUDIO] remote bound: audioTracks=${at.length} '
+          'enabled=${at.map((t) => t.enabled).toList()} '
+          'muted=${at.map((t) => t.muted).toList()}');
+      _scheduleAudioStats();
+      remoteJoined.value = true;
+      status.value = CallStatus.connected;
+      _absoluteConnectTimer?.cancel();
+      _startDurationTimer();
+    } catch (_) {}
+  }
+
+  // ── Audio diagnostics ───────────────────────────────────────────────────
+  // "कल जोडिएको देखिन्छ तर आवाज आउँदैन" — आवाज कुन तर्फ हराउँछ छुट्याउन:
+  // outbound (हाम्रो mic बाट कति packet गए) र inbound (अर्कोबाट कति आए)।
+  bool _statsScheduled = false;
+
+  void _scheduleAudioStats() {
+    if (_statsScheduled) return;
+    _statsScheduled = true;
+    for (final secs in const [4, 10, 20]) {
+      Timer(Duration(seconds: secs), _logAudioStats);
+    }
+  }
+
+  Future<void> _logAudioStats() async {
+    if (_closed || _pc == null) return;
+    try {
+      final reports = await _pc!.getStats();
+      for (final r in reports) {
+        final v = r.values;
+        final kind = (v['kind'] ?? v['mediaType'])?.toString();
+        if (kind != 'audio') continue;
+        if (r.type == 'inbound-rtp') {
+          debugPrint('[CALL-AUDIO] inbound: packetsReceived=${v['packetsReceived']} '
+              'bytes=${v['bytesReceived']} lost=${v['packetsLost']} '
+              'audioLevel=${v['audioLevel']} energy=${v['totalAudioEnergy']}');
+        } else if (r.type == 'outbound-rtp') {
+          debugPrint('[CALL-AUDIO] outbound: packetsSent=${v['packetsSent']} '
+              'bytes=${v['bytesSent']}');
+        }
+      }
+      final lt = _local?.getAudioTracks() ?? const <MediaStreamTrack>[];
+      debugPrint('[CALL-AUDIO] local mic tracks=${lt.length} '
+          'enabled=${lt.map((t) => t.enabled).toList()} micOn=${micOn.value}');
+    } catch (e) {
+      debugPrint('[CALL-AUDIO] stats failed: $e');
+    }
+  }
+
   Future<void> _markRemoteDescSet() async {
     _remoteDescSet = true;
     final pending = List<RTCIceCandidate>.from(_pendingRemoteCandidates);
@@ -123,12 +250,10 @@ class CallSession {
     for (final c in pending) {
       // हरेक iteration आफैं await हुने भएकोले, बीचमै (यो loop चलिरहेकै
       // बेला) `hangUp()` भइहाले पछिल्ला candidate हरूले बन्द भइसकेको
-      // native `_pc` छुनु हुँदैन — `_addRemoteCandidate()` कै उस्तै
-      // native-SIGABRT जोखिम।
+      // native `_pc` छुनु हुँदैन — `_guardedPcOp` ले नै दुवै (closed-check
+      // + in-flight counter) सम्हाल्छ।
       if (_closed || _pc == null) return;
-      try {
-        await _pc!.addCandidate(c);
-      } catch (_) {}
+      await _guardedPcOp(() => _pc!.addCandidate(c));
     }
   }
 
@@ -148,27 +273,55 @@ class CallSession {
   /// चलिरहेको कल (यो सधैँ ICE negotiation भइरहेकै बेला चल्ने callback
   /// भएकोले) अस्थिर देखिने/अचानक disconnect हुने गुनासोसँग मिल्दो हो। अब
   /// दुवै ठाउँमा सुरक्षित।
+  ///
+  /// यसबाहेक — ICE gathering ले सामान्यतया एकैचोटि (केही milliseconds
+  /// भित्रै) ४-१० वटासम्म candidate "burst" मा दिन्छ (Wi-Fi/mobile-data
+  /// प्रत्येक network interface + प्रत्येक STUN/TURN server बाट छुट्टाछुट्टै
+  /// candidate — यो normal/आवश्यक redundancy हो, बग होइन)। पहिले हरेक
+  /// candidate ले आफ्नै छुट्टै Firestore `.add()` (छुट्टै network round-trip)
+  /// तुरुन्तै फायर गर्थ्यो — burst मा एकैचोटि ४-१० वटा समानान्तर API कल
+  /// हुन्थ्यो (CPU/battery/network मा अनावश्यक भार)। अब यस्तो burst लाई
+  /// छोटो (२००ms) झ्यालभित्र जम्मा गरेर एउटै Firestore batched-write मा
+  /// पठाउँछ — candidate कहिल्यै हराउँदैन, नेटवर्क round-trip मात्र घट्छ।
+  final List<Map<String, dynamic>> _pendingLocalCandidates = [];
+  CollectionReference<Map<String, dynamic>>? _pendingLocalCandidateCol;
+  Timer? _candidateBatchTimer;
+
   void _writeLocalCandidate(
       CollectionReference<Map<String, dynamic>> col, RTCIceCandidate c) {
+    if (_closed) return;
     final candidate = c.candidate;
     if (candidate == null || candidate.isEmpty) return;
-    unawaited(_safeAddCandidate(col, candidate, c.sdpMid, c.sdpMLineIndex));
+    _pendingLocalCandidateCol = col;
+    _pendingLocalCandidates.add({
+      'candidate': candidate,
+      'sdpMid': c.sdpMid,
+      'sdpMLineIndex': c.sdpMLineIndex,
+    });
+    // पहिलो candidate ले मात्र नयाँ झ्याल सुरु गर्छ — त्यही झ्यालभित्र
+    // थपिने बाँकी सबै (burst) यही एउटै upcoming flush मा सामेल हुन्छन्।
+    _candidateBatchTimer ??= Timer(const Duration(milliseconds: 200), () {
+      _candidateBatchTimer = null;
+      unawaited(_flushLocalCandidates());
+    });
   }
 
-  Future<void> _safeAddCandidate(
-      CollectionReference<Map<String, dynamic>> col,
-      String candidate,
-      String? sdpMid,
-      int? sdpMLineIndex) async {
+  Future<void> _flushLocalCandidates() async {
+    if (_pendingLocalCandidates.isEmpty || _pendingLocalCandidateCol == null) {
+      return;
+    }
+    final col = _pendingLocalCandidateCol!;
+    final batch = List<Map<String, dynamic>>.from(_pendingLocalCandidates);
+    _pendingLocalCandidates.clear();
     try {
-      await col.add({
-        'candidate': candidate,
-        'sdpMid': sdpMid,
-        'sdpMLineIndex': sdpMLineIndex,
-      });
+      final write = FirebaseFirestore.instance.batch();
+      for (final data in batch) {
+        write.set(col.doc(), data);
+      }
+      await write.commit();
     } catch (_) {
-      // यो candidate मात्र हराउँछ (धेरैमध्ये एक हो, ICE ले बाँकीले पनि
-      // जोड्न सक्छ) — पूरै कल यसैले तोडिनु हुँदैन।
+      // यो burst मात्र हराउँछ (धेरैमध्ये केही, ICE ले बाँकीले पनि जोड्न
+      // सक्छ) — पूरै कल यसैले तोडिनु हुँदैन।
     }
   }
 
@@ -182,19 +335,75 @@ class CallSession {
     }
   }
 
+  // ── Abandoned-Init Cleanup ─────────────────────────────────────────────
+  // `hangUp()` ले `_closed = true` सेट गरिसकेपछि पनि (उदाहरण: प्रयोगकर्ताले
+  // ringing/permission-dialog/camera-init हुँदै back थिचे), यही `start()`
+  // अझै आफ्नै लामो प्रारम्भिक await हरू (permission/renderer-init/
+  // createPeerConnection/getUserMedia) भित्रै "in-flight" रहेको हुन सक्छ।
+  // त्यो पहिलेकै `hangUp()` कलले यी अझै नबनेका (त्यतिबेला null नै भएका)
+  // native resource कहिल्यै छुन/बन्द गर्न पाउँदैन — नतिजा: क्यामेरा/mic/
+  // peer-connection handle चुपचाप leaked रहन्थे (केही कल पछि जम्मा भएर
+  // OutOfMemory/native crash, वा ठ्याक्कै "ringing हुँदै back थिच्दा app
+  // अड्किने/force-close हुने" गुनासोको साँचो अर्को सम्भावित जड)। यो helper
+  // ले जे पनि (आंशिक रूपमा भए पनि) बनिसकेको छ त्यो सबै सुरक्षित रूपमा
+  // (हरेक चरण छुट्टै try/catch, `hangUp()` कै ढाँचा) फेरि dispose गर्छ —
+  // तल हरेक ठूलो await पछि `_closed` जाँचेर बोलाइन्छ।
+  Future<void> _disposeAbandonedResources() async {
+    for (final t in _local?.getTracks() ?? []) {
+      try {
+        await t.stop();
+      } catch (_) {}
+    }
+    try {
+      await _local?.dispose();
+    } catch (_) {}
+    try {
+      await _pc?.close();
+    } catch (_) {}
+    try {
+      await localRenderer.dispose();
+    } catch (_) {}
+    try {
+      await remoteRenderer.dispose();
+    } catch (_) {}
+  }
+
   Future<void> start() async {
+    // अघिल्लो कल (अझै background मा teardown भइरहेको भए) को camera/renderer
+    // साँच्चै पूर्ण रूपमा release नभएसम्म नयाँ कलको आफ्नै renderer/camera
+    // acquire नगर्ने — माथिकै `_pendingTeardown` हेर्नुहोस्।
+    if (_pendingTeardown != null) {
+      try {
+        await _pendingTeardown;
+      } catch (_) {}
+      // native settling margin — Dart-side `await _pc?.close()` फर्किनु र
+      // underlying Android WebRTC native peer-connection/track objects
+      // *वास्तवमै* पूर्ण रूपमा release हुनु उस्तै क्षण नहुन सक्छ (live logcat
+      // मा नै पक्रिएको: "MediaStreamTrack has been disposed" भन्दै नयाँ
+      // कलकै आफ्नै onAddTrack बाटै SIGABRT, माथिकै Dart-side await
+      // फर्किसकेपछि पनि)। 300ms ले पहिलो पटक यो होल्ड नरोकेको भेटिएकाले
+      // (लगातार rapid-fire कल/काट stress test मा अझै crash) २ सेकेन्डमा
+      // बढाइयो — यो केवल लगातार दोस्रो/तेस्रो कलमै लाग्छ, पहिलो कल
+      // (जहाँ `_pendingTeardown` नै null हुन्छ) कहिल्यै यो पर्खाइ भोग्दैन।
+      await Future.delayed(const Duration(seconds: 2));
+    }
+    if (_closed) return;
+
     // getUserMedia अघि नै स्पष्ट रूपमा अनुमति माग्ने — नत्र अनुमति अस्वीकृत
     // भएमा getUserMedia चुपचाप असफल हुन्छ र UI ले remote/local video कतै
     // नआएको कालो/खाली स्क्रिन मात्र देखाउँछ, प्रयोगकर्तालाई किन थाहै हुँदैन।
     final mic = await Permission.microphone.request();
     final cam =
         video ? await Permission.camera.request() : PermissionStatus.granted;
+    if (_closed) return;
     if (!mic.isGranted || !cam.isGranted) {
       throw CallPermissionDenied(video);
     }
 
     await localRenderer.initialize();
+    if (_closed) return _disposeAbandonedResources();
     await remoteRenderer.initialize();
+    if (_closed) return _disposeAbandonedResources();
     status.value = isCaller ? CallStatus.ringing : CallStatus.connecting;
 
     // Caller मात्र — अघिल्लो कल (उही requestId) बाट बाँकी रहन सक्ने stale
@@ -206,12 +415,14 @@ class CallSession {
     // push भइसकेपछि, यहाँ background मै चलेको यो await ले UI लाई छुँदैन।
     if (isCaller) {
       await CallService.resetSignal(requestId);
+      if (_closed) return _disposeAbandonedResources();
     }
 
     // owner ले Firestore (config/webrtc) बाट कहिलेपनि नयाँ/paid TURN
     // provider मा नयाँ app release बिनै अपग्रेड गर्न सकून् भनेर — नभए
     // हालको (free relay) default।
     _pc = await createPeerConnection(await WebRtcConfig.iceServersOnce());
+    if (_closed) return _disposeAbandonedResources();
 
     _local = await navigator.mediaDevices.getUserMedia({
       // AEC/NS/AGC + fixed 48kHz mono — बिना यसको आवाज तन्किएको/कम्पन
@@ -295,6 +506,7 @@ class CallSession {
                   ],
                 },
     });
+    if (_closed) return _disposeAbandonedResources();
     // `renderer.srcObject = stream` (synchronous setter) ले native side
     // confirm गर्नुअघि नै फर्किन्छ — त्यही race ले कहिलेकाहीं local/remote
     // preview कालो/खाली नै रहिरहने बग दिन्थ्यो। `setSrcObject()` (awaited)
@@ -308,7 +520,15 @@ class CallSession {
       trackId: _firstTrackId(_local?.getVideoTracks()),
     );
     for (final track in _local!.getTracks()) {
-      final sender = await _pc!.addTrack(track, _local!);
+      // `_guardedPcOp` — माथिकै SIGABRT जड (native भइरहेको/भइसकेको `_pc` मा
+      // कल) यहाँ पनि उस्तै लागू हुन्छ: यो loop चलिरहेकै बीचमा (हरेक
+      // iteration आफैं await हुने भएकोले) `hangUp()` ठ्याक्कै त्यही क्षण
+      // चल्न सक्छ — पहिले सिधै `_pc!.addTrack(...)` (कुनै guard/try-catch
+      // बिना) कल हुन्थ्यो, जुन बन्द भइसकेको/भइरहेको native `_pc` मा
+      // पुगे उही क्र्यास दिन सक्थ्यो।
+      if (_closed || _pc == null) break;
+      final sender = await _guardedPcOp(() => _pc!.addTrack(track, _local!));
+      if (sender == null) continue;
       // Video track मात्र — bitrate cap + "maintain-framerate" degradation।
       // WebRTC को default (balanced/maintain-resolution) ले नेटवर्क/CPU
       // दबाबमा resolution नै जोगाउन खोज्दा frame नै छाड्छ (देखिने
@@ -356,17 +576,27 @@ class CallSession {
       // `_closed` guard यहाँ छुटेको थियो, disposed renderer मा
       // `setSrcObject` कल गर्दा native crash हुनसक्ने जोखिम।
       if (_closed || e.streams.isEmpty) return;
-      try {
-        final stream = e.streams.first;
-        await remoteRenderer.setSrcObject(
-          stream: stream,
-          trackId: _firstTrackId(stream.getVideoTracks()),
-        );
-        if (_closed) return;
-        remoteJoined.value = true;
-        status.value = CallStatus.connected;
-        _startDurationTimer();
-      } catch (_) {}
+      await _bindRemoteStream(e.streams.first);
+    };
+    // ── Mobile-only remote-video binding race ──────────────────────────────
+    // Android native plugin (third_party/flutter_webrtc) मा
+    // `videoRendererSetSrcObject` ले remote stream/track लाई native-side
+    // `remoteStreams`/`remoteTracks` registry (PeerConnectionObserver.java)
+    // बाट खोज्छ — तर त्यो registry केवल legacy `onAddStream` native callback
+    // (Plan-B-compat) ले मात्र भर्छ, आधुनिक Unified-Plan `onTrack`/
+    // `onAddTrack` ले होइन। हाम्रो माथिकै `onTrack` handler ले तुरुन्तै
+    // (registry भरिनुअघि नै हुन सक्ने) native मा bind गर्ने कल पठाउँदा, त्यो
+    // registry lookup खाली भेटेर renderer को video track `null` मै सेट
+    // हुन्थ्यो — ठ्याक्कै "mobile मा मात्र remote भिडियो कहिल्यै नआउने,
+    // laptop/web मा भने ठीकै देखिने" असममित गुनासोको साँचो जड (web को
+    // renderer यो registry मा निर्भरै छैन, त्यसैले यो race मा कहिल्यै फस्दैन)।
+    // Dart-side `onAddStream` भने ठ्याक्कै त्यही native registry भर्ने
+    // callback बाटै फायर हुन्छ — त्यसैले यो फायर हुनेबित्तिकै registry
+    // ग्यारेन्टी भरिसकेको हुन्छ, र यहाँ फेरि bind गर्दा (माथिकै `onTrack`
+    // ले race मा हारेको भए पनि) यो दोस्रो प्रयास सधैं सफल हुन्छ।
+    _pc!.onAddStream = (MediaStream stream) async {
+      if (_closed) return;
+      await _bindRemoteStream(stream);
     };
     // `disconnected` (कुनै transport ले क्षणिक रूपमा नेटवर्क गुमाउँदा, खास
     // गरी यहाँ प्रयोग हुने free TURN relay बाट जाँदा सामान्य) प्रायः केही
@@ -418,6 +648,11 @@ class CallSession {
       await _answerOffer();
     }
 
+    _absoluteConnectTimer = Timer(const Duration(seconds: 20), () {
+      if (_closed || status.value == CallStatus.connected) return;
+      connectTimedOut.value = true;
+    });
+
     // दुवै पक्षले कल end भयो कि सुन्ने
     _subs.add(_doc.snapshots().listen((snap) {
       final data = snap.data();
@@ -429,8 +664,10 @@ class CallSession {
 
   Future<void> _createOffer() async {
     final me = _uid;
-    _pc!.onIceCandidate = (c) =>
-        _writeLocalCandidate(_doc.collection('offerCandidates'), c);
+    _pc!.onIceCandidate = (c) {
+      if (_closed) return;
+      _writeLocalCandidate(_doc.collection('offerCandidates'), c);
+    };
 
     final offer = await _pc!.createOffer();
     _assertValidDescription(offer, 'Offer');
@@ -476,8 +713,10 @@ class CallSession {
 
   Future<void> _answerOffer() async {
     final me = _uid;
-    _pc!.onIceCandidate = (c) =>
-        _writeLocalCandidate(_doc.collection('answerCandidates'), c);
+    _pc!.onIceCandidate = (c) {
+      if (_closed) return;
+      _writeLocalCandidate(_doc.collection('answerCandidates'), c);
+    };
 
     final snap = await _doc.get();
     final offer = snap.data()?['offer'];
@@ -494,8 +733,7 @@ class CallSession {
     // fetch/setRemoteDescription/createAnswer आदि चलिरहेकै बीचमा) भइहाले,
     // बन्द भइसकेको native `_pc` लाई फेरि नछुने (माथिकै SIGABRT जोखिम)।
     if (_closed || _pc == null) return;
-    await _pc!.setRemoteDescription(
-        RTCSessionDescription(offerSdp, offerType));
+    await _pc!.setRemoteDescription(RTCSessionDescription(offerSdp, offerType));
     // offer subcollection सुन्नुअघि नै remote description सेट भइसकेको
     // ग्यारेन्टी गर्ने — यहाँबाट पछि आउने candidate सबै तुरुन्तै थपिन्छन्,
     // तर subcollection ले पहिल्यै भएका पुराना doc पनि "added" भनेर फर्काउने
@@ -533,36 +771,85 @@ class CallSession {
   }
 
   void toggleMic() {
+    if (_closed) return;
     micOn.value = !micOn.value;
-    for (final t in _local?.getAudioTracks() ?? []) {
-      t.enabled = micOn.value;
-    }
-  }
-
-  void toggleCam() {
-    camOn.value = !camOn.value;
-    for (final t in _local?.getVideoTracks() ?? []) {
-      t.enabled = camOn.value;
-    }
-  }
-
-  Future<void> switchCamera() async {
     try {
-      final t = _local?.getVideoTracks();
-      if (t != null && t.isNotEmpty) {
-        await Helper.switchCamera(t.first);
-        isFrontCamera.value = !isFrontCamera.value;
+      for (final t in _local?.getAudioTracks() ?? []) {
+        t.enabled = micOn.value;
       }
     } catch (_) {}
   }
 
+  void toggleCam() {
+    if (_closed) return;
+    camOn.value = !camOn.value;
+    try {
+      for (final t in _local?.getVideoTracks() ?? []) {
+        t.enabled = camOn.value;
+      }
+    } catch (_) {}
+  }
+
+  // rapid multi-tap भए (native camera switch चलिरहेकै बीचमा फेरि तेस्रो/
+  // चौथो पटक) एकैचोटि दुई switch-camera native कल ठोक्किन नदिन — दोस्रो
+  // हार्डवेयर operation नै अर्को अझै चलिरहेकै बेला सुरु हुँदा camera driver
+  // तहमै (crash नभए पनि) अनपेक्षित/अड्किएको अवस्था दिनसक्छ, त्यसैले
+  // चलिरहेको बेला थप ट्याप चुपचाप बेवास्ता — पहिलो ट्याप सफल भइसकेपछि
+  // प्रयोगकर्ताले फेरि थिच्न सक्छन्।
+  bool _switchingCamera = false;
+
+  Future<void> switchCamera() async {
+    if (_closed || _switchingCamera) return;
+    _switchingCamera = true;
+    try {
+      final t = _local?.getVideoTracks();
+      if (t != null && t.isNotEmpty) {
+        await Helper.switchCamera(t.first);
+        if (_closed) return;
+        isFrontCamera.value = !isFrontCamera.value;
+      }
+    } catch (_) {
+    } finally {
+      _switchingCamera = false;
+    }
+  }
+
+  // Speaker toggle — UI ले (`speakerOn.value` फ्लिप) हरेक ट्याप तुरुन्तै
+  // (एउटै frame मै) देखाउँछ, तर native `setSpeakerphoneOn` कल भने सधैँ
+  // एकपटकमा एउटा मात्र गरिन्छ (serialized): rapid multi-tap ले दुई/तीन
+  // native audio-routing कल एकैचोटि "in-flight" राखे ती फर्कने क्रम
+  // ग्यारेन्टी नहुने भएकोले (last-tapped state भन्दा फरक/पुरानो जित्न
+  // सक्ने), UI मा देखिएको स्थिति र साँचो audio routing बेमेल हुने जोखिम
+  // हुन्थ्यो। यहाँ एउटा सानो in-flight queue ले — पहिलो native कल
+  // चलिरहेकै बेला थप ट्याप आए, त्यसको अन्तिम मात्र (latest wins, बीचका
+  // हराउन दिने) पछि क्रमैसँग लागू हुन्छ।
+  bool _speakerOpInFlight = false;
+  bool? _pendingSpeakerTarget;
+
   /// Speaker (loudspeaker/hands-free) ⇄ earpiece — flutter_webrtc कै native
   /// audio-routing (कुनै अतिरिक्त package नचाहिने), त्यसैले तुरुन्तै र भरपर्दो।
   Future<void> toggleSpeaker() async {
+    if (_closed) return;
     speakerOn.value = !speakerOn.value;
+    if (_speakerOpInFlight) {
+      _pendingSpeakerTarget = speakerOn.value;
+      return;
+    }
+    _speakerOpInFlight = true;
+    var target = speakerOn.value;
     try {
-      await Helper.setSpeakerphoneOn(speakerOn.value);
-    } catch (_) {}
+      while (true) {
+        try {
+          await Helper.setSpeakerphoneOn(target);
+        } catch (_) {}
+        if (_closed || _pendingSpeakerTarget == null) break;
+        target = _pendingSpeakerTarget!;
+        _pendingSpeakerTarget = null;
+      }
+    } finally {
+      _pendingSpeakerTarget = null;
+      _speakerOpInFlight = false;
+    }
   }
 
   /// पहिलोपटक साँच्चै जोडिएको बेला मात्र (audio/video दुवैको आफ्नै छुट्टै
@@ -582,6 +869,17 @@ class CallSession {
   Future<void> hangUp({bool remote = false}) async {
     if (_closed) return;
     _closed = true;
+    final done = Completer<void>();
+    _pendingTeardown = done.future;
+    try {
+      await _hangUpImpl(remote: remote);
+    } finally {
+      done.complete();
+      if (identical(_pendingTeardown, done.future)) _pendingTeardown = null;
+    }
+  }
+
+  Future<void> _hangUpImpl({bool remote = false}) async {
     _durationTimer?.cancel();
     // `status.value = ended` (तल) ले CallScreen को listener तुरुन्तै
     // (synchronous) फायर गर्छ र त्यहीबेला यो अन्तिम अवधि पढेर pop हुन्छ —
@@ -593,6 +891,10 @@ class CallSession {
     status.value = CallStatus.ended;
 
     _disconnectGraceTimer?.cancel();
+    _absoluteConnectTimer?.cancel();
+    _candidateBatchTimer?.cancel();
+    _candidateBatchTimer = null;
+    _pendingLocalCandidates.clear();
     // हरेक cleanup चरण (subscription cancel, track stop, stream dispose, PC
     // close) आफ्नै छुट्टै try/catch मा — पहिले यी सबै एउटै try block भित्र
     // थिए, त्यसैले बीचमा कुनै एउटा (जस्तै दोस्रो track.stop()) असफल भए
@@ -615,6 +917,17 @@ class CallSession {
     try {
       await _local?.dispose();
     } catch (_) {}
+    // माथिकै `_guardedPcOp`/`_inFlightPcOps` — कुनै ICE-candidate native कल
+    // ठ्याक्कै यही क्षण signaling thread मा अझै "in-flight" भइरहेको भए,
+    // त्यो नसकिकनै `_pc.close()` गर्दा use-after-free SIGABRT आउँथ्यो
+    // (live logcat मा पक्रिएको साँचो crash — यही थियो root cause)। bounded
+    // (बढीमा ४००ms) पर्खेर मात्र बन्द — network/native साँच्चै अड्किए पनि
+    // hang-up अनन्त नअड्कियोस्।
+    const maxDrainWait = Duration(milliseconds: 400);
+    final drainDeadline = DateTime.now().add(maxDrainWait);
+    while (_inFlightPcOps > 0 && DateTime.now().isBefore(drainDeadline)) {
+      await Future.delayed(const Duration(milliseconds: 20));
+    }
     try {
       await _pc?.close();
     } catch (_) {}

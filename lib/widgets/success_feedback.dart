@@ -1,12 +1,17 @@
 // widgets/success_feedback.dart
 // सफलता feedback — haptic + छोटो celebratory chime (asset बिना, runtime मा WAV बन्छ)।
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/strings.dart';
+import '../theme/app_theme.dart';
 import 'wav_tone.dart';
+import 'futuristic_ui.dart';
 
 AudioPlayer? _player;
 Uint8List? _cachedChime;
@@ -30,6 +35,122 @@ Future<void> playSuccessFeedback() async {
     try {
       await SystemSound.play(SystemSoundType.alert);
     } catch (_) {}
+  }
+}
+
+/// भुक्तानी सफलता कार्ड — payment confirm भएपछि दुवैतिर (passenger कै
+/// `complete_job_sheet.dart` र rider कै `job_route_screen.dart`) एउटै
+/// हेर्दो देखियोस् भनेर साझा widget। haptic+chime सँगै बजाउँछ, झन्डै २
+/// सेकेन्ड देखिएर आफैं बन्द हुन्छ (`Future` त्यही बेला पूरा हुन्छ) — caller
+/// ले यसलाई `await` गरेर त्यसपछि मात्र home-तिर navigate गर्न सक्छ।
+/// `barrierDismissible: false` — tap गरेर हतारमा बन्द गर्न नमिल्ने, ताकि
+/// भुक्तानी साँच्चै सफल भएको प्रस्ट रूपमा देखियोस्।
+Future<void> showPaymentSuccessCard(
+  BuildContext context, {
+  required bool isRide,
+}) {
+  unawaited(playSuccessFeedback());
+  return showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    barrierColor: Colors.black.withValues(alpha: 0.55),
+    transitionDuration: const Duration(milliseconds: 280),
+    pageBuilder: (_, __, ___) => const SizedBox.shrink(),
+    transitionBuilder: (dialogContext, anim, _, __) {
+      final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
+      return Opacity(
+        opacity: anim.value.clamp(0.0, 1.0),
+        child: Transform.scale(
+          scale: 0.85 + 0.15 * curved.value.clamp(0.0, 1.5),
+          child: _PaymentSuccessCard(isRide: isRide),
+        ),
+      );
+    },
+  );
+}
+
+class _PaymentSuccessCard extends StatefulWidget {
+  final bool isRide;
+  const _PaymentSuccessCard({required this.isRide});
+
+  @override
+  State<_PaymentSuccessCard> createState() => _PaymentSuccessCardState();
+}
+
+class _PaymentSuccessCardState extends State<_PaymentSuccessCard> {
+  @override
+  void initState() {
+    super.initState();
+    // झन्डै २ सेकेन्ड देखिएपछि आफैं बन्द — प्रयोगकर्ताले केही नथिची पनि।
+    Future.delayed(const Duration(milliseconds: 1900), () {
+      if (mounted) Navigator.of(context).pop();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF0B1F18), Color(0xFF05080F)],
+            ),
+            border: Border.all(
+                color: const Color(0xFF00E676).withValues(alpha: 0.7),
+                width: 1.4),
+            boxShadow: [
+              BoxShadow(
+                  color: const Color(0xFF00E676).withValues(alpha: 0.35),
+                  blurRadius: 36,
+                  spreadRadius: 2),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            child: Stack(
+              children: [
+                const Positioned.fill(
+                    child: NeonGridBackground(color: Color(0xFF00E676))),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(28, 22, 28, 28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const PulsingCheck(size: 76),
+                      const SizedBox(height: 4),
+                      Text(S.paymentSuccessTitle,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 19,
+                              letterSpacing: 0.3,
+                              decoration: TextDecoration.none)),
+                      const SizedBox(height: 8),
+                      Text(
+                          widget.isRide
+                              ? S.paymentSuccessRideBody
+                              : S.paymentSuccessJobBody,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w400,
+                              decoration: TextDecoration.none)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

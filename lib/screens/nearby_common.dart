@@ -13,28 +13,113 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../app_globals.dart' show createNotificationForUser;
+import '../config/app_config.dart' show FareMatrixConfig;
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_ui.dart';
+import '../widgets/spring_tap.dart';
 import '../widgets/worker_avatar.dart';
 
 // काठमाडौँ केन्द्र — location नपाउँदा fallback।
 const double fallbackLat = 27.7172;
 const double fallbackLng = 85.3240;
 
-/// Google Maps को आफ्नै default POI icon (gym को दौडने-मान्छे, restaurant को
-/// काँटा-चम्चा, पसलको कार्ट आदि — हाम्रो marker/pin होइनन्, base tile मै
-/// baked भएका) ले नक्सा घुइँचो देखाउँथ्यो — worker/destination pin खोज्न
-/// गाह्रो बनाउँदै। InDrive/Uber जस्ता राइड-हेलिङ एपले जस्तै ती सबै व्यापारिक
-/// icon/label लुकाएर सडक, पानी, पार्कको हरियो जस्ता भू-सन्दर्भ भने ज्यूँका
-/// त्यूँ राख्छ — यसैले route/road नेटवर्क अझै पूर्ण रूपमा देखिन्छ।
+/// "KaamMitra 2050" dark-glass Google Maps theme — एपभरिको हरेक `GoogleMap`
+/// ले यही एउटै style प्रयोग गर्छ (home/service-map/route-view)। Google Maps
+/// tile स्वयं server-rendered हुने भएकोले यसलाई literally `BackdropFilter`
+/// ले धमिल्याउन मिल्दैन।
+///
+/// inDrive कै dark-mode screenshot लाई सिधै reference मानेर बनाइएको — एउटै
+/// गाढा नेभी-निलो hue भरि (पहिलेको ग्रे/violet-accent दृष्टिकोण पूर्णतया
+/// छोडियो): base/water सबैभन्दा गाढा नेभी, building footprint
+/// (landscape.man_made) + generic POI अलि हल्का/बढी saturated नेभी block
+/// भरण सहित (खुट्टा-खुट्टा छुट्याउन सकिने गरी, तर कालो होइन — गाढा नेभी
+/// नै outline), सडक भने clearly उज्यालो slate-blue (हाइवे झन् उज्यालो, hierarchy
+/// देखियोस् भनेर), र label सबै सेतो/crisp — ठ्याक्कै inDrive को screenshot
+/// मा जस्तै। केवल Google का आफ्नै default POI icon (gym को दौडने-मान्छे,
+/// restaurant को काँटा-चम्चा आदि — हाम्रो marker/pin होइनन्) र transit icon
+/// मात्र लुकाइएको, जसले worker/destination pin खोज्न गाह्रो बनाउँथ्यो।
+///
+/// Building contrast — magenta/lime diagnostic ले styling साँच्चै लागू
+/// भइरहेको पुष्टि गरेपछि (feature-type match नै फेल भएको/data नभएको होइन
+/// रहेछ) पहिले fill मात्र उज्यालो पारिएको थियो (#5577b3), तर घना क्षेत्रमा
+/// building polygon नै झण्डै पूरै स्क्रिन ओगट्छ — बाँकी खुला "base" जमिन
+/// ज्यादै कम देखिन्छ, त्यसैले fill-vs-base भन्दा छेउछाउका building बीचको
+/// stroke (gap/mortar line) नै असली "block" आकार छुट्याउने कुरा रहेछ।
+///
+/// `adb exec-out screencap` + pixel-level inspection (user लाई फेरि-फेरि
+/// नसोधी फोनको real screen आफैं पढेर verify गरियो) ले यो थप पुष्टि
+/// गर्‍यो: यो विशेष test क्षेत्र/zoom मा `landscape.man_made` fill
+/// (#6f8fc9) ले नै झन्डै पूरै screen (non-road भाग) ओगटेको छ — एउटै ठूलो,
+/// नभाँचिएको area polygon जस्तो। weight 6 को bright-yellow stroke
+/// diagnostic ले पनि (648,000 pixel भर scan गर्दा) एउटै पनि yellow pixel
+/// नदेखाएकोले — यो कुनै रङ/stroke-weight छनोटको गल्ती होइन, बरु: या त यो
+/// दृश्यक्षेत्रभित्र साँच्चै एउटै मात्र polygon छ (भित्री building-to-building
+/// छेउ नै छैन, जोड्ने कुरा नै छैन), वा Android Maps SDK ले यो featureType
+/// को लागि geometry.stroke honour नै गर्दैन। दुवै अवस्थामा, Google Maps को
+/// सार्वजनिक JSON styling API बाट inDrive-जस्तो individually-outlined
+/// प्रति-घर building block यस ठाउँमा सम्भव छैन — यो data/platform सीमा हो,
+/// अब पनि रङ बदलेर ठीक हुने होइन। stroke चाहिं राम्रो उज्यालो राखिएको छ
+/// (कतै साँचो polygon-boundary भेटिए काम लागोस्)।
 const String kCleanMapStyle = '''
 [
+  {"elementType": "geometry", "stylers": [{"color": "#1f2b42"}]},
+  {"elementType": "labels.icon", "stylers": [{"visibility": "off"}]},
+  {"elementType": "labels.text.fill", "stylers": [{"color": "#ffffff"}]},
+  {"elementType": "labels.text.stroke", "stylers": [{"color": "#0e1420"}]},
+  {"featureType": "administrative", "elementType": "geometry.stroke", "stylers": [{"color": "#3c4a68", "weight": 1}]},
+  {"featureType": "administrative.country", "elementType": "labels.text.fill", "stylers": [{"color": "#c9d3ea"}]},
+  {"featureType": "administrative.land_parcel", "elementType": "geometry.stroke", "stylers": [{"color": "#30405f", "weight": 0.6}]},
+  {"featureType": "administrative.land_parcel", "elementType": "labels", "stylers": [{"visibility": "off"}]},
+  {"featureType": "administrative.locality", "elementType": "labels.text.fill", "stylers": [{"color": "#ffffff"}]},
+  {"featureType": "administrative.neighborhood", "stylers": [{"visibility": "off"}]},
+  {"featureType": "landscape.man_made", "elementType": "geometry.fill", "stylers": [{"color": "#6f8fc9"}]},
+  {"featureType": "landscape.man_made", "elementType": "geometry.stroke", "stylers": [{"color": "#c9d6ef", "weight": 1.8}]},
+  {"featureType": "landscape.natural", "elementType": "geometry", "stylers": [{"color": "#223024"}]},
   {"featureType": "poi", "elementType": "labels.icon", "stylers": [{"visibility": "off"}]},
   {"featureType": "poi", "elementType": "labels.text", "stylers": [{"visibility": "off"}]},
-  {"featureType": "transit", "elementType": "labels.icon", "stylers": [{"visibility": "off"}]}
+  {"featureType": "poi", "elementType": "geometry.fill", "stylers": [{"color": "#405e94"}]},
+  {"featureType": "poi", "elementType": "geometry.stroke", "stylers": [{"color": "#c9d6ef", "weight": 1.2}]},
+  {"featureType": "poi.park", "elementType": "geometry", "stylers": [{"color": "#1f3b2e"}]},
+  {"featureType": "road", "elementType": "geometry", "stylers": [{"color": "#7f93b8"}]},
+  {"featureType": "road", "elementType": "geometry.stroke", "stylers": [{"color": "#44536f"}]},
+  {"featureType": "road", "elementType": "labels.text.fill", "stylers": [{"color": "#ffffff"}]},
+  {"featureType": "road.local", "elementType": "geometry", "stylers": [{"color": "#6f84a8"}]},
+  {"featureType": "road.local", "elementType": "geometry.stroke", "stylers": [{"color": "#3c4a68"}]},
+  {"featureType": "road.local", "elementType": "labels.text.fill", "stylers": [{"color": "#ffffff"}]},
+  {"featureType": "road.arterial", "elementType": "geometry", "stylers": [{"color": "#8fa3c7"}]},
+  {"featureType": "road.arterial", "elementType": "geometry.stroke", "stylers": [{"color": "#44536f"}]},
+  {"featureType": "road.arterial", "elementType": "labels.text.fill", "stylers": [{"color": "#ffffff"}]},
+  {"featureType": "road.highway", "elementType": "geometry", "stylers": [{"color": "#a8bbe0"}]},
+  {"featureType": "road.highway", "elementType": "geometry.stroke", "stylers": [{"color": "#2a3550"}]},
+  {"featureType": "road.highway", "elementType": "labels.text.fill", "stylers": [{"color": "#ffffff"}]},
+  {"featureType": "road.highway", "elementType": "labels.text.stroke", "stylers": [{"color": "#121a2b"}]},
+  {"featureType": "road.highway.controlled_access", "elementType": "geometry", "stylers": [{"color": "#c3d2f0"}]},
+  {"featureType": "road.highway.controlled_access", "elementType": "geometry.stroke", "stylers": [{"color": "#2a3550"}]},
+  {"featureType": "transit", "elementType": "labels.icon", "stylers": [{"visibility": "off"}]},
+  {"featureType": "transit", "elementType": "labels.text", "stylers": [{"visibility": "off"}]},
+  {"featureType": "transit.line", "elementType": "geometry", "stylers": [{"color": "#4b5c80"}]},
+  {"featureType": "transit.station", "stylers": [{"visibility": "off"}]},
+  {"featureType": "water", "elementType": "geometry", "stylers": [{"color": "#141d2d"}]},
+  {"featureType": "water", "elementType": "labels.text.fill", "stylers": [{"color": "#ffffff"}]}
 ]
 ''';
+
+/// Google Cloud-based Maps styling Map ID — "landscape.man_made" JSON
+/// styling (माथि `kCleanMapStyle`, अझै fallback/reference को लागि राखिएको)
+/// ले यो app को test location मा building footprint लाई एउटै ठूलो, नभाँचिएको
+/// polygon जस्तो मात्र देखाउँथ्यो (adb screencap बाट pixel-level verify
+/// गरिएको — कुनै रङ/stroke छनोटको गल्ती थिएन)। Cloud Console मा अलग
+/// "Buildings" layer भएको यो Map ID ले प्रति-building footprint देखाउन सक्ने
+/// आशा छ। यो set भएको GoogleMap मा inline JSON `style` native SDK ले उपेक्षा
+/// गर्छ — त्यसैले भविष्यको रङ/theme परिवर्तन अब यहाँ होइन, Cloud Console को
+/// Map Styles editor मा गर्नुपर्छ।
+/// पहिलेको Map ID (12845d467983d181e5fbb833) Raster type रहेछ — Raster Map
+/// ID मा custom cloud style कहिल्यै लागू हुँदैन (कुनै error/warning बिना
+/// silently उपेक्षा गर्छ, ठ्याक्कै "dark style देखिँदैन" समस्याको जड)।
+/// यो नयाँ Map ID Vector type हो — "kaammitra dark map" (515a0d3afd188
+/// 8955bd5b31c Style ID) यसैमा associate/publish गरिएको छ।
+const String kCloudMapId = '12845d467983d181f1011516';
 
 const List<Map<String, dynamic>> serviceFilters = [
   {
@@ -80,15 +165,26 @@ const List<Map<String, dynamic>> serviceFilters = [
   },
 ];
 
-/// सेवा प्रकारको वास्तविक तस्बिर asset path। Bike/Car का लागि छुट्टै artwork
-/// अझै तयार नभएकोले (`serviceFilters` मा तिनको प्रविष्टि छैन — home screen मा
-/// एउटै 'Driver' tile कायमै राख्नु हो), दुवैले साझा driver.png नै प्रयोग
-/// गर्छन् — नत्र नभएको bike.png/car.png खोज्दा टुटेको image देखिन्थ्यो।
+/// सेवा प्रकारको वास्तविक तस्बिर asset path। Bike/Car/Auto (`serviceFilters`
+/// मा तिनको प्रविष्टि छैन — home screen मा एउटै 'Driver' tile कायमै राख्नु हो)
+/// ले home screen कै उही neon illustration (`home_bike.png`/`home_car.png`/
+/// `home_auto.png`) प्रयोग गर्छन्।
 String serviceImageFor(String service) {
   final lower = service.toLowerCase();
-  if (lower == 'bike' || lower == 'car') {
-    return 'assets/images/services/driver.png';
-  }
+  // Home screen कै उस्तै neon illustration (home_screen.dart::
+  // _HomeQuickService) — पहिले यहाँ छुट्टै, पुरानो सेतो स्टुडियो-फोटो
+  // (bike_ride.png/car_ride.png) थियो, र Auto को त आफ्नै तस्बिर नै
+  // थिएन (generic fallback path नभेटिएर bare icon मा झर्थ्यो) — अब
+  // तीनै vehicle service मा home screen सँगै ठ्याक्कै मिल्ने एउटै asset।
+  if (lower == 'bike') return 'assets/images/home_bike.png';
+  if (lower == 'car') return 'assets/images/home_car.png';
+  if (lower == 'auto') return 'assets/images/home_auto.png';
+  // "Handyman" आफैं कुनै छुट्टै trade होइन (Plumber/Electrician/Mechanic/...
+  // छान्ने category-selection tile मात्र, `HandymanCategoriesScreen`) —
+  // आफ्नै dedicated illustration कहिल्यै बनेको छैन, त्यसैले generic
+  // `Icons.handyman_rounded` मा fallback नहोस् भनेर mechanic कै तस्बिर
+  // (सबैभन्दा प्रतिनिधि trade) पुनःप्रयोग गर्ने।
+  if (lower == 'handyman') return 'assets/images/services/mechanic.png';
   for (final s in serviceFilters) {
     if ((s['name'] as String).toLowerCase() == service.toLowerCase()) {
       return (s['image'] as String?) ??
@@ -149,6 +245,10 @@ Color serviceMarkerColor(String service) {
       return const Color(0xFF3B82F6); // blue — car/taxi
     case 'tutor':
       return const Color(0xFFC13584); // magenta
+    case 'auto':
+      return const Color(0xFF2ED573); // green — अटो रिक्सा
+    case 'hotel booking':
+      return AppColors.kmPurple;
     default:
       return AppColors.kmPink;
   }
@@ -188,6 +288,7 @@ Future<BitmapDescriptor> workerAvatarMarker(Color color) async {
 
   final img = await recorder.endRecording().toImage(size.toInt(), size.toInt());
   final data = await img.toByteData(format: ui.ImageByteFormat.png);
+  img.dispose();
   final bd = BitmapDescriptor.bytes(data!.buffer.asUint8List());
   _avatarMarkerCache[key] = bd;
   return bd;
@@ -212,6 +313,7 @@ Future<BitmapDescriptor> pulseDotMarker(Color color) async {
 
   final img = await rec.endRecording().toImage(s.toInt(), s.toInt());
   final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+  img.dispose();
   final bd = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
   _dotMarkerCache[key] = bd;
   return bd;
@@ -230,64 +332,110 @@ double bearingBetween(LatLng from, LatLng to) {
   return (deg + 360) % 360;
 }
 
-final Map<TravelMode, BitmapDescriptor> _travelMarkerCache = {};
+/// [from] देखि [to] (डिग्री, 0-360 मानिन्छ तर जुनसुकै मान चल्छ) सम्मको
+/// सबैभन्दा छोटो कोणीय दूरी — ऋणात्मक पनि हुन सक्छ (वामावर्त)। उदाहरण:
+/// 350→10 ले +20 दिन्छ (10° दायाँ, 340° घुमेर गएको जस्तो होइन)। route_map_
+/// view.dart ले गाडी/बाइकको live-marker बेअरिङ एनिमेट गर्दा (snap/jerk
+/// बिना, सधैँ छोटो बाटोबाट मात्र घुम्ने) प्रयोग गर्छ।
+double shortestAngleDelta(double from, double to) {
+  var delta = (to - from) % 360;
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+  return delta;
+}
+
+final Map<String, BitmapDescriptor> _travelMarkerCache = {};
 
 /// चयन गरिएको यात्रा-मोड अनुसार फरक-फरक, माथिबाट-हेर्दाको (top-down) साँच्चीकै
 /// सवारी-साधन/पैदल-यात्री आकृति — accept भएको काममा worker/employer
 /// गन्तव्यतिर चलिरहँदा नक्सामा देखिने live-location marker। पहिले यहाँ
 /// जुनसुकै मोडमा पनि एउटै जेनेरिक chevron/तीर (टाढाबाट "रातो V-आकार" जस्तो
-/// देखिने साधारण pointer) देखिन्थ्यो — अब Uber/InDrive/Pathao जस्ता
-/// आधुनिक navigation एपमा जस्तै कार (driving), बाइक (bicycling), वा
-/// पैदल-यात्री (walking) को छुट्टै-छुट्टै आकृति कोरिन्छ, र [TravelModeChips]
-/// बाट मोड बदलिनासाथ (Firestore मार्फत अर्को पक्षमा पनि) यही marker आइकन
-/// तुरुन्तै बदलिन्छ। एपभरि नै अरू जुनसुकै accent जस्तै ठ्याक्कै Instagram
-/// gradient (violet → red → yellow) मा नै रङ्गिन्छ — कुनै एउटै solid रङमा
-/// होइन। उत्तरतिर (माथि, rotation = 0) देखाउने गरी drawn हुन्छ; caller ले
-/// `Marker(rotation: bearingDeg, flat: true, ...)` राखेर हालको दिशामा
-/// घुमाउँछ — त्यसैले यहाँ rotation logic छैन, स्थिर आकार मात्र, मोड-अनुसार
-/// एकपटक मात्र बनाएर cache हुन्छ।
-Future<BitmapDescriptor> travelModeMarker(TravelMode mode) async {
-  final hit = _travelMarkerCache[mode];
+/// देखिने साधारण pointer) देखिन्थ्यो, त्यसपछि एक अवधिसम्म gradient halo +
+/// सेतो डिस्क भित्र देखिन्थ्यो (cartoonish गोलाकार फ्रेम) — अब InDrive/Bolt
+/// जस्तै त्यो घेरा/डिस्क पूर्ण रूपमा हटाइएको छ: कार (driving), बाइक
+/// (bicycling), वा पैदल-यात्री (walking) को असली, पारदर्शी-पृष्ठभूमि तस्बिर
+/// (कुनै circle/background नथपी, ठ्याक्कै raw PNG) मात्र कोरिन्छ, र
+/// [TravelModeChips] बाट मोड बदलिनासाथ (Firestore मार्फत अर्को पक्षमा पनि)
+/// यही marker आइकन तुरुन्तै बदलिन्छ। उत्तरतिर (माथि, rotation = 0) देखाउने
+/// गरी drawn हुन्छ; caller ले `Marker(rotation: bearingDeg, flat: true, ...)`
+/// राखेर हालको दिशामा घुमाउँछ — त्यसैले यहाँ rotation logic छैन, स्थिर आकार
+/// मात्र, मोड-अनुसार एकपटक मात्र बनाएर cache हुन्छ।
+/// `iconOverride` — Auto-Rickshaw जस्तो `TravelMode` मा नभएको (routing मा
+/// Auto पनि driving नै मानिन्छ, हेर्नुहोस् `travelModeForVehicle`) छुट्टै
+/// आइकन देखाउन चाहिँदा, caller ले सिधै asset path दिन सक्छ — दिए सोही
+/// (मोड जे भए पनि) बाक्छ।
+Future<BitmapDescriptor> travelModeMarker(TravelMode mode,
+    {String? iconOverride}) async {
+  final cacheKey = iconOverride ?? mode.name;
+  final hit = _travelMarkerCache[cacheKey];
   if (hit != null) return hit;
 
   const double s = 108;
   const double c = s / 2;
-  const rect = Rect.fromLTWH(0, 0, s, s);
-  const gradientColors = [
-    AppColors.kmPurple,
-    AppColors.kmPink,
-    AppColors.kmOrange,
-  ];
-  final haloShader = LinearGradient(
-    begin: Alignment.bottomLeft,
-    end: Alignment.topRight,
-    colors: gradientColors.map((c) => c.withValues(alpha: 0.22)).toList(),
-  ).createShader(rect);
 
   final rec = ui.PictureRecorder();
   final canvas = Canvas(rec);
 
-  // हल्का बाहिरी gradient halo + सेतो डिस्क — जुनसुकै नक्सा/tile रङमा पनि
-  // माथिको आकृति छुट्टै र प्रस्ट देखियोस्।
-  canvas.drawCircle(const Offset(c, c), c - 4, Paint()..shader = haloShader);
-  canvas.drawCircle(const Offset(c, c), c - 14, Paint()..color = Colors.white);
-
-  switch (mode) {
-    case TravelMode.driving:
-      await _paintAssetImage(canvas, c, 'assets/images/car_top.png', 74);
-      break;
-    case TravelMode.bicycling:
-      await _paintAssetImage(canvas, c, 'assets/images/bike_top.png', 74);
-      break;
-    case TravelMode.walking:
-      await _paintAssetImage(canvas, c, 'assets/images/walking_top.png', 74);
-      break;
-  }
+  final assetPath = iconOverride ??
+      switch (mode) {
+        TravelMode.driving => 'assets/images/car_top.png',
+        TravelMode.bicycling => 'assets/images/bike_top.png',
+        TravelMode.walking => 'assets/images/walking_top.png',
+      };
+  await _paintAssetImage(canvas, c, assetPath, 92);
 
   final img = await rec.endRecording().toImage(s.toInt(), s.toInt());
   final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+  img.dispose();
   final bd = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
-  _travelMarkerCache[mode] = bd;
+  _travelMarkerCache[cacheKey] = bd;
+  return bd;
+}
+
+final Map<String, BitmapDescriptor> _rotatedTravelMarkerCache = {};
+
+/// Flutter Web Marker-Rotation Workaround — `google_maps_flutter_web` (यो
+/// प्रोजेक्टको vendored `third_party/google_maps_flutter_web` कै
+/// `convert.dart` हेर्नुहोस्) ले साधारण (गैर-Advanced) marker मा
+/// `Marker.rotation` लाई Android/iOS जस्तै लागू गर्दैन — त्यसैले web मा
+/// बाइक/कार आइकन सधैँ उत्तरतिर (सीधा माथि) नै अडिग देखिन्थ्यो, बाटो
+/// जतिसुकै मोडिए/तेर्सिए पनि (जस्तै Sportowa जस्तो कर्णमुखी सडकमा पनि)।
+/// native मा चाहिं `flat:true, rotation:_bearing` ले नै ठीकसँग (GPU-side,
+/// सस्तो) घुमाउँछ — त्यसैले त्यहाँ यो function चाहिँदैन। Web-मात्र यहाँ
+/// आइकन आफैं (canvas मै) पहिल्यै घुमाएर bake गरिन्छ, अनि caller ले
+/// `Marker(rotation: 0, icon: <यही नतिजा>, ...)` राख्छ। हरेक डिग्रीमा
+/// नभई 5° bucket मा round गरेर cache हुन्छ — नत्र bearing-animation कै
+/// हरेक frame मा नयाँ canvas rasterize हुँदा web मा जाँकिने (jank) थियो।
+Future<BitmapDescriptor> travelModeMarkerRotated(
+    TravelMode mode, double rotationDeg,
+    {String? iconOverride}) async {
+  final bucket = (((rotationDeg % 360) + 360) % 360 / 5).round() * 5 % 360;
+  final key = '${iconOverride ?? mode.name}|$bucket';
+  final hit = _rotatedTravelMarkerCache[key];
+  if (hit != null) return hit;
+
+  const double s = 108;
+  const double c = s / 2;
+
+  final rec = ui.PictureRecorder();
+  final canvas = Canvas(rec);
+  canvas.translate(c, c);
+  canvas.rotate(bucket * pi / 180);
+  canvas.translate(-c, -c);
+
+  final assetPath = iconOverride ??
+      switch (mode) {
+        TravelMode.driving => 'assets/images/car_top.png',
+        TravelMode.bicycling => 'assets/images/bike_top.png',
+        TravelMode.walking => 'assets/images/walking_top.png',
+      };
+  await _paintAssetImage(canvas, c, assetPath, 92);
+
+  final img = await rec.endRecording().toImage(s.toInt(), s.toInt());
+  final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+  img.dispose();
+  final bd = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
+  _rotatedTravelMarkerCache[key] = bd;
   return bd;
 }
 
@@ -318,10 +466,25 @@ Future<void> _paintAssetImage(
   final dst =
       Rect.fromCenter(center: Offset(c, c), width: targetW, height: targetH);
   final src = Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble());
-  canvas.drawImageRect(img, src, dst, Paint()..filterQuality = FilterQuality.high);
+  canvas.drawImageRect(
+      img, src, dst, Paint()..filterQuality = FilterQuality.high);
 }
 
 final Map<String, BitmapDescriptor> _catPinCache = {};
+
+// Bike/Car पिनमा कोर्ने असली फोटो — एकपटक decode गरेर cache (हरेक marker
+// रिबिल्डमा फेरि decode गर्नु नपरोस्)।
+final Map<String, ui.Image> _vehiclePinImageCache = {};
+
+Future<ui.Image> _loadVehiclePinImage(String assetPath) async {
+  final cached = _vehiclePinImageCache[assetPath];
+  if (cached != null) return cached;
+  final data = await rootBundle.load(assetPath);
+  final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
+  final frame = await codec.getNextFrame();
+  _vehiclePinImageCache[assetPath] = frame.image;
+  return frame.image;
+}
 
 /// क्याटेगोरी-विशेष आधुनिक map marker: Instagram-रङको gradient teardrop pin +
 /// neon glow + भित्र सेतो badge मा सेवाको glyph। `highlighted` भए ठूलो + चम्किलो
@@ -395,26 +558,45 @@ Future<BitmapDescriptor> categoryPinMarker(String service,
         ..color = Colors.white.withValues(alpha: 0.85));
 
   // सेतो भित्री badge
-  canvas.drawCircle(
-      Offset(cx, centerY), headR - 12 * scale, Paint()..color = Colors.white);
+  final innerR = headR - 12 * scale;
+  canvas.drawCircle(Offset(cx, centerY), innerR, Paint()..color = Colors.white);
 
-  // सेवाको glyph
-  final glyph = serviceIconFor(service);
-  final tp = TextPainter(textDirection: TextDirection.ltr);
-  tp.text = TextSpan(
-    text: String.fromCharCode(glyph.codePoint),
-    style: TextStyle(
-      fontSize: 52 * scale,
-      fontFamily: glyph.fontFamily,
-      package: glyph.fontPackage,
-      color: base,
-    ),
-  );
-  tp.layout();
-  tp.paint(canvas, Offset(cx - tp.width / 2, centerY - tp.height / 2));
+  final lowerService = service.toLowerCase();
+  if (lowerService == 'bike' || lowerService == 'car') {
+    // Bike/Car पिनमा असली मोटरसाइकल/कार फोटो (कहिल्यै generic glyph होइन)।
+    final vehicleImg = await _loadVehiclePinImage(serviceImageFor(service));
+    final dstRect =
+        Rect.fromCircle(center: Offset(cx, centerY), radius: innerR - 4);
+    final srcSize =
+        Size(vehicleImg.width.toDouble(), vehicleImg.height.toDouble());
+    final fitted = applyBoxFit(BoxFit.contain, srcSize, dstRect.size);
+    final srcRect =
+        Alignment.center.inscribe(fitted.source, Offset.zero & srcSize);
+    final destRect = Alignment.center.inscribe(fitted.destination, dstRect);
+    canvas.save();
+    canvas.clipPath(Path()..addOval(dstRect));
+    canvas.drawImageRect(vehicleImg, srcRect, destRect, Paint());
+    canvas.restore();
+  } else {
+    // सेवाको glyph
+    final glyph = serviceIconFor(service);
+    final tp = TextPainter(textDirection: TextDirection.ltr);
+    tp.text = TextSpan(
+      text: String.fromCharCode(glyph.codePoint),
+      style: TextStyle(
+        fontSize: 52 * scale,
+        fontFamily: glyph.fontFamily,
+        package: glyph.fontPackage,
+        color: base,
+      ),
+    );
+    tp.layout();
+    tp.paint(canvas, Offset(cx - tp.width / 2, centerY - tp.height / 2));
+  }
 
   final img = await rec.endRecording().toImage(w.toInt(), h.toInt());
   final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+  img.dispose();
   final bd = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
   _catPinCache[key] = bd;
   return bd;
@@ -430,6 +612,10 @@ IconData serviceIconFor(String service) {
       return Icons.two_wheeler_rounded;
     case 'car':
       return Icons.local_taxi_rounded;
+    case 'auto':
+      return Icons.electric_rickshaw_rounded;
+    case 'hotel booking':
+      return Icons.hotel_rounded;
   }
   for (final s in serviceFilters) {
     if ((s['name'] as String).toLowerCase() == service.toLowerCase()) {
@@ -439,24 +625,233 @@ IconData serviceIconFor(String service) {
   return Icons.handyman_rounded;
 }
 
-/// InDrive-style अनुमानित भाडा — सेवा प्रकार + दूरी अनुसार, रु. ५० मा round।
-int estimateFare(String service, double distanceKm) {
-  const base = {
-    'mechanic': 400,
-    'plumber': 500,
-    'electrician': 500,
-    'carpenter': 600,
-    'painter': 800,
-    'cleaner': 700,
-    'driver': 250,
-    'bike': 150,
-    'car': 350,
-    'tutor': 500,
-  };
-  final b = base[service.toLowerCase()] ?? 500;
-  final byDist = (distanceKm.clamp(0.0, 40.0) * 35).round();
-  final raw = b + byDist;
-  return (raw / 50).round() * 50;
+/// जहाँ पनि पहिले `Icon(serviceIconFor(service))` मात्र थियो त्यहाँ प्रयोग
+/// गर्ने साझा widget — Bike/Car/Auto का लागि असली neon illustration (कहिल्यै
+/// generic icon मा fallback नहुने गरी) र बाँकी सबै सेवाका लागि उही पुरानो
+/// icon glyph देखाउँछ।
+class ServiceGlyph extends StatelessWidget {
+  final String service;
+  final double size;
+  final Color? color;
+
+  const ServiceGlyph({
+    super.key,
+    required this.service,
+    required this.size,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lower = service.toLowerCase();
+    if (lower == 'bike' || lower == 'car' || lower == 'auto') {
+      return Image.asset(
+        serviceImageFor(service),
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+      );
+    }
+    return Icon(serviceIconFor(service), size: size, color: color);
+  }
+}
+
+/// List-row/preview-card मा प्रयोग हुने circular badge — Bike/Car/Auto
+/// बाहेकका सेवाको लागि रंगीन circle background भित्र icon (पहिलेकै जस्तै),
+/// तर Bike/Car/Auto को लागि त्यो circle/border पूर्ण रूपमा हटाएर असली वाहन
+/// फोटो सिधै (InDrive/Bolt-style, कुनै "cartoonish" गोलाकार फ्रेम बिना)
+/// देखाउने।
+class ServiceIconBadge extends StatelessWidget {
+  final String service;
+  final double size;
+  final Color? iconColor;
+  final Gradient? gradient;
+  final Color? backgroundColor;
+
+  const ServiceIconBadge({
+    super.key,
+    required this.service,
+    required this.size,
+    this.iconColor,
+    this.gradient,
+    this.backgroundColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lower = service.toLowerCase();
+    if (lower == 'bike' || lower == 'car' || lower == 'auto') {
+      return Image.asset(
+        serviceImageFor(service),
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+      );
+    }
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: gradient,
+        color: gradient == null ? backgroundColor : null,
+      ),
+      child: Icon(serviceIconFor(service), size: size * 0.55, color: iconColor),
+    );
+  }
+}
+
+/// worker/job list कार्डको square photo tile (44x44 जस्ता ठाउँमा) — Bike/Car
+/// भए असली मोटरसाइकल/कार फोटो पूरै (crop नहुने गरी) `BoxFit.contain` मा,
+/// नत्र बाँकी सेवाका profession photo `BoxFit.cover` मा (नभेटे icon fallback)।
+class ServicePhotoTile extends StatelessWidget {
+  final String service;
+  final Color iconColor;
+
+  const ServicePhotoTile({
+    super.key,
+    required this.service,
+    required this.iconColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lower = service.toLowerCase();
+    final isVehicle = lower == 'bike' || lower == 'car' || lower == 'auto';
+    return Image.asset(
+      serviceImageFor(service),
+      fit: isVehicle ? BoxFit.contain : BoxFit.cover,
+      errorBuilder: (_, __, ___) =>
+          Icon(serviceIconFor(service), color: iconColor),
+    );
+  }
+}
+
+/// सेवा-ग्रिड (home screen को मुख्य ग्रिड, Handyman उप-श्रेणी पेज, आदि) मा
+/// साझा रूपमा प्रयोग हुने कार्ड — गोलो icon/फोटो + द्विभाषी लेबल। पहिले
+/// home_screen.dart भित्रै निजी (`_ServiceGridCard`) थियो, अब दुई ठाउँमा
+/// (मुख्य grid + HandymanCategoriesScreen) उस्तै देखिनुपर्ने भएकोले यहाँ
+/// साझा।
+class ServiceGridCard extends StatelessWidget {
+  final String name;
+  final VoidCallback onTap;
+
+  const ServiceGridCard({super.key, required this.name, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = serviceMarkerColor(name);
+    // अंग्रेजी locale मा `S.serviceName(name)` ले अनुवाद नभेटे `name` आफैं
+    // फिर्ता गर्छ — त्यसैले दोस्रो line (कच्चा अंग्रेजी) नेपालीमा मात्र
+    // देखाउने, नत्र "Bike Bike"/"Car Car" जस्तो उही text दोहोरिने बग आउँथ्यो।
+    final translated = S.serviceName(name);
+    final showEnglishSubline = S.isNepali && translated != name;
+    return SpringTap(
+      onTap: onTap,
+      pressedScale: 0.95,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.055),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Expanded(
+              child: AspectRatio(
+                aspectRatio: 1,
+                // वृत्ताकार (circle) को सट्टा भरिएको वर्गाकार/आयताकार
+                // box — image/icon त्यही box भित्र (कुनामा हल्का गोलाइ
+                // मात्र राखेर) पूरै ठूलो/स्पष्ट देखियोस् भनेर।
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    gradient: LinearGradient(
+                      colors: [Color.lerp(color, Colors.white, 0.25)!, color],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                          color: color.withValues(alpha: 0.45), blurRadius: 14),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Image.asset(
+                      serviceImageFor(name),
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Icon(serviceIconFor(name),
+                          color: Colors.white, size: 44),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(translated,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.kmText)),
+            if (showEnglishSubline)
+              Text(name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.kmMuted)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// InDrive-style अनुमानित भाडा — सेवा प्रकार + दूरी अनुसार, `FareMatrixConfig`
+/// कै round-to मा round। दर आफैं (base/per-km/round-to) अब owner dashboard
+/// बाट (config/fareMatrix) सेट गर्न मिल्ने — यहाँ भने अझै पूर्ण synchronous
+/// (cache भएको मान मात्र पढ्ने, कुनै await छैन) किनभने यो UI build/gesture
+/// भित्रैबाट सिधै कल हुन्छ।
+///
+/// [minutes] — साँचो OSRM/Directions यात्रा-समय (`RoadRoute.minutes`) थाहा
+/// भएको ठाउँ (पिकअप→गन्तव्य route confirm भइसकेपछि) मात्र दिनुहोस् — त्यसले
+/// per-minute दर पनि थप्छ (ट्राफिकमा अडिँदा लामो समय लाग्ने बाटोले उचित
+/// बढी भाडा देखाओस् भनेर)। route अझै नआएको/नभएको बेला (जस्तै गन्तव्य छान्नुअघि,
+/// वा ride-नभएका सेवाको nearest-worker distance) `null` नै छोड्नुहोस् — त्यो
+/// बेला दूरी-मात्र अनुमान (base + perKm) प्रयोग हुन्छ। अन्त्यमा नतिजा कहिल्यै
+/// [FareMatrixConfig.minimumFare] भन्दा तल नझरोस् भनेर clamp हुन्छ।
+/// रातको समय (config/fareMatrix: nightStartHour देखि nightEndHour सम्म,
+/// अर्को दिनसम्म फैलिने भए पनि) — [at] नदिए हालको device घडी प्रयोग हुन्छ।
+/// UI ले "Night fare" जस्तो label देखाउन पनि यही प्रयोग गर्न सक्छ।
+bool isNightFareHour([DateTime? at]) {
+  final hour = (at ?? DateTime.now()).hour;
+  final start = FareMatrixConfig.nightStartHour;
+  final end = FareMatrixConfig.nightEndHour;
+  return start > end
+      ? (hour >= start || hour < end)
+      : (hour >= start && hour < end);
+}
+
+int estimateFare(String service, double distanceKm, {int? minutes, DateTime? at}) {
+  final b = FareMatrixConfig.baseByService[service.toLowerCase()] ?? 500;
+  final byDist = (distanceKm.clamp(0.0, 40.0) * FareMatrixConfig.perKm).round();
+  final byTime = minutes != null ? (minutes * FareMatrixConfig.perMinute) : 0;
+  var raw = b + byDist + byTime;
+  if (isNightFareHour(at)) {
+    raw = (raw * FareMatrixConfig.nightSurchargeMultiplier).round();
+  }
+  final roundTo = FareMatrixConfig.roundTo;
+  final rounded = (raw / roundTo).round() * roundTo;
+  return rounded < FareMatrixConfig.minimumFare
+      ? FareMatrixConfig.minimumFare
+      : rounded;
 }
 
 double _deg2rad(double d) => d * pi / 180.0;
@@ -472,6 +867,24 @@ double haversineKm(double lat1, double lng1, double lat2, double lng2) {
 
 /// Worker को coordinate — Firestore मा `lat`/`lng` छ भने त्यही, नत्र docId बाट
 /// deterministic रूपमा origin वरिपरि 0.4–6 किमी भित्र (placeholder)।
+/// driver को स्थान यति मिनेटभन्दा पुरानो भए नक्सामा नदेखाउने (offline/बन्द एप)।
+const Duration kDriverLocationMaxAge = Duration(minutes: 5);
+
+/// असली, ताजा स्थान मात्र — `lat/lng` नभए, वा `locationUpdatedAt` नभएको/पुरानो
+/// (`kDriverLocationMaxAge` भन्दा) भए null (नक्सामा देखाउनै पर्दैन)। यसले
+/// `workerPos` को नक्कली (id-hash बाट बनेको) स्थान कहिल्यै दिँदैन।
+({double lat, double lng})? realWorkerPos(Map<String, dynamic> data) {
+  final lat = (data['lat'] as num?)?.toDouble();
+  final lng = (data['lng'] as num?)?.toDouble();
+  if (lat == null || lng == null) return null;
+  final ts = data['locationUpdatedAt'];
+  if (ts is! Timestamp) return null;
+  if (DateTime.now().difference(ts.toDate()) > kDriverLocationMaxAge) {
+    return null;
+  }
+  return (lat: lat, lng: lng);
+}
+
 ({double lat, double lng}) workerPos(
     Map<String, dynamic> data, String id, double originLat, double originLng) {
   final lat = (data['lat'] as num?)?.toDouble();
@@ -505,6 +918,98 @@ typedef RoadRoute = ({
   TravelMode mode,
 });
 
+/// [query] बिन्दु route.points माथि कहाँ "snap" हुन्छ भन्ने — route_map_view.dart
+/// कै private `_projectDistanceAlongRoute` कै उही algorithm (equirectangular
+/// local-flat approximation), यहाँ सार्वजनिक प्रति — `RouteEtaPill` (तल) जस्ता
+/// बाहिरी caller (native map माथिको Positioned overlay सहित) ले पनि उही
+/// दूरी-गणना प्रयोग गर्न सकून्, छुट्टाछुट्टै फरक/बेमेल दूरी नदेखियोस्।
+double projectDistanceAlongRouteKm(List<LatLng> pts, LatLng query) {
+  if (pts.length < 2) return 0;
+  const latKmPerDeg = 111.32;
+  double bestDistSq = double.infinity;
+  double bestCum = 0;
+  double cum = 0;
+  for (var i = 1; i < pts.length; i++) {
+    final a = pts[i - 1];
+    final b = pts[i];
+    final segLen =
+        haversineKm(a.latitude, a.longitude, b.latitude, b.longitude);
+    final lngKmPerDeg = latKmPerDeg * cos(a.latitude * pi / 180);
+    final bx = (b.longitude - a.longitude) * lngKmPerDeg;
+    final by = (b.latitude - a.latitude) * latKmPerDeg;
+    final qx = (query.longitude - a.longitude) * lngKmPerDeg;
+    final qy = (query.latitude - a.latitude) * latKmPerDeg;
+    final segLenSq = bx * bx + by * by;
+    var t = segLenSq <= 0 ? 0.0 : (qx * bx + qy * by) / segLenSq;
+    t = t.clamp(0.0, 1.0);
+    final dx = qx - bx * t;
+    final dy = qy - by * t;
+    final distSq = dx * dx + dy * dy;
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
+      bestCum = cum + segLen * t;
+    }
+    cum += segLen;
+  }
+  return bestCum;
+}
+
+/// Native Android राइड-नक्सा (NativeRouteMapView — हेर्नुहोस् त्यसको doc-
+/// comment "सीमा (हाल): summary pill... deliberately deferred") ले आफैं
+/// दूरी/ETA देखाउँदैन — caller ले छुट्टै Positioned overlay थपेर मात्र।
+/// यो pill त्यही overlay हो, job_route_screen.dart (driver, pickup अनि
+/// ride सुरु भएपछि drop-off) र request_tracking_screen.dart (passenger,
+/// driver pickup/drop-off मा कति बाँकी) दुवैतिर साझा — route_map_view.dart
+/// भित्रैको उही remainingKm/remainingMinutes गणना (route पुनः-fetch नभई,
+/// हरेक rebuild मा हालको स्थान route माथि प्रोजेक्ट गरेर, सहज घट्दै जाने)।
+class RouteEtaPill extends StatelessWidget {
+  final RoadRoute? route;
+  final LatLng? currentPos;
+  const RouteEtaPill(
+      {super.key, required this.route, required this.currentPos});
+
+  @override
+  Widget build(BuildContext context) {
+    final route = this.route;
+    final pos = currentPos;
+    if (route == null || pos == null) return const SizedBox.shrink();
+    final remainingKm = route.points.length >= 2
+        ? (route.km - projectDistanceAlongRouteKm(route.points, pos))
+            .clamp(0.0, route.km)
+        : route.km;
+    final remainingMinutes = route.km > 0
+        ? (route.minutes * (remainingKm / route.km)).round()
+        : route.minutes;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.kmSurface.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        boxShadow: const [
+          BoxShadow(
+              color: Colors.black38, blurRadius: 12, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(route.mode.icon, size: 16, color: AppColors.kmText),
+            const SizedBox(width: 8),
+            Text(
+              '${remainingKm.toStringAsFixed(remainingKm < 10 ? 1 : 0)} km  ·  ${S.minutesShort(remainingMinutes)}',
+              style: const TextStyle(
+                  color: AppColors.kmText,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Multi-modal यातायात — Google Directions/OSRM दुवैले चिन्ने canonical
 /// नाम (`getRoute` Cloud Function हेर्नुहोस्)। worker ले यीमध्ये छान्छ;
 /// employer ले सोही मोड (Firestore बाट, `RequestTrackingScreen`) अनुसार
@@ -523,6 +1028,22 @@ enum TravelMode {
         orElse: () => TravelMode.driving,
       );
 }
+
+/// Ride-Hailing (Bike/Car) मात्र — नक्सामा देखिने marker आइकन सधैँ ठ्याक्कै
+/// त्यही राइडको साँचो सवारी-प्रकार अनुसार हुनुपर्छ, कहिल्यै Firestore को
+/// `travelMode` field (जुन सामान्य काम — mechanic/plumber आदि — का लागि
+/// मात्र प्रयोगकर्ताले छानेको हुन्छ, राइडमा अब त्यो picker नै लुकाइएको छ,
+/// हेर्नुहोस् `!isRide` गेट job_route_screen.dart/request_tracking_screen.dart
+/// मा) बाट होइन। त्यो field नलेखिँदा `TravelMode.fromValue(null)` ले सधैँ
+/// default (`driving` → कार आइकन) फर्काउने भएकोले, Bike राइडमा पनि गलत
+/// कार-आइकन देखिने बग ठ्याक्कै यसैले निम्त्याएको थियो — worker ले Bike
+/// छानेपछि पनि नक्सामा कार देखिने।
+TravelMode travelModeForVehicle(String service) => switch (service) {
+      'Bike' => TravelMode.bicycling,
+      'Car' => TravelMode.driving,
+      'Auto' => TravelMode.driving,
+      _ => TravelMode.driving,
+    };
 
 /// Multi-modal यातायात छान्ने — Driving/Walking/Bike, ride-hailing app
 /// जस्तै गोलो chip row। worker/employer दुवैतिर उही एउटा widget (JobRouteScreen
@@ -543,15 +1064,15 @@ class TravelModeChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Driving-Only — Walking/Bike chip पूर्ण रूपमा हटाइयो, अनुरोधमा।
+    // Driving नै स्थायी/एकमात्र mode (TravelMode enum, marker-icon switch,
+    // glide-speed switch, र native vehicle-type string — ती कतै छोइएको
+    // छैन, केवल यहाँको selector UI ले अब Driving बाहेक अरू option नै
+    // नदेखाउने)।
     return SizedBox(
       height: 34,
       child: Row(
-        children: [
-          for (final m in TravelMode.values) ...[
-            _chip(m),
-            const SizedBox(width: 8),
-          ],
-        ],
+        children: [_chip(TravelMode.driving)],
       ),
     );
   }
@@ -566,8 +1087,7 @@ class TravelModeChips extends StatelessWidget {
         height: 34,
         decoration: BoxDecoration(
           gradient: isSelected ? AppColors.kmCtaGradient : null,
-          color:
-              isSelected ? null : AppColors.kmPurple.withValues(alpha: 0.08),
+          color: isSelected ? null : AppColors.kmPurple.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(AppRadius.pill),
         ),
         child: Row(
@@ -731,206 +1251,237 @@ Polyline? walkConnectorPolyline({
   );
 }
 
-/// झन्डा-पिनको SVG-सटीक ज्यामिति — दिइएको Leaflet SVG (viewBox 0 0 96 200,
-/// display 48×100) सँग ठ्याक्कै मिल्ने "display space" (48×100) मा। यही
-/// coordinate system दुवैतिर प्रयोग हुन्छ: [destinationFlagPin] ले पोल +
-/// आधार-थोप्लो (स्थिर marker bitmap) कोर्छ, अनि screens/request_tracking_screen.dart
-/// को waving-flag overlay ले झन्डा + चन्द्रमा + तारा (animated) कोर्छ — दुवै
-/// उस्तै anchor/coordinate प्रयोग गर्दा एक-अर्कामा ठ्याक्कै पर्छन्।
+/// Destination-pin ज्यामिति — पहिले यहाँ पोल + झन्डा + चन्द्रमा + तारा
+/// (राष्ट्रिय झन्डाको आकार सम्झाउने) procedurally कोरिन्थ्यो। Administrative/
+/// compliance कारणले त्यो आकृति पूर्ण हटाइयो — अब destination marker पनि
+/// एपभरि पहिल्यैदेखि "me"/pickup marker मा प्रयोग हुने उही आधिकारिक
+/// Sahayatri ब्रान्ड-पिन (`sahayatri_pin.png`, हेर्नुहोस् [SahayatriPinGeometry])
+/// बाट बन्छ — नयाँ ज्यामिति अड्कल नगरी, पहिल्यै pixel-नापिएको anchor नै
+/// सिधै साझा गरेर (तलको `destinationFlagPin()`/`destinationFlagPinBytes()`
+/// हेर्नुहोस्)।
 class FlagPinGeometry {
   FlagPinGeometry._();
 
-  static const double displayW = 48;
-  // झन्डा (0-52) + पोल (52-71) + थोप्लो — कुल अग्लाइ।
-  static const double displayH = 79;
-
-  /// आधार-थोप्लो ठ्याक्कै GPS coordinate मा — पोल छोटो भएपछि यहीँ सर्‍यो।
-  static const Offset anchor = dotCenter;
+  static const double displayW = sahayatriPinDisplayW;
+  static const double displayH = sahayatriPinDisplayH;
 
   /// `Marker.anchor` का लागि (0..1) fraction — `destinationFlagPin()` सँगै
-  /// प्रयोग गर्ने।
-  static Offset get markerAnchorFraction =>
-      Offset(anchor.dx / displayW, anchor.dy / displayH);
+  /// प्रयोग गर्ने। Sahayatri पिनकै (pixel-नापिएको) anchor सँग ठ्याक्कै उस्तै।
+  static Offset get markerAnchorFraction => SahayatriPinGeometry.anchorFraction;
 
-  // पोल झन्डाको सीधा किनारा (flagOrigin.dx = 6) मै केन्द्रित — बगलमा होइन,
-  // ठ्याक्कै झन्डाको बीचको भागमुनि। लम्बाइ 16 बाट 19 पुर्‍याइयो।
-  static const double poleW = 2.5;
-  static const double poleX =
-      6 - poleW / 2; // = 4.75, flagOrigin.dx मा केन्द्रित
-  static const double poleY = 52;
-  static const double poleH = 19;
-  static const double poleRadius = 1.25;
-
-  // थोप्लो पनि पोलकै केन्द्र (x=6) मा — ठ्याक्कै पोलको फेदमुनि, बगलमा होइन।
-  static const Offset dotCenter = Offset(6, 69);
-  static const double dotRadius = 3;
-  static const double dotBorder = 1.25;
-
-  /// झन्डा समूहको उत्पत्ति (सिरानमा, पोल त्यसको ठ्याक्कै तल टाँसिन्छ)।
-  static const Offset flagOrigin = Offset(6, 0);
-  static const double flagW = 41;
-  static const double flagH = 52;
-  static const double flagStrokeWidth = 1.75;
-
-  static const flagGradient = [Color(0xFF3A3A3A), Color(0xFF050505)];
-  static const rimGradient = [Color(0xFF7B2FF7), Color(0xFFF107A3)];
-
-  static Path flagPath() => Path()
-    ..moveTo(flagOrigin.dx + 0, flagOrigin.dy + 0)
-    ..lineTo(flagOrigin.dx + 30, flagOrigin.dy + 18)
-    ..lineTo(flagOrigin.dx + 11, flagOrigin.dy + 18)
-    ..lineTo(flagOrigin.dx + 41, flagOrigin.dy + 52)
-    ..lineTo(flagOrigin.dx + 0, flagOrigin.dy + 52)
-    ..close();
-
-  static Path moonPath() {
-    const o = flagOrigin;
-    return Path()
-      ..moveTo(o.dx + 5, o.dy + 10)
-      ..arcToPoint(Offset(o.dx + 12, o.dy + 10),
-          radius: const Radius.circular(3.5), clockwise: false)
-      ..arcToPoint(Offset(o.dx + 5, o.dy + 10),
-          radius: const Radius.elliptical(3.5, 1.5), clockwise: true)
-      ..close();
-  }
-
-  static const List<Offset> _starPts = [
-    Offset(18.5, 38),
-    Offset(16.38, 38.905),
-    Offset(17.765, 40.75),
-    Offset(15.475, 40.475),
-    Offset(15.75, 42.765),
-    Offset(13.905, 41.38),
-    Offset(13, 43.5),
-    Offset(12.095, 41.38),
-    Offset(10.25, 42.765),
-    Offset(10.525, 40.475),
-    Offset(8.235, 40.75),
-    Offset(9.62, 38.905),
-    Offset(7.5, 38),
-    Offset(9.62, 37.095),
-    Offset(8.235, 35.25),
-    Offset(10.525, 35.525),
-    Offset(10.25, 33.235),
-    Offset(12.095, 34.62),
-    Offset(13, 32.5),
-    Offset(13.905, 34.62),
-    Offset(15.75, 33.235),
-    Offset(15.475, 35.525),
-    Offset(17.765, 35.25),
-    Offset(16.38, 37.095),
-  ];
-
-  static Path starPath() {
-    const o = flagOrigin;
-    final p = Path()..moveTo(o.dx + _starPts[0].dx, o.dy + _starPts[0].dy);
-    for (final pt in _starPts.skip(1)) {
-      p.lineTo(o.dx + pt.dx, o.dy + pt.dy);
-    }
-    return p..close();
-  }
+  static Offset get anchor =>
+      Offset(SahayatriPinGeometry.anchorFraction.dx * displayW, displayH);
 }
 
-BitmapDescriptor? _flagPinCache;
-Uint8List? _flagPinBytesCache;
+/// Custom 3D Pickup & Drop Pins — पुरानो procedural flag-pिन (माथिको
+/// [FlagPinGeometry]) को ठाउँमा यी दुई 3D glass-style PNG (assets/images/
+/// markers/) प्रयोग हुन्छन्: pickup = electric-blue glowing pin, dropoff =
+/// सुनौलो/amber घर-पिन। दुवै वर्गाकार (1254×1254) भएकोले एउटै geometry
+/// (साइज/anchor) साझा गर्छन्।
+enum MapPinKind { pickup, dropoff }
 
-/// पोल + झन्डा (चन्द्रमा+तारा सहित) + आधार-थोप्लो — सबै एउटै static PNG
-/// bitmap भित्र कोरिन्छ (raw bytes)। [destinationFlagPin] (native Map
-/// `Marker` का लागि) र [destinationFlagPinBytes] (plain Flutter
-/// `Image.memory` overlay का लागि, जस्तै service_map_screen.dart कै
-/// "पिन screen-center मा स्थिर रहने, नक्सा मुनि pan हुने" pattern) दुवैले
-/// यही एउटै drawing पुनः-प्रयोग गर्छन्।
-Future<Uint8List> _renderFlagPinBytes() async {
-  final cached = _flagPinBytesCache;
+String _pinAssetPath(MapPinKind kind) => switch (kind) {
+      MapPinKind.pickup => 'assets/images/markers/pickup_pin.png',
+      MapPinKind.dropoff => 'assets/images/markers/dropoff_pin.png',
+    };
+
+/// pin graphic ले क्यानभासमा ओगट्ने display साइज (वर्गाकार) — पुरानो
+/// झन्डाको `FlagPinGeometry.displayW` भन्दा अलि ठूलो राखिएको, किनभने यी
+/// नयाँ 3D icon बाक्लो/भरिएको आकारको हुन् (पातलो झन्डा जस्तो होइन),
+/// साना साइजमा विवरण हराउन सक्ने।
+const double _pinDisplaySize = 56;
+
+/// दिइएको PNG को पिनको टुप्पो (जहाँ पिन काँचको disc मा टाँसिन्छ, साँचो
+/// GPS-बिन्दु) तस्बिरको जम्मा उचाइको लगभग कति तल पर्छ — दुवै असेट उस्तै
+/// 3D style/composition भएकोले एउटै अनुमानित fraction साझा गर्छन्। (Pixel-
+/// सटीक होइन — डिभाइसमा हेरेर मिलाउनुपर्‍यो भने यही एउटा स्थिरांक बदल्नुहोस्।)
+const double _pinTipYFraction = 0.78;
+
+final Map<MapPinKind, ui.Image> _pinImageCache = {};
+
+Future<ui.Image> _loadPinImage(MapPinKind kind) async {
+  final cached = _pinImageCache[kind];
   if (cached != null) return cached;
+  final data = await rootBundle.load(_pinAssetPath(kind));
+  final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
+  final frame = await codec.getNextFrame();
+  _pinImageCache[kind] = frame.image;
+  return frame.image;
+}
 
-  const double scale = 4.0;
+final Map<MapPinKind, BitmapDescriptor> _pinBitmapCache = {};
+final Map<MapPinKind, Uint8List> _pinBytesCache = {};
+
+Future<Uint8List> _renderPinBytes(MapPinKind kind) async {
+  final cached = _pinBytesCache[kind];
+  if (cached != null) return cached;
+  final image = await _loadPinImage(kind);
+  const double scale = 2.0;
   final rec = ui.PictureRecorder();
   final canvas = Canvas(rec);
+  // same missing-scale bug as `_renderSahayatriPinBytes` — see its comment.
   canvas.scale(scale);
-
-  // पोल
-  canvas.drawRRect(
-    RRect.fromRectAndRadius(
-      const Rect.fromLTWH(FlagPinGeometry.poleX, FlagPinGeometry.poleY,
-          FlagPinGeometry.poleW, FlagPinGeometry.poleH),
-      const Radius.circular(FlagPinGeometry.poleRadius),
-    ),
-    Paint()..color = const Color(0xFF111111),
+  canvas.drawImageRect(
+    image,
+    Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+    const Rect.fromLTWH(0, 0, _pinDisplaySize, _pinDisplaySize),
+    Paint()..filterQuality = FilterQuality.high,
   );
-
-  // झन्डा + चन्द्रमा + तारा — स्थिर (कुनै wave transform छैन)
-  final flagPath = FlagPinGeometry.flagPath();
-  final flagRect = flagPath.getBounds();
-  canvas.drawPath(
-    flagPath,
-    Paint()
-      ..shader = ui.Gradient.linear(
-          flagRect.topLeft, flagRect.bottomRight, FlagPinGeometry.flagGradient),
-  );
-  canvas.drawPath(
-    flagPath,
-    Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = FlagPinGeometry.flagStrokeWidth
-      ..strokeJoin = StrokeJoin.round
-      ..shader = ui.Gradient.linear(
-          flagRect.topLeft, flagRect.bottomRight, FlagPinGeometry.rimGradient),
-  );
-  canvas.drawPath(FlagPinGeometry.moonPath(), Paint()..color = Colors.white);
-  canvas.drawPath(FlagPinGeometry.starPath(), Paint()..color = Colors.white);
-
-  // आधार-थोप्लो
-  canvas.drawCircle(
-      FlagPinGeometry.dotCenter,
-      FlagPinGeometry.dotRadius + FlagPinGeometry.dotBorder,
-      Paint()..color = Colors.white);
-  canvas.drawCircle(FlagPinGeometry.dotCenter, FlagPinGeometry.dotRadius,
-      Paint()..color = const Color(0xFF111111));
-
-  final img = await rec.endRecording().toImage(
-      (FlagPinGeometry.displayW * scale).ceil(),
-      (FlagPinGeometry.displayH * scale).ceil());
-  final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
-  final result = bytes!.buffer.asUint8List();
-  _flagPinBytesCache = result;
+  final rendered = await rec
+      .endRecording()
+      .toImage((_pinDisplaySize * scale).ceil(), (_pinDisplaySize * scale).ceil());
+  final bytesData = await rendered.toByteData(format: ui.ImageByteFormat.png);
+  rendered.dispose();
+  final result = bytesData!.buffer.asUint8List();
+  _pinBytesCache[kind] = result;
   return result;
 }
 
-/// स्थिर काम/गन्तव्य स्थानको marker — Uber/InDrive को pin जस्तै — यो एउटै
-/// native `Marker` भएकाले नक्सा pan/zoom/rotate गर्दा यो सधैँ नक्साकै अरू
-/// सबैसँग ठ्याक्कै सँगसँगै सर्छ, छुट्टै Flutter overlay भएको भए जस्तो
-/// कहिल्यै लड्खडाउँदैन वा भाग-भाग देखिँदैन। (पहिले झन्डालाई अलग एनिमेटेड
-/// overlay बनाइएको थियो — त्यसले pan गर्दा async screen-coordinate lag का
-/// कारण पोल र झन्डा एक-अर्कादेखि छुट्टिएको देखिन्थ्यो; अब हटाइयो।)
-/// Marker मा `anchor: FlagPinGeometry.markerAnchorFraction` प्रयोग गर्नुहोस्।
-Future<BitmapDescriptor> destinationFlagPin() async {
-  final cached = _flagPinCache;
+/// Uber/inDrive-शैली pickup pin (कुनै label-ब्याज बिना, एक्लै) — Google
+/// Maps `Marker` का लागि। `anchor: const Offset(0.5, _pinTipYFraction)`
+/// दिनुहोस्।
+Future<BitmapDescriptor> pickupPin() async {
+  final cached = _pinBitmapCache[MapPinKind.pickup];
   if (cached != null) return cached;
-  final bytes = await _renderFlagPinBytes();
-  // width/height दिएर Maps लाई bitmap ठ्याक्कै display size मा (48×displayH
-  // logical px) देखाउन भन्ने — नत्र 4× supersampled raw pixel साइजमै (4 गुणा
-  // ठूलो) देखिन्थ्यो।
-  final bd = BitmapDescriptor.bytes(
-    bytes,
-    width: FlagPinGeometry.displayW,
-    height: FlagPinGeometry.displayH,
-  );
-  _flagPinCache = bd;
+  final bytes = await _renderPinBytes(MapPinKind.pickup);
+  final bd = BitmapDescriptor.bytes(bytes,
+      width: _pinDisplaySize, height: _pinDisplaySize);
+  _pinBitmapCache[MapPinKind.pickup] = bd;
   return bd;
 }
 
-/// उही झन्डा bitmap, तर plain Flutter widget (`Image.memory`) मा देखाउनको
-/// लागि — Google Maps-विशिष्ट `BitmapDescriptor` भन्दा फरक प्रकार।
+/// उही pickup pin, plain Flutter `Image.memory` overlay (screen-centered,
+/// नक्सा आफैं pan हुने Uber/inDrive pattern) का लागि —
+/// service_map_screen.dart::`_buildPickupPinOverlay()` हेर्नुहोस्।
+Future<Uint8List> pickupPinBytes() => _renderPinBytes(MapPinKind.pickup);
+
+/// Sahayatri Brand Pin — pickup/dropoff pin (माथि, वर्गाकार) भन्दा फरक,
+/// कम्पनीको आफ्नै लोगो-आकारको पिन (लामो/साँघुरो, वर्गाकार होइन) — "N
+/// providers nearby" (pickup-select, service_map_screen.dart) को केन्द्रित
+/// पिन र "Waiting for driver" (request_tracking_screen.dart) को "me"
+/// marker दुवैमा प्रयोग हुन्छ। pixel-विश्लेषण गरेर पहिल्यै नापिएको ज्यामिति
+/// (1167×2085, टुप्पो झन्डै तल्लो किनारैमा) — नयाँ `ui.Image` बाट हरेक
+/// पटक फेरि नमापी सिधै यिनै स्थिरांक प्रयोग गरिन्छ।
+class SahayatriPinGeometry {
+  SahayatriPinGeometry._();
+  static const double naturalW = 1167;
+  // स्रोत PNG (2085 अग्लो) को पुछारमा एउटा छुट्टै, पातलो धातुको टुप्पो
+  // (spike) भन्दा तल्लो, फराकिलो drop-shadow ellipse थियो — बीचमा पूर्ण
+  // transparent खाली ठाउँ छोडेर छुट्टिएको। Alpha-channel pixel-विश्लेषणले
+  // (हरेक row स्क्यान गरेर) पुष्टि गर्छ: टुप्पोको अन्तिम देखिने (alpha>0)
+  // pixel row ठ्याक्कै y=1873 मा हो (x-दायरा 618-629, केन्द्र≈623.5 —
+  // तलको `anchorFraction.dx = 623/naturalW` यसैसँग मिल्छ); त्यसपछि
+  // y=1874-1902 पूर्ण transparent (खाली खाडल), अनि y=1903 बाट मात्र
+  // shadow ellipse सुरु हुन्छ। पहिले यो स्थिरांक 1882 थियो — त्यो खाली
+  // खाडलकै बीचमा पर्थ्यो, अर्थात् anchor (dy=1.0, crop कै पुछार) टुप्पोको
+  // साँचो अन्तिम pixel भन्दा ९ row तल (पारदर्शी ठाउँमा) पर्थ्यो, जसले
+  // गर्दा ripple/marker anchor बिन्दु टुप्पोको भिजुअल टुप्पोभन्दा अलिक्ति
+  // तल हुन्थ्यो। अब ठ्याक्कै 1874 (row 0..1873 समावेश, शून्य खाली
+  // padding) — anchor (dy=1.0) ठ्याक्कै देखिने टुप्पोकै अन्तिम pixel row
+  // मा नै पर्छ, कुनै फ्र्याक्सन-अड्कल वा खाली खाडल बाँकी रहँदैन।
+  static const double croppedSourceH = 1874;
+  static const double naturalH = croppedSourceH;
+  static const Offset anchorFraction = Offset(623 / naturalW, 1.0);
+}
+
+const String _sahayatriPinAsset = 'assets/images/markers/sahayatri_pin.png';
+// पुरानो झन्डा (FlagPinGeometry.displayH = 79) भन्दा स्पष्ट रूपमा ठूलो/
+// प्रस्ट देखियोस् भनेर — पहिले 64 थियो, धेरै सानो देखिने गुनासो आएपछि।
+// public (अब request_tracking_screen.dart ले पनि प्रयोग गर्छ — pin+ripple
+// लाई एउटै Flutter overlay/anchor मा जोड्न, नत्र दुई फाइलमा छुट्टाछुट्टै
+// नापिएको उचाइ राख्दा बिस्तारै मेल नखाने जोखिम हुन्थ्यो)।
+const double sahayatriPinDisplayH = 108;
+const double sahayatriPinDisplayW =
+    sahayatriPinDisplayH * SahayatriPinGeometry.naturalW / SahayatriPinGeometry.naturalH;
+
+BitmapDescriptor? _sahayatriPinCache;
+Uint8List? _sahayatriPinBytesCache;
+
+Future<Uint8List> _renderSahayatriPinBytes() async {
+  final cached = _sahayatriPinBytesCache;
+  if (cached != null) return cached;
+  final data = await rootBundle.load(_sahayatriPinAsset);
+  final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
+  final frame = await codec.getNextFrame();
+  final image = frame.image;
+
+  const double scale = 2.0;
+  final rec = ui.PictureRecorder();
+  final canvas = Canvas(rec);
+  // `toImage()` नीचे यो picture लाई (scale*displaySize) पिक्सेलको raster मा
+  // कोर्छ — तर यो `canvas.scale(scale)` बिना, तलको drawImageRect ले अझै
+  // LOGICAL (1x) आकारमै कोर्छ, अर्थात् रेखाचित्र canvas कै माथिल्लो-देब्रे
+  // एक-चौथाइ (50%×50%) मा मात्र अटाउँछ — बाँकी ठूलो खाली/पारदर्शी ठाउँ
+  // तल/दायाँ छोडिन्छ (Image.memory ले पछि त्यही खाली ठाउँसहित नै display
+  // size मा तान्दा anchor बिन्दु टुप्पोभन्दा टाढा पर्छ)। यही file का अरू
+  // सबै 2x/4x-scale render function (`labeledFlagPin`, `destinationFlagPin`,
+  // `radarGlassWaveFrames`) ले यो गर्छन् — यहीँ छुटेको रहेछ।
+  canvas.scale(scale);
+  canvas.drawImageRect(
+    image,
+    // माथिको shadow-blob कटौती — स्रोतको पूरै उचाइ (image.height) होइन,
+    // टुप्पोसम्म मात्र (croppedSourceH) कोर्नुहोस्।
+    Rect.fromLTWH(0, 0, image.width.toDouble(), SahayatriPinGeometry.croppedSourceH),
+    const Rect.fromLTWH(0, 0, sahayatriPinDisplayW, sahayatriPinDisplayH),
+    Paint()..filterQuality = FilterQuality.high,
+  );
+  final rendered = await rec.endRecording().toImage(
+      (sahayatriPinDisplayW * scale).ceil(),
+      (sahayatriPinDisplayH * scale).ceil());
+  final bytesData = await rendered.toByteData(format: ui.ImageByteFormat.png);
+  rendered.dispose();
+  // `image` (decoded fresh above, not stored in any cache — unlike
+  // `_loadPinImage`/`_loadAssetImage`/`_loadVehiclePinImage`) केवल यही
+  // raster मा एकपटक कोर्न मात्र चाहिएको — rasterize (`toImage` माथि)
+  // सकिएपछि अब यसको कुनै प्रयोजन छैन।
+  image.dispose();
+  final result = bytesData!.buffer.asUint8List();
+  _sahayatriPinBytesCache = result;
+  return result;
+}
+
+/// Native `Marker` का लागि (हाल कुनै screen ले यो प्रयोग गर्दैन —
+/// request_tracking_screen.dart को "me" अब plain Flutter overlay हो,
+/// `sahayatriPinBytes()` हेर्नुहोस् — पिन र ripple लाई एउटै anchor/screen-
+/// projection मा टाँस्न) — `anchor: SahayatriPinGeometry.anchorFraction`
+/// दिनुहोस्।
+Future<BitmapDescriptor> sahayatriPin() async {
+  final cached = _sahayatriPinCache;
+  if (cached != null) return cached;
+  final bytes = await _renderSahayatriPinBytes();
+  final bd = BitmapDescriptor.bytes(bytes,
+      width: sahayatriPinDisplayW, height: sahayatriPinDisplayH);
+  _sahayatriPinCache = bd;
+  return bd;
+}
+
+/// उही पिन, plain Flutter `Image.memory` overlay (screen-centered pickup-pin
+/// preview, service_map_screen.dart::`_buildPickupPinOverlay()`) का लागि।
+Future<Uint8List> sahayatriPinBytes() => _renderSahayatriPinBytes();
+
+/// स्थिर काम/गन्तव्य स्थानको marker — Uber/InDrive को pin जस्तै। पहिले यहाँ
+/// आफ्नै (राष्ट्रिय झन्डाको आकार सम्झाउने) procedural bitmap कोरिन्थ्यो —
+/// अब त्यो पूर्ण हटाएर, आधिकारिक Sahayatri ब्रान्ड-पिन (`sahayatriPin()`,
+/// माथि) नै सिधै reuse गरिन्छ — छुट्टै bitmap/cache चाहिँदैन।
+/// Marker मा `anchor: FlagPinGeometry.markerAnchorFraction` प्रयोग गर्नुहोस्।
+Future<BitmapDescriptor> destinationFlagPin() => sahayatriPin();
+
+/// उही Sahayatri पिन bitmap, तर plain Flutter widget (`Image.memory`) मा
+/// देखाउनको लागि — Google Maps-विशिष्ट `BitmapDescriptor` भन्दा फरक प्रकार।
 /// service_map_screen.dart मा "पिन screen-center मा स्थिर रहने, प्रयोगकर्ताले
 /// नक्सा नै pan गरेर आफ्नो स्थान म्यानुअली छान्ने" (Uber/inDrive-style)
-/// pattern का लागि — यहाँ कुनै coordinate-conversion/lag जोखिम छैन (पिन
-/// स्क्रिनमै स्थिर बस्छ, नक्सा मात्र चल्छ), त्यसैले माथिको "छुट्टै overlay
-/// लड्खडाउने" समस्यासँग यो फरक हो।
-Future<Uint8List> destinationFlagPinBytes() => _renderFlagPinBytes();
+/// pattern का लागि।
+Future<Uint8List> destinationFlagPinBytes() => sahayatriPinBytes();
 
 final Map<String, BitmapDescriptor> _labeledPinIconCache = {};
 final Map<String, Offset> _labeledPinAnchorCache = {};
+// Native-Map Bridge — route_map_view.dart (Dart-rendered GoogleMap) लाई
+// `BitmapDescriptor` नै पुग्छ, तर native_ride_map_view.dart (AndroidView/
+// ValueAnimator) ले platform-channel मार्फत raw PNG bytes + canvas साइज
+// पठाउनुपर्छ (Kotlin आफैंले `BitmapDescriptor` बनाउँछ, Dart कै `BitmapDescriptor`
+// वस्तु सिधै cross नगर्ने)। एउटै क्यानभास दुईपटक नबनाउन यहीं cache।
+final Map<String, Uint8List> _labeledPinBytesCache = {};
+final Map<String, Size> _labeledPinCanvasSizeCache = {};
 
 /// Uber/inDrive-शैली — झन्डाको ठ्याक्कै माथि "Pickup"/"Drop-off" जस्तो छोटो
 /// लेबल-ब्याज सधैँ टाँसिएको एउटै static bitmap (badge + पोल + झन्डा +
@@ -943,18 +1494,57 @@ final Map<String, Offset> _labeledPinAnchorCache = {};
 /// भन्ने फरक-फरक हुन्छ, [FlagPinGeometry.markerAnchorFraction] (लेबल-रहित
 /// झन्डाको लागि मात्र सही) यहाँ प्रयोग गर्न मिल्दैन।
 Future<({BitmapDescriptor icon, Offset anchorFraction})> labeledFlagPin(
-    String label, Color badgeColor) async {
-  final key = '$label|${badgeColor.toARGB32()}';
+    String label, Color badgeColor, MapPinKind kind) async {
+  final key = '$label|${badgeColor.toARGB32()}|$kind';
   final cachedIcon = _labeledPinIconCache[key];
   final cachedAnchor = _labeledPinAnchorCache[key];
   if (cachedIcon != null && cachedAnchor != null) {
     return (icon: cachedIcon, anchorFraction: cachedAnchor);
   }
+  final r = await _buildLabeledFlagPin(label, badgeColor, kind);
+  return (icon: r.icon, anchorFraction: r.anchorFraction);
+}
+
+/// Native-Map Bridge — `labeledFlagPin()` कै उही बिट्म्याप, तर Kotlin
+/// (`NativeVehicleMapView.setLabeledIcon`) तर्फ raw PNG bytes + logical
+/// canvas साइज पठाउन। उही cache (`_buildLabeledFlagPin`) साझा गर्छ —
+/// दुवै caller ले एउटै label/रङ मागे एउटै क्यानभास दोहोरिएर नबनोस्।
+Future<({Uint8List bytes, Offset anchorFraction, Size canvasSize})>
+    labeledFlagPinBytes(String label, Color badgeColor, MapPinKind kind) async {
+  final key = '$label|${badgeColor.toARGB32()}|$kind';
+  final cachedBytes = _labeledPinBytesCache[key];
+  final cachedAnchor = _labeledPinAnchorCache[key];
+  final cachedSize = _labeledPinCanvasSizeCache[key];
+  if (cachedBytes != null && cachedAnchor != null && cachedSize != null) {
+    return (
+      bytes: cachedBytes,
+      anchorFraction: cachedAnchor,
+      canvasSize: cachedSize
+    );
+  }
+  final r = await _buildLabeledFlagPin(label, badgeColor, kind);
+  return (
+    bytes: r.bytes,
+    anchorFraction: r.anchorFraction,
+    canvasSize: r.canvasSize
+  );
+}
+
+Future<
+    ({
+      BitmapDescriptor icon,
+      Offset anchorFraction,
+      Uint8List bytes,
+      Size canvasSize
+    })> _buildLabeledFlagPin(
+    String label, Color badgeColor, MapPinKind kind) async {
+  final key = '$label|${badgeColor.toARGB32()}|$kind';
+  final pinImage = await _loadPinImage(kind);
 
   const double scale = 4.0;
   const double badgeH = 20;
   const double gap = 5;
-  const double flagNaturalW = FlagPinGeometry.displayW;
+  const double pinNaturalW = _pinDisplaySize;
 
   final tp = TextPainter(
     text: TextSpan(
@@ -964,10 +1554,10 @@ Future<({BitmapDescriptor icon, Offset anchorFraction})> labeledFlagPin(
     ),
     textDirection: TextDirection.ltr,
   )..layout();
-  final badgeW = (tp.width + 20).clamp(flagNaturalW, 200.0);
+  final badgeW = (tp.width + 20).clamp(pinNaturalW, 200.0);
   final canvasW = badgeW;
-  const canvasH = badgeH + gap + FlagPinGeometry.displayH;
-  final flagOffsetX = (canvasW - flagNaturalW) / 2;
+  const canvasH = badgeH + gap + _pinDisplaySize;
+  final pinOffsetX = (canvasW - pinNaturalW) / 2;
 
   final rec = ui.PictureRecorder();
   final canvas = Canvas(rec);
@@ -997,89 +1587,70 @@ Future<({BitmapDescriptor icon, Offset anchorFraction})> labeledFlagPin(
     Paint()..color = badgeColor,
   );
 
-  // ── झन्डा + पोल + थोप्लो — [_renderFlagPinBytes] कै उही drawing, तल sारिएको ──
-  canvas.save();
-  canvas.translate(flagOffsetX, badgeH + gap);
-  canvas.drawRRect(
-    RRect.fromRectAndRadius(
-      const Rect.fromLTWH(FlagPinGeometry.poleX, FlagPinGeometry.poleY,
-          FlagPinGeometry.poleW, FlagPinGeometry.poleH),
-      const Radius.circular(FlagPinGeometry.poleRadius),
-    ),
-    Paint()..color = const Color(0xFF111111),
+  // ── Custom 3D pin (pickup=निलो, dropoff=सुनौलो) — झन्डाको ठाउँमा ──
+  canvas.drawImageRect(
+    pinImage,
+    Rect.fromLTWH(0, 0, pinImage.width.toDouble(), pinImage.height.toDouble()),
+    Rect.fromLTWH(pinOffsetX, badgeH + gap, pinNaturalW, _pinDisplaySize),
+    Paint()..filterQuality = FilterQuality.high,
   );
-  final flagPath = FlagPinGeometry.flagPath();
-  final flagRect = flagPath.getBounds();
-  canvas.drawPath(
-    flagPath,
-    Paint()
-      ..shader = ui.Gradient.linear(
-          flagRect.topLeft, flagRect.bottomRight, FlagPinGeometry.flagGradient),
-  );
-  canvas.drawPath(
-    flagPath,
-    Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = FlagPinGeometry.flagStrokeWidth
-      ..strokeJoin = StrokeJoin.round
-      ..shader = ui.Gradient.linear(flagRect.topLeft, flagRect.bottomRight,
-          [badgeColor, badgeColor.withValues(alpha: 0.55)]),
-  );
-  canvas.drawPath(FlagPinGeometry.moonPath(), Paint()..color = Colors.white);
-  canvas.drawPath(FlagPinGeometry.starPath(), Paint()..color = Colors.white);
-  canvas.drawCircle(
-      FlagPinGeometry.dotCenter,
-      FlagPinGeometry.dotRadius + FlagPinGeometry.dotBorder,
-      Paint()..color = Colors.white);
-  canvas.drawCircle(
-      FlagPinGeometry.dotCenter, FlagPinGeometry.dotRadius, Paint()..color = badgeColor);
-  canvas.restore();
 
   final img = await rec
       .endRecording()
       .toImage((canvasW * scale).ceil(), (canvasH * scale).ceil());
   final bytesData = await img.toByteData(format: ui.ImageByteFormat.png);
+  img.dispose();
   final bytes = bytesData!.buffer.asUint8List();
 
   final bd = BitmapDescriptor.bytes(bytes, width: canvasW, height: canvasH);
   final anchorFraction = Offset(
-    (FlagPinGeometry.anchor.dx + flagOffsetX) / canvasW,
-    (FlagPinGeometry.anchor.dy + badgeH + gap) / canvasH,
+    (pinOffsetX + pinNaturalW / 2) / canvasW,
+    (badgeH + gap + _pinDisplaySize * _pinTipYFraction) / canvasH,
   );
+  final canvasSize = Size(canvasW, canvasH);
   _labeledPinIconCache[key] = bd;
   _labeledPinAnchorCache[key] = anchorFraction;
-  return (icon: bd, anchorFraction: anchorFraction);
+  _labeledPinBytesCache[key] = bytes;
+  _labeledPinCanvasSizeCache[key] = canvasSize;
+  return (
+    icon: bd,
+    anchorFraction: anchorFraction,
+    bytes: bytes,
+    canvasSize: canvasSize,
+  );
 }
 
 final Map<int, List<BitmapDescriptor>> _waveFramesCache = {};
 
-/// "advanced" radar-wave को हरेक फ्रेम आफैं एउटा native Marker bitmap हो —
-/// Flutter overlay/`getScreenCoordinate` ट्र्याकिङ होइन। यसलाई झन्डाकै
-/// ठ्याक्कै उही `position` (lat/lng) मा अर्को Marker (`anchor: Offset(0.5,
-/// 0.5)`) को रूपमा राख्नुहोस्: दुवै marker ठ्याक्कै एउटै coordinate मा
-/// भएकाले Google Maps आफैंले तिनलाई एउटै क्यामेरा transform बाट सँगसँगै
-/// कोर्छ — zoom/pan मा झन्डाको केन्द्रबिन्दुबाट यो कहिल्यै विचलित हुँदैन,
-/// किनकि यहाँ कुनै async screen-position पछ्याउने कोड नै छैन। एनिमेसनको
-/// लागि frame-index लाई timer/AnimationController ले बदलिरहनुपर्छ (bitmap
-/// स्वयं static हो, हरेक frame फरक स्थिर तस्बिर मात्र हो)।
-Future<List<BitmapDescriptor>> radarWaveFrames(Color color,
-    {int frames = 30}) async {
+/// राडार/ripple मात्र — पिन **होइन** (माथिको `sahayatriPin()` ले दिने स्थिर
+/// bitmap छुट्टै Marker को रूपमा राख्नुहोस्, कहिल्यै फेरि नबनाई, एकपटक मात्र
+/// `initState` मा)। पिन+ripple दुवै एउटै bitmap मा सँगै बेक गरेर हरेक
+/// animation-tick मा स्वयं पिन सहित पूरै bitmap नै फेरि-फेरि native marker
+/// लाई पठाउँदा — "पिन टिम्किरहेको/बारम्बार हराएर देखिने" (flicker) समस्या
+/// आयो, किनभने Google Maps Flutter plugin ले marker कै `icon` फेरिएको
+/// देख्नेबित्तिकै सोही marker लाई native side मा हटाएर फेरि थप्छ (पिन
+/// आफैं कहिल्यै नबदलिए पनि)। त्यसैले फर्केर यहाँ ripple-मात्र bitmap (सानो,
+/// हल्का) र पिन (सधैँ स्थिर, छुट्टै marker) छुट्याइएको — दुवैको geometric
+/// केन्द्र/anchor उही `position` मा नै मिल्छन् (पिनको anchor अब सधैँ
+/// bitmap कै ठ्याक्कै पुछारमा पर्ने गरी crop गरिएको — माथि
+/// `SahayatriPinGeometry` हेर्नुहोस्), त्यसैले दुई छुट्टै marker भए पनि
+/// छुट्टिने जोखिम छैन।
+Future<List<BitmapDescriptor>> radarGlassWaveFrames(Color color,
+    {int frames = 24}) async {
   final key = color.toARGB32() * 1000 + frames;
   final hit = _waveFramesCache[key];
   if (hit != null) return hit;
 
-  const double scale = 3.0;
-  const double size = 176;
+  const double scale = 2.5;
+  const double size = 240;
   const double c = size / 2;
-  // पानीमा ढुङ्गा हालेपछि निस्कने ripple जस्तै — शुद्ध गोलो रेखा (कुनै भरिएको
-  // ग्लो/ब्लब छैन): एउटा पातलो घेरा सानो/गाढा भएर सुरु हुन्छ, त्यही स्थिरगतिमा
-  // बाहिरतिर फैलिँदै जान्छ र किनारमा पुग्दा पूर्ण रूपमा हराउँछ (fade-out)।
-  // ३ घेराहरू १/३ फरकले सुरु हुन्छन् ताकि एउटा हराउँदा अर्को सुरु भइरहेको देखिन्छ
-  // — निरन्तर, स्मूथ pulsation (राडार/मुटुको धड्कन जस्तै)।
+  // ३ घेराहरू १/३ फरकले सुरु हुन्छन् ताकि एउटा हराउँदा अर्को सुरु भइरहेको
+  // देखिन्छ — पानीमा ढुङ्गा हालेपछि निस्कने निरन्तर, ढिलो, नरम लहर जस्तै।
   const int ringCount = 3;
-  const double minRadius = 8;
-  const double maxRadius = 62;
-  const double maxAlpha = 0.85;
+  const double minRadius = 14;
+  const double maxRadius = 80;
+  const double peakStop = 0.78;
+  final glass = Color.lerp(color, Colors.white, 0.45)!;
   final out = <BitmapDescriptor>[];
   for (var f = 0; f < frames; f++) {
     final t = f / frames;
@@ -1088,22 +1659,47 @@ Future<List<BitmapDescriptor>> radarWaveFrames(Color color,
     canvas.scale(scale);
     for (var i = 0; i < ringCount; i++) {
       final p = (t + i / ringCount) % 1.0;
-      final radius = minRadius + p * (maxRadius - minRadius);
-      final fade = (1 - p).clamp(0.0, 1.0);
+      // वास्तविक पानीको लहर जस्तै — सुरुमा छिटो फैलिएर बिस्तारै गति घट्दै
+      // जाने (ease-out), अनि लहर फैलिंदै जाँदा झन्-झन् छिटो हराउने
+      // (ease-in fade) — एकसमान रेखीय गतिभन्दा धेरै प्राकृतिक देखिन्छ।
+      final radiusP = Curves.easeOut.transform(p);
+      final fadeP = Curves.easeIn.transform((1 - p).clamp(0.0, 1.0));
+      final radius = minRadius + radiusP * (maxRadius - minRadius);
+      final outer = radius / peakStop;
+      canvas.drawCircle(
+        const Offset(c, c),
+        outer,
+        Paint()
+          ..shader = ui.Gradient.radial(
+            const Offset(c, c),
+            outer,
+            [
+              glass.withValues(alpha: 0),
+              glass.withValues(alpha: 0),
+              glass.withValues(alpha: 0.4 * fadeP),
+              glass.withValues(alpha: 0),
+              glass.withValues(alpha: 0),
+            ],
+            const [0.0, 0.6, peakStop, 0.93, 1.0],
+          )
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.2),
+      );
       canvas.drawCircle(
         const Offset(c, c),
         radius,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.0
-          ..color = color.withValues(alpha: maxAlpha * fade),
+          ..strokeWidth = 1.6
+          ..color = Colors.white.withValues(alpha: 0.5 * fadeP)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.3),
       );
     }
     final img = await rec
         .endRecording()
         .toImage((size * scale).ceil(), (size * scale).ceil());
-    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
-    out.add(BitmapDescriptor.bytes(bytes!.buffer.asUint8List(),
+    final bytesData = await img.toByteData(format: ui.ImageByteFormat.png);
+    img.dispose();
+    out.add(BitmapDescriptor.bytes(bytesData!.buffer.asUint8List(),
         width: size, height: size));
   }
   _waveFramesCache[key] = out;
@@ -1160,10 +1756,14 @@ class OfferSheet extends StatefulWidget {
 class _OfferSheetState extends State<OfferSheet> {
   final _detailsCtrl = TextEditingController();
   late int _asking;
-  late int _amount;
+  // `ValueNotifier` — +/- थिच्दा/quick-chip छान्दा पूरै sheet (avatar, title,
+  // details TextField, आदि) फेरि नबनोस् भनेर; तल build() मा यही एउटा
+  // `ValueListenableBuilder` ले मात्र (केवल मूल्य देखिने सानो Row) rebuild
+  // हुन्छ — बाँकी सबै एकपटक मात्र बन्छ।
+  late final ValueNotifier<int> _amount;
   bool _sending = false;
 
-  static const int _step = 50;
+  static const int _step = 5;
 
   @override
   void initState() {
@@ -1173,16 +1773,17 @@ class _OfferSheetState extends State<OfferSheet> {
         .replaceAll(RegExp(r'[^0-9]'), '');
     _asking = int.tryParse(digits) ?? 500;
     if (_asking < _step) _asking = 500;
-    _amount = _asking;
+    _amount = ValueNotifier<int>(_asking);
   }
 
   @override
   void dispose() {
+    _amount.dispose();
     _detailsCtrl.dispose();
     super.dispose();
   }
 
-  void _setAmount(int v) => setState(() => _amount = v.clamp(_step, 1000000));
+  void _setAmount(int v) => _amount.value = v.clamp(_step, 1000000);
 
   Future<void> _send() async {
     setState(() => _sending = true);
@@ -1191,7 +1792,16 @@ class _OfferSheetState extends State<OfferSheet> {
       // users/{uid} बाट साँचो नाम/फोन — Auth कै email/phoneNumber भन्दा
       // भरपर्दो (इमेलबाट दर्ता भएकाको हकमा Auth phoneNumber सधैँ खाली हुन्छ,
       // जुन "Call गर्दा नम्बर भेटिएन" गुनासोको मूल कारण थियो)।
-      var employerName = user?.displayName ?? user?.email ?? 'Employer';
+      // CUSTOMER-NAME-EMPTY FIX — service_map_screen.dart::_submitJob कै
+      // उस्तै जड: `??` ले खाली string (`''`) लाई null ठान्दैन, त्यसैले
+      // phone-auth-only प्रयोगकर्ताको `displayName` कहिलेकाहीं `''` हुँदा
+      // worker ले देख्ने card मा ग्राहकको नाम पूर्ण रूपमा खाली देखिन्थ्यो।
+      var employerName = 'Employer';
+      if ((user?.displayName ?? '').trim().isNotEmpty) {
+        employerName = user!.displayName!.trim();
+      } else if ((user?.email ?? '').trim().isNotEmpty) {
+        employerName = user!.email!.trim();
+      }
       var employerPhone = user?.phoneNumber ?? '';
       try {
         final u = await FirebaseFirestore.instance
@@ -1214,7 +1824,7 @@ class _OfferSheetState extends State<OfferSheet> {
         'workerName': widget.data['name'] ?? '',
         'service': service,
         'details': _detailsCtrl.text.trim(),
-        'proposedPrice': _amount,
+        'proposedPrice': _amount.value,
         'status': 'pending_worker',
         'createdAt': FieldValue.serverTimestamp(),
         'distanceKm': double.parse(widget.distanceKm.toStringAsFixed(2)),
@@ -1234,7 +1844,7 @@ class _OfferSheetState extends State<OfferSheet> {
         unawaited(createNotificationForUser(
           workerUid,
           S.directOfferNotifTitle,
-          S.directOfferNotifBody(employerName, service, _amount),
+          S.directOfferNotifBody(employerName, service, _amount.value),
           data: {'requestId': doc.id, 'type': 'direct_offer'},
         ));
       }
@@ -1309,13 +1919,10 @@ class _OfferSheetState extends State<OfferSheet> {
       child: ClipRRect(
         borderRadius:
             const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-          child: Container(
+        child: glassBackdrop(sigma: 26, child: Container(
             decoration: BoxDecoration(
               color: AppColors.kmGlass2Fill,
-              border: Border(
-                  top: BorderSide(color: AppColors.kmGlass2Border)),
+              border: Border(top: BorderSide(color: AppColors.kmGlass2Border)),
             ),
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
             child: Column(
@@ -1346,8 +1953,7 @@ class _OfferSheetState extends State<OfferSheet> {
                                   fontSize: 15)),
                           Text(
                               '${S.serviceName(service)}  ·  ${S.distanceLabel(widget.distanceKm)}',
-                              style:
-                                  const TextStyle(color: AppColors.kmMuted)),
+                              style: const TextStyle(color: AppColors.kmMuted)),
                         ],
                       ),
                     ),
@@ -1355,7 +1961,8 @@ class _OfferSheetState extends State<OfferSheet> {
                 ),
                 const SizedBox(height: 18),
                 Text(
-                    '${S.askingPrice}: Rs. $_asking   ·   ${S.suggestedFare}: Rs. ${estimateFare(service, widget.distanceKm)}',
+                    '${S.askingPrice}: Rs. $_asking   ·   ${S.suggestedFare}: Rs. ${estimateFare(service, widget.distanceKm)}'
+                    '${isNightFareHour() ? '  ·  🌙 ${S.nightFareLabel}' : ''}',
                     style: const TextStyle(color: AppColors.kmMuted)),
                 const SizedBox(height: 6),
                 Text(S.yourOffer,
@@ -1364,30 +1971,37 @@ class _OfferSheetState extends State<OfferSheet> {
                         fontSize: 12.5,
                         fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    PriceStepButton(
-                        icon: Icons.remove_rounded,
-                        onTap: () => _setAmount(_amount - _step)),
-                    const SizedBox(width: 18),
-                    Column(
+                // +/- थिच्दा यही सानो Row मात्र फेरि बन्छ — बाँकी पूरै sheet
+                // (avatar, title, details TextField, quick chip हरू) होइन।
+                RepaintBoundary(
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: _amount,
+                    builder: (context, amount, _) => Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Text('Rs.',
-                            style: TextStyle(
-                                fontSize: 12, color: AppColors.kmMuted)),
-                        Text('$_amount',
-                            style: const TextStyle(
-                                color: AppColors.kmText,
-                                fontSize: 34,
-                                fontWeight: FontWeight.w800)),
+                        PriceStepButton(
+                            icon: Icons.remove_rounded,
+                            onTap: () => _setAmount(amount - _step)),
+                        const SizedBox(width: 18),
+                        Column(
+                          children: [
+                            const Text('Rs.',
+                                style: TextStyle(
+                                    fontSize: 12, color: AppColors.kmMuted)),
+                            Text('$amount',
+                                style: const TextStyle(
+                                    color: AppColors.kmText,
+                                    fontSize: 34,
+                                    fontWeight: FontWeight.w800)),
+                          ],
+                        ),
+                        const SizedBox(width: 18),
+                        PriceStepButton(
+                            icon: Icons.add_rounded,
+                            onTap: () => _setAmount(amount + _step)),
                       ],
                     ),
-                    const SizedBox(width: 18),
-                    PriceStepButton(
-                        icon: Icons.add_rounded,
-                        onTap: () => _setAmount(_amount + _step)),
-                  ],
+                  ),
                 ),
                 const SizedBox(height: 14),
                 Row(

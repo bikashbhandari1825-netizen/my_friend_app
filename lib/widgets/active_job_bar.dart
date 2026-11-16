@@ -9,7 +9,6 @@
 // job_route_screen.dart र main_container.dart दुवैले लेख्छन्) बाट प्रत्येक
 // Firestore अपडेटमा पुनः गणना हुन्छ।
 import 'dart:async';
-import 'dart:ui' show ImageFilter;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -21,8 +20,12 @@ import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../screens/chat_screen.dart';
 import '../screens/job_actions.dart'
-    show deleteCancelledBooking, isCommunicationUnlocked, pickCancellationReason;
-import '../screens/nearby_common.dart' show haversineKm, serviceIconFor;
+    show
+        deleteCancelledBooking,
+        isCommunicationUnlocked,
+        offerErrorSnackBar,
+        pickCancellationReason;
+import '../screens/nearby_common.dart' show haversineKm, ServiceIconBadge;
 import 'glass_ui.dart';
 import 'status_badge.dart';
 import 'worker_avatar.dart';
@@ -70,16 +73,19 @@ class ActiveJobBar extends StatelessWidget {
 
   Future<void> _confirmCancel(
       BuildContext context, Map<String, dynamic> data) async {
+    final service = (data['service'] ?? '').toString();
+    final isRide =
+        service == 'Bike' || service == 'Car' || service == 'Auto';
     final ok = await showKmDialog<bool>(
       context: context,
-      title: S.activeJobBarCancelTitle,
-      message: S.activeJobBarCancelBody,
+      title: S.activeJobBarCancelTitleFor(isRide),
+      message: S.activeJobBarCancelBodyFor(isRide),
       icon: Icons.close_rounded,
       iconBg: const LinearGradient(
           colors: [AppColors.kmRose, AppColors.kmPinkDeep]),
       actions: [
         KmDialogAction(
-          label: S.keepJob,
+          label: S.keepJobFor(isRide),
           onPressed: () => Navigator.of(context).pop(false),
         ),
         KmDialogAction(
@@ -94,17 +100,32 @@ class ActiveJobBar extends StatelessWidget {
     // "पक्का हो?" पछि मात्र किन cancel गर्दै भन्ने छोटो कारण — sheet बन्द
     // गरे (null) भने cancel नै नगर्ने।
     final reason = await pickCancellationReason(context);
-    if (reason == null) return;
-    // Cancelled Bookings Cleanup — status मात्र बदल्ने होइन, पूरै मेट्ने
-    // (कुनै अवशेष history नरहोस्)।
-    await deleteCancelledBooking(
-      requestId,
-      workerUid: (data['workerUid'] ?? '').toString(),
-      // worker आफैंले cancel गर्‍यो भने मात्र penalty — employer लाई
-      // कहिल्यै penalty छैन (job_actions.dart::deleteCancelledBooking हेर्नुहोस्)।
-      cancelledByWorker: isWorker,
-      reason: reason,
-    );
+    if (reason == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      // Cancelled Bookings Cleanup — status मात्र बदल्ने होइन, पूरै मेट्ने
+      // (कुनै अवशेष history नरहोस्)।
+      await deleteCancelledBooking(
+        requestId,
+        workerUid: (data['workerUid'] ?? '').toString(),
+        // worker आफैंले cancel गर्‍यो भने मात्र penalty — employer लाई
+        // कहिल्यै penalty छैन (job_actions.dart::deleteCancelledBooking हेर्नुहोस्)।
+        cancelledByWorker: isWorker,
+        reason: reason,
+      );
+      // Silent-Success Fix — यहाँ सफल भएपछि पहिले कुनै संकेत नै थिएन; यो
+      // बार आफैं (stream-driven) केही क्षणमा बिस्तारै हराउने भएकोले, छिटो
+      // टेस्ट गर्दा "थिचेर पनि केही भएन" जस्तै देखिन्थ्यो (data कै हिसाबले
+      // cancel साँच्चै भइसकेको भए पनि)। अब तुरुन्तै स्पष्ट संकेत।
+      if (context.mounted) {
+        messenger.showSnackBar(SnackBar(content: Text(S.requestCancelled)));
+      }
+    } catch (e) {
+      // पहिले यहाँ असफल भए पनि कुनै संकेत नै नदेखिने थियो — "Cancel बटन
+      // थिचेर पनि केही नहुने" गुनासोको सम्भाव्य जड। अब स्पष्ट त्रुटि।
+      if (!context.mounted) return;
+      messenger.showSnackBar(offerErrorSnackBar(context, e));
+    }
   }
 
   /// Emergency SOS — पक्का हो भनेर एकपटक सोधेपछि: (१) हालको लाइभ स्थान +
@@ -195,9 +216,7 @@ class ActiveJobBar extends StatelessWidget {
         child: ClipRRect(
           borderRadius:
               const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-            child: Container(
+          child: glassBackdrop(sigma: 26, child: Container(
               decoration: BoxDecoration(
                 color: AppColors.kmSurface.withValues(alpha: 0.94),
                 borderRadius: const BorderRadius.vertical(
@@ -226,7 +245,10 @@ class ActiveJobBar extends StatelessWidget {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(S.jobDetailsTitle,
+                        child: Text(
+                            S.jobDetailsTitleFor(service == 'Bike' ||
+                                service == 'Car' ||
+                                service == 'Auto'),
                             style: const TextStyle(
                                 color: AppColors.kmText,
                                 fontWeight: FontWeight.w800,
@@ -330,11 +352,15 @@ class ActiveJobBar extends StatelessWidget {
         final empLng = (data['employerLng'] as num?)?.toDouble();
         final wLat = (data['workerLat'] as num?)?.toDouble();
         final wLng = (data['workerLng'] as num?)?.toDouble();
+        // Compact ETA/Distance Badge — पहिले यो लामो वाक्य (`S.etaAway`:
+        // "about N min away") बाकी meta टेक्स्टसँगै एउटै लाइनमा जोडिन्थ्यो
+        // — compact capsule मा ठाउँ धेरै ओगट्थ्यो। अब छोटो, badge-अनुकूल
+        // ढाँचा ("N min • 0.1 km") छुट्टै सानो pill मा (तल हेर्नुहोस्)।
         String? distanceLine;
         if (empLat != null && empLng != null && wLat != null && wLng != null) {
           final km = haversineKm(wLat, wLng, empLat, empLng);
           final minutes = _estMinutes(km);
-          distanceLine = '${km.toStringAsFixed(1)} km · ${S.etaAway(minutes)}';
+          distanceLine = '$minutes min  •  ${km.toStringAsFixed(1)} km';
         }
 
         final meta = jobStatusMeta(status);
@@ -347,32 +373,56 @@ class ActiveJobBar extends StatelessWidget {
               _showExpandedSheet(context, data, status);
             }
           },
-          child: Container(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
-              border: Border(top: BorderSide(color: theme.dividerColor)),
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    blurRadius: 14,
-                    offset: const Offset(0, -3)),
-              ],
-            ),
-            padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-            child: SafeArea(
-              top: false,
-              bottom: false,
-              child: Column(
+          // Floating Glass Capsule — पहिले यहाँ edge-to-edge solid
+          // (`theme.colorScheme.surface`) strip थियो, बटम-nav माथि पूरै
+          // चौडाइ ढाक्ने। अब 16dp साइड-मार्जिन सहितको छुट्टै तैरिरहेको
+          // (rounded, frosted) capsule — `GlassIconButton`/`_GlassActionCluster`
+          // कै उस्तै blur-once ढाँचा, नक्सा/अरू सामग्री बाहिरका किनाराबाट
+          // अझै देखिने।
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+              child: RepaintBoundary(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(24),
+                  child: glassBackdrop(sigma: 20, child: Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.kmGlass2Fill,
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: AppColors.kmGlass2Border),
+                        boxShadow: [
+                          BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.28),
+                              blurRadius: 20,
+                              offset: const Offset(0, 8)),
+                        ],
+                      ),
+                      padding: const EdgeInsets.fromLTRB(12, 8, 10, 10),
+                      child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // यो सानो drag-handle लाई अब सिधै tappable पनि बनाइयो —
+                  // पहिले "job details" sheet (जसभित्र Cancel बटन छ) माथि
+                  // (swipe-up gesture) बाट मात्र पुगिन्थ्यो, कुनै देखिने संकेत
+                  // (icon/chevron/लेबल) बिना — प्रयोगकर्ताले त्यो gesture
+                  // कहिल्यै भेट्टाउँदैनथे, र बारकै सिधा tap ले सिधै नक्सा
+                  // खोल्थ्यो (Cancel भेट्टाउने कुनै स्पष्ट बाटो नै थिएन)।
                   Center(
-                    child: Container(
-                      width: 34,
-                      height: 4,
-                      margin: const EdgeInsets.only(bottom: 8),
-                      decoration: BoxDecoration(
-                        color: theme.dividerColor,
-                        borderRadius: BorderRadius.circular(2),
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _showExpandedSheet(context, data, status),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Container(
+                          width: 34,
+                          height: 4,
+                          margin: const EdgeInsets.only(bottom: 8),
+                          decoration: BoxDecoration(
+                            color: theme.dividerColor,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -384,18 +434,18 @@ class ActiveJobBar extends StatelessWidget {
                       if (!isWorker)
                         WorkerAvatar(
                           uid: (data['workerUid'] ?? '').toString(),
-                          size: 44,
+                          size: 38,
                           iconColor: AppColors.igViolet,
                           backgroundColor: const Color(0x22833AB4),
                         )
                       else
-                        CircleAvatar(
-                          radius: 22,
+                        ServiceIconBadge(
+                          service: service,
+                          size: 38,
+                          iconColor: AppColors.igViolet,
                           backgroundColor: const Color(0x22833AB4),
-                          child: Icon(serviceIconFor(service),
-                              color: AppColors.igViolet),
                         ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -408,76 +458,299 @@ class ActiveJobBar extends StatelessWidget {
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
                                           fontWeight: FontWeight.w800,
-                                          fontSize: 14.5)),
+                                          fontSize: 13.5)),
                                 ),
-                                const SizedBox(width: 6),
-                                Icon(meta.icon, size: 13, color: meta.color),
+                                const SizedBox(width: 5),
+                                Icon(meta.icon, size: 12, color: meta.color),
                               ],
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              [
-                                S.serviceName(service),
-                                if (price != null) 'Rs. $price',
-                                distanceLine ?? meta.label,
-                              ].join('  ·  '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  fontSize: 11.5,
-                                  color: theme.colorScheme.onSurfaceVariant),
+                            const SizedBox(height: 3),
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    [
+                                      S.serviceName(service),
+                                      if (price != null) 'Rs. $price',
+                                      if (distanceLine == null) meta.label,
+                                    ].join('  ·  '),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant),
+                                  ),
+                                ),
+                                // Compact ETA/Distance Pill — माथिकै
+                                // "Compact ETA/Distance Badge" कमेन्ट
+                                // हेर्नुहोस्। हल्का teal-tinted pill, एउटै
+                                // लाइनमा नै (थप line नचाहिने)।
+                                if (distanceLine != null) ...[
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 7, vertical: 2.5),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.kmTeal
+                                          .withValues(alpha: 0.16),
+                                      borderRadius:
+                                          BorderRadius.circular(999),
+                                      border: Border.all(
+                                          color: AppColors.kmTeal
+                                              .withValues(alpha: 0.4)),
+                                    ),
+                                    child: Text(
+                                      distanceLine,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.kmTeal),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                           ],
                         ),
                       ),
-                      // Emergency SOS — सधैँ देखिने (Call/Message जस्तो
-                      // arrival-gate छैन; आपतकालीन बटन कहिल्यै लुक्न हुँदैन)।
-                      IconButton(
-                        onPressed: () => _triggerSos(context, data),
-                        icon: const Icon(Icons.emergency_rounded),
-                        color: AppColors.danger,
-                        tooltip: S.sosButtonLabel,
-                      ),
-                      // Arrival-Gated Communication — worker साँच्चै
-                      // आइपुगेर status `in_progress` नभएसम्म Call/Message
-                      // यहाँ देखिँदैनन्, स्वीकृति भइसकेको भए पनि।
-                      if (isCommunicationUnlocked(status)) ...[
-                        IconButton(
-                          onPressed: () => _call(context, otherPhone),
-                          icon: const Icon(Icons.call_rounded),
-                          color: AppColors.igViolet,
-                          tooltip: S.callWord,
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ChatScreen(
-                                requestId: requestId,
-                                workerName: otherName,
-                                initialStatus: status,
+                      // 2026 Glassmorphism Action Cluster — पहिले यी चारवटा
+                      // (SOS/Cancel/Call/Message) बाँकी bare Material
+                      // `IconButton` थिए, bar कै solid background माथि सीधै।
+                      // अब एउटै frosted-glass pill cluster (`_GlassActionCluster`)
+                      // भित्र — blur एकपटक मात्र (प्रत्येक गोलाकार बटनले
+                      // आफ्नै छुट्टै BackdropFilter नदोहोर्‍याओस्, महँगो/धमिलो
+                      // दुवै नहोस्) — र SOS/Cancel जस्ता urgent/destructive
+                      // कार्यमा छुट्टै रङ-tinted "glow" (outer shadow) ले
+                      // बाँकी (Call/Message) भन्दा दृश्यात्मक रूपमा अलग देखिने।
+                      _GlassActionCluster(
+                        children: [
+                          // Emergency SOS — सधैँ देखिने (Call/Message जस्तो
+                          // arrival-gate छैन; आपतकालीन बटन कहिल्यै लुक्न हुँदैन)।
+                          _GlassActionButton(
+                            icon: Icons.emergency_rounded,
+                            color: AppColors.danger,
+                            glow: true,
+                            tooltip: S.sosButtonLabel,
+                            onTap: () => _triggerSos(context, data),
+                          ),
+                          // सिधै देखिने Cancel — पहिले यो पूरै "job details"
+                          // sheet (swipe-up/handle-tap मार्फत मात्र पुगिने)
+                          // भित्रै मात्र थियो, कतै स्पष्ट/सिधै देखिने थिएन।
+                          // SOS कै छेउमा, handle कै साथसाथै अझै भरपर्दो/छिटो
+                          // सिधै तरिका।
+                          if (_liveStatuses.contains(status))
+                            _CancelIconButton(
+                              onTap: () => _confirmCancel(context, data),
+                            ),
+                          // Arrival-Gated Communication — worker साँच्चै
+                          // आइपुगेर status `in_progress` नभएसम्म Call/Message
+                          // यहाँ देखिँदैनन्, स्वीकृति भइसकेको भए पनि।
+                          if (isCommunicationUnlocked(status)) ...[
+                            _GlassActionButton(
+                              icon: Icons.call_rounded,
+                              color: AppColors.igViolet,
+                              tooltip: S.callWord,
+                              onTap: () => _call(context, otherPhone),
+                            ),
+                            _GlassActionButton(
+                              icon: Icons.chat_bubble_rounded,
+                              color: AppColors.igViolet,
+                              tooltip: S.messageWord,
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ChatScreen(
+                                    requestId: requestId,
+                                    workerName: otherName,
+                                    initialStatus: status,
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
-                          icon: const Icon(Icons.chat_bubble_rounded),
-                          color: AppColors.igViolet,
-                          tooltip: S.messageWord,
-                        ),
-                      ] else
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: Icon(Icons.lock_outline_rounded,
-                              size: 18,
-                              color: theme.colorScheme.onSurfaceVariant),
-                        ),
+                          ] else
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
+                              child: Icon(Icons.lock_outline_rounded,
+                                  size: 18,
+                                  color: theme.colorScheme.onSurfaceVariant),
+                            ),
+                        ],
+                      ),
                     ],
                   ),
                 ],
+              ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
         );
       },
     );
+  }
+}
+
+// Optimistic UI — Cancel थिचेपछि Firestore बाट जवाफ नआउँदै (पहिले सम्भवतः
+// 20-60s सम्म पर्खिनुपर्ने) बटन तुरुन्तै spinner मा बदलिन्छ, ताकि "बटन
+// थिचेर पनि केही नहुने" जस्तो नदेखिओस्। [onTap] (जो पूरै confirm+reason
+// dialog chain चलाउँछ) सकिएपछि मात्र फेरि साधारण बटनमा फिर्ता।
+class _CancelIconButton extends StatefulWidget {
+  final Future<void> Function() onTap;
+  const _CancelIconButton({required this.onTap});
+
+  @override
+  State<_CancelIconButton> createState() => _CancelIconButtonState();
+}
+
+class _CancelIconButtonState extends State<_CancelIconButton> {
+  bool _busy = false;
+
+  Future<void> _handle() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onTap();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassActionButton(
+      icon: Icons.close_rounded,
+      color: AppColors.kmRose,
+      glow: true,
+      busy: _busy,
+      tooltip: S.cancelRequest,
+      onTap: _busy ? null : _handle,
+    );
+  }
+}
+
+/// 2026 Glassmorphism Action Cluster — SOS/Cancel/Call/Message लाई एउटै
+/// frosted-glass pill भित्र बेर्ने साझा container। Blur एकपटक मात्र यहीं
+/// (भित्रका बटनहरूले आफ्नै छुट्टै `BackdropFilter` नदोहोर्‍याउने) —
+/// `GlassIconButton` (`widgets/glass_ui.dart`) कै उस्तै perf-सचेत ढाँचा।
+class _GlassActionCluster extends StatelessWidget {
+  final List<Widget> children;
+  const _GlassActionCluster({required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: glassBackdrop(sigma: 14, child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
+            decoration: BoxDecoration(
+              color: AppColors.kmGlass2Fill,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: AppColors.kmGlass2Border),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var i = 0; i < children.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 2),
+                  children[i],
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 2026 Glassmorphism Action Button — `_GlassActionCluster` भित्र प्रयोग
+/// हुने गोलाकार pill बटन। आफ्नै blur छैन (cluster ले एकपटक मात्र दिइसकेको) —
+/// केवल रङ-tinted fill/border + (urgent कार्यका लागि) बाहिरी "glow" shadow
+/// + हल्का press-scale micro-interaction।
+class _GlassActionButton extends StatefulWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onTap;
+  final String? tooltip;
+  final bool glow;
+  final bool busy;
+
+  const _GlassActionButton({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.tooltip,
+    this.glow = false,
+    this.busy = false,
+  });
+
+  @override
+  State<_GlassActionButton> createState() => _GlassActionButtonState();
+}
+
+class _GlassActionButtonState extends State<_GlassActionButton> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    const size = 40.0;
+    final btn = AnimatedScale(
+      scale: _pressed ? 0.88 : 1.0,
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOut,
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: widget.busy ? null : widget.onTap,
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapCancel: () => setState(() => _pressed = false),
+          onTapUp: (_) => setState(() => _pressed = false),
+          child: Container(
+            width: size,
+            height: size,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: widget.color
+                  .withValues(alpha: widget.glow ? 0.20 : 0.12),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: widget.color
+                    .withValues(alpha: widget.glow ? 0.65 : 0.35),
+                width: widget.glow ? 1.2 : 1,
+              ),
+              boxShadow: widget.glow
+                  ? [
+                      BoxShadow(
+                        color: widget.color.withValues(alpha: 0.45),
+                        blurRadius: 14,
+                        spreadRadius: 0.5,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: widget.busy
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: widget.color),
+                  )
+                : Icon(widget.icon, color: widget.color, size: 19),
+          ),
+        ),
+      ),
+    );
+    return widget.tooltip == null
+        ? btn
+        : Tooltip(message: widget.tooltip!, child: btn);
   }
 }

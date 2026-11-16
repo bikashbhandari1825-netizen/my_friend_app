@@ -183,8 +183,8 @@ class _ScamReportPageState extends State<ScamReportPage> {
               children: [
                 const KmScreenHeader(title: 'Scam Fraud'),
                 const SizedBox(height: 20),
-                Text('समस्या छान्नुहोस्',
-                    style: const TextStyle(
+                const Text('समस्या छान्नुहोस्',
+                    style: TextStyle(
                         color: AppColors.kmText,
                         fontSize: 18,
                         fontWeight: FontWeight.bold)),

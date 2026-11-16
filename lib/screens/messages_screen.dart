@@ -7,9 +7,11 @@ import 'package:flutter/material.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/futuristic_ui.dart';
 import '../widgets/glass_ui.dart';
 import '../widgets/spring_tap.dart';
 import 'chat_screen.dart';
+import '../widgets/skeleton.dart';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -52,11 +54,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
   Widget build(BuildContext context) {
     final uid = _uid;
 
-    return AuroraBackground(
-      orbs: const [
-        KmOrb(Alignment.topRight, AppColors.kmPurple),
-        KmOrb(Alignment.bottomLeft, AppColors.kmOrangeDeep),
-      ],
+    return OledBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
@@ -85,9 +83,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
                             stream: _requestsStream(field),
                             builder: (context, snap) {
                               if (!snap.hasData) {
-                                return const Center(
-                                    child: CircularProgressIndicator(
-                                        color: AppColors.kmTeal));
+                                return const SkeletonList();
                               }
                               final rows = (snap.data?.docs ?? []).where((d) {
                                 return _chatStatuses.contains(
@@ -283,21 +279,30 @@ class _ChatRow extends StatelessWidget {
       child: SpringTap(
         onTap: onTap,
         pressedScale: 0.97,
-        child: GlassPanel(
-          radius: 26,
+        child: NeonCard(
+          accent: unread ? kNeonTeal : kNeonViolet,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: Row(
             children: [
               Container(
                 width: 56,
                 height: 56,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(gradient: bg, shape: BoxShape.circle),
-                child: Text(initial,
-                    style: const TextStyle(
-                        color: AppColors.kmInk,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 20)),
+                padding: const EdgeInsets.all(2.5),
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: SweepGradient(
+                      colors: [kNeonTeal, kNeonViolet, kNeonPink, kNeonTeal]),
+                ),
+                child: Container(
+                  alignment: Alignment.center,
+                  decoration: const BoxDecoration(
+                      shape: BoxShape.circle, color: Color(0xFF05070A)),
+                  child: Text(initial,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 20)),
+                ),
               ),
               const SizedBox(width: 13),
               Expanded(
@@ -313,14 +318,13 @@ class _ChatRow extends StatelessWidget {
                               style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 16,
-                                  color: AppColors.kmText)),
+                                  color: Colors.white)),
                         ),
                         Text(time,
                             style: TextStyle(
                                 fontSize: 12,
-                                color: unread
-                                    ? AppColors.kmOrange
-                                    : AppColors.kmMuted,
+                                color:
+                                    unread ? kNeonTeal : AppColors.kmMuted,
                                 fontWeight: unread
                                     ? FontWeight.w700
                                     : FontWeight.w500)),
@@ -347,9 +351,14 @@ class _ChatRow extends StatelessWidget {
                             width: 9,
                             height: 9,
                             margin: const EdgeInsets.only(left: 6),
-                            decoration: const BoxDecoration(
-                                gradient: AppColors.kmCtaGradient,
-                                shape: BoxShape.circle),
+                            decoration: BoxDecoration(
+                                color: kNeonTeal,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                      color: kNeonTeal.withValues(alpha: 0.7),
+                                      blurRadius: 8),
+                                ]),
                           ),
                       ],
                     ),

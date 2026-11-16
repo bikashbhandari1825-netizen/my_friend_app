@@ -54,6 +54,38 @@
 
   <!-- This script adds the flutter initialization JS code -->
   <script src="flutter.js" defer></script>
+
+  <!--
+    Fix: Google Map (a `<flt-platform-view>` on web) swallows mouse
+    clicks/hover meant for Flutter buttons drawn on top of it (Accept/
+    Decline/Counter-offer, etc). Root cause, confirmed via Chrome's own
+    console warning:
+      "Blocked aria-hidden on an element because its descendant retained
+       focus... Ancestor with aria-hidden: <flt-platform-view ...>"
+    Flutter marks a platform view `aria-hidden` + non-interactive
+    (pointer-events: none) whenever Flutter content is stacked visually on
+    top of it, so clicks pass through to that content instead of the map.
+    Google Maps' own internal container div is keyboard-focusable (for map
+    panning) and can retain DOM focus after certain interactions; when it
+    does, Chrome refuses the `aria-hidden` (hiding a focused element from
+    assistive tech is invalid), and the map is left fully interactive/on-
+    top for pointer purposes too — so it keeps eating the click before it
+    ever reaches the Flutter button. There is no legitimate reason a map
+    inside this app needs keyboard focus, so simply blurring anything that
+    focuses inside a platform view removes the trigger entirely.
+  -->
+  <script>
+    document.addEventListener('focusin', function (ev) {
+      var el = ev.target;
+      if (!el || typeof el.closest !== 'function') return;
+      var insidePlatformView = el.closest('flt-platform-view');
+      if (!insidePlatformView) return;
+      var tag = (el.tagName || '').toLowerCase();
+      var isEditable = tag === 'input' || tag === 'textarea' || el.isContentEditable;
+      if (isEditable) return; // भविष्यमा कुनै platform view (जस्तै webview) लाई साँच्चै typing चाहिए बाधा नपरोस्
+      if (typeof el.blur === 'function') el.blur();
+    }, true);
+  </script>
 </head>
 <body>
   <script>

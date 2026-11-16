@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  यो app ले सबै backend (Firestore/Storage/Auth/Cloud Functions) Firebase
+  कै आफ्नै SDK मार्फत मात्र बोल्छ — ती SDK हरूले आफ्नै HTTPS/gRPC
+  transport प्रयोग गर्छन् र यो file ले तिनलाई छुँदैन/असर पार्दैन।
+
+  "SSL Pinning" (कुनै एउटै निश्चित certificate/public-key लाई hardcode
+  गरेर बाँकी सबै अस्वीकार गर्ने) यहाँ जानाजानी लागू गरिएको छैन — Google
+  आफैंले Firebase कै shared/rotating domain हरूमा pinning विरुद्ध
+  स्पष्ट सिफारिस गर्छ (certificate जुनसुकै बेला रोटेट हुन सक्छ, pin
+  hardcode गरे app नै टुट्न सक्छ)। यसको साटो, वास्तविक दुनियाँमा प्रयोग
+  हुने सबैभन्दा सामान्य MITM technique (Charles/Burp/mitmproxy जस्ता
+  traffic-sniffing tool ले device मा आफ्नै proxy CA certificate install
+  गराएर बीचमा बस्ने) लाई नै रोक्ने बढी भरपर्दो/स्थिर उपाय: यहाँ trust
+  anchor लाई प्रणाली (factory-installed) CA मात्र राखिएको छ — प्रयोगकर्ता
+  (वा malware) ले पछि manually install गरेको जुनसुकै CA जानाजानी
+  अस्वीकृत। साथै cleartext (http://, गल्तिले/downgrade भएर पनि) पूर्ण
+  रूपमा बन्द।
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

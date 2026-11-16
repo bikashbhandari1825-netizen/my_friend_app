@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- TODO(iOS Maps setup): Google Cloud Console बाट छुट्टै iOS Maps API
+	     key बनाएर (Android कै reuse गर्न मिल्दैन) यहाँ राख्नुहोस् — नत्र
+	     google_maps_flutter र Native Vehicle Map Overlay दुवैले नक्सा कहिल्यै
+	     देखाउँदैनन् (खाली/सेतो स्क्रिन मात्र)। -->
+	<key>GMSApiKey</key>
+	<string></string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>KaamMitra needs your location to show nearby workers and their distance.</string>
 	<key>NSCameraUsageDescription</key>

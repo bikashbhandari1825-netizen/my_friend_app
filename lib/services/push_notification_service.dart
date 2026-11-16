@@ -25,6 +25,7 @@ import '../app_globals.dart';
 import '../screens/call_screen.dart';
 import '../screens/job_actions.dart';
 import '../widgets/job_alert_sound.dart';
+import '../worker_requests_page.dart';
 
 const String kJobUpdatesChannelId = 'kaammitra_job_updates';
 
@@ -95,9 +96,16 @@ class PushNotificationService {
     await _localNotifs.initialize(
       const InitializationSettings(android: androidInit, iOS: iosInit),
       onDidReceiveNotificationResponse: (response) {
-        final requestId = response.payload;
-        if (requestId != null && requestId.isNotEmpty) {
-          navigateToAcceptedJob(requestId);
+        // Payload अब `requestId|type` ढाँचामा (तल `_showLocalNotification`
+        // हेर्नुहोस्) — केवल `requestId` मात्र राखे `type` हराउँथ्यो, र
+        // tap गर्दा सधैँ `openJobRoute` (live tracking) मै पुग्थ्यो, चाहे
+        // त्यो अझै accept नै नभएको नयाँ अनुरोध (`direct_offer`) किन नहोस्।
+        final payload = response.payload ?? '';
+        final parts = payload.split('|');
+        final requestId = parts.isNotEmpty ? parts[0] : '';
+        final type = parts.length > 1 ? parts[1] : '';
+        if (requestId.isNotEmpty) {
+          navigateForNotification(requestId, type);
         }
       },
     );
@@ -139,7 +147,7 @@ class PushNotificationService {
         ),
         iOS: DarwinNotificationDetails(),
       ),
-      payload: message.data['requestId'] as String?,
+      payload: '${message.data['requestId'] ?? ''}|${message.data['type'] ?? ''}',
     );
   }
 
@@ -155,7 +163,8 @@ class PushNotificationService {
       await navigateToIncomingCall(message.data);
       return;
     }
-    await navigateToAcceptedJob(requestId);
+    await navigateForNotification(
+        requestId, (message.data['type'] ?? '').toString());
   }
 
   static Future<void> _saveTokenForCurrentUser() async {
@@ -175,12 +184,36 @@ class PushNotificationService {
   }
 }
 
-/// Notification tap (push वा local दुवै) बाट सिधै accepted job को live-route
-/// screen मा पुर्‍याउने — `job_actions.dart` कै `openJobRoute()` नै प्रयोग
-/// गर्छ ताकि accept-पछिको सामान्य flow सँग ठ्याक्कै उस्तै व्यवहार होस्।
-Future<void> navigateToAcceptedJob(String requestId) async {
+/// Notification tap (push वा local दुवै) बाट सही screen मा पुर्‍याउने —
+/// `type` अनुसार छुट्याउँछ, किनभने हरेक notification `requestId` बोके पनि
+/// सबैले "काम पहिल्यै accept भइसकेको" अर्थ राख्दैनन्।
+///
+/// CRITICAL FIX — पहिले यहाँ `type` जे भए पनि (incoming_call बाहेक) सधैँ
+/// सिधै `openJobRoute()` (live tracking/route screen, Call/Video/Message
+/// + "On Arrival" सहित) मै पुर्‍याइन्थ्यो। `direct_offer` (employer ले
+/// worker लाई पठाएको नयाँ अनुरोध, अझै worker ले Accept/Decline/Counter
+/// कुनै निर्णय नै नलिएको) जस्तो notification ट्याप गर्दा पनि त्यही हुन्थ्यो
+/// — worker ले केही निर्णय नलिँदै, कुनै Accept बटन नथिचिकनै, सिधै काम
+/// "accepted" भएको जस्तो देखिने live-tracking screen मा पुग्थ्यो (status
+/// भने Firestore मा अझै `pending_worker` नै रहन्थ्यो — UI/data mismatch)।
+/// अब `direct_offer` ले सिधै `WorkerRequestsPage` (Accept/Decline/Counter
+/// Offer तीनै स्पष्ट छान्न मिल्ने list) मा मात्र लैजान्छ; काम साँच्चै
+/// accept/confirm भइसकेपछि मात्र (`offer_accepted`/`driver_accepted_counter`)
+/// अघिकै जस्तै सिधै route screen मा।
+Future<void> navigateForNotification(String requestId, String type) async {
   final ctx = rootNavigatorKey.currentContext;
   if (ctx == null) return;
+
+  // Worker/Employer job-portal को नयाँ, अझै निर्णय नलिएको अनुरोध — सिधै
+  // route screen होइन, worker आफैंले Accept/Decline/Counter छान्ने list मा।
+  if (type == 'direct_offer') {
+    if (!ctx.mounted) return;
+    Navigator.of(ctx, rootNavigator: true).push(MaterialPageRoute(
+      builder: (_) => const WorkerRequestsPage(),
+    ));
+    return;
+  }
+
   try {
     final doc = await FirebaseFirestore.instance
         .collection('serviceRequests')

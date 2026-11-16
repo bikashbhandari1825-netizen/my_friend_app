@@ -12,6 +12,7 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
+import 'kyc_url.dart';
 import 'upload_validation.dart';
 
 class DocumentService {
@@ -46,13 +47,25 @@ class DocumentService {
         cacheControl: 'private, max-age=0',
       ),
     );
+    // संवेदनशील KYC (नागरिकता/लाइसेन्स/गाडी-कागज) को token-URL Firestore मा
+    // नराखी Storage path मात्र फर्काउने — हेर्नुहोस् `kyc_url.dart`।
+    if (isPrivateKycType(safeType)) return path;
     return ref.getDownloadURL();
   }
 
   /// [type] लाई सुरक्षित segment मा — allowlist (+ ऐच्छिक `_N` suffix), नत्र 'document'।
   ///  citizenship_front, citizenship_back, selfie, certificate_1, certificate_2 ...
+  ///
+  /// `hotel_owner_*`/`hotel_business_reg`/`hotel_pan_vat` — hotel KYC
+  /// (owner identity + liveness) का लागि छुट्टै नाम, plain `selfie`/
+  /// `citizenship_front` फेरि प्रयोग नगरी — किनभने यो path प्रति-uid हो
+  /// (`documents/{uid}/{type}.{ext}`), एउटै खाता worker/driver (आफ्नै KYC)
+  /// र hotel owner (hotel KYC) दुवै भए दुवैको फाइल एक-अर्कामाथि नलेखियोस्।
   static final RegExp _typeOk = RegExp(
-      r'^(license|selfie|certificate|citizenship_front|citizenship_back|document|id|driving_license|vehicle_registration|vehicle_insurance|profile_picture)(_[0-9]+)?$');
+      r'^(license|selfie|certificate|citizenship_front|citizenship_back|document|id|'
+      r'driving_license|vehicle_registration|vehicle_insurance|profile_picture|route_permit|'
+      r'hotel_owner_citizenship_front|hotel_owner_citizenship_back|hotel_owner_selfie|'
+      r'hotel_business_reg|hotel_pan_vat)(_[0-9]+)?$');
 
   static String _safeType(String type) {
     final t = type.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '');

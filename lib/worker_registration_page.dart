@@ -19,11 +19,13 @@ import 'auth/phone_format.dart';
 import 'l10n/strings.dart';
 import 'screens/nearby_common.dart' show serviceImageFor;
 import 'services/document_service.dart';
+import 'services/ocr_match_service.dart';
 import 'services/upload_validation.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_ui.dart' show SecondaryButton;
 import 'widgets/country_phone_field.dart';
 import 'widgets/glass_ui.dart';
+import 'widgets/liveness_selfie_capture.dart';
 
 class WorkerRegistrationPage extends StatefulWidget {
   const WorkerRegistrationPage({super.key});
@@ -172,6 +174,10 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
   bool _wasRejected = false;
   String _rejectReason = '';
   String? _error;
+
+  /// Strict Document Cross-Matching — OCR जाँच चलिरहेको बेला Next बटन
+  /// disable/spinner देखाउन (`_next()` हेर्नुहोस्)।
+  bool _ocrChecking = false;
 
   @override
   void initState() {
@@ -374,16 +380,14 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
   String _fmtDate(DateTime? d) =>
       d == null ? '' : '${d.day}/${d.month}/${d.year}';
 
+  /// Face Liveness Scanning — पहिले यहाँ `ImagePicker().pickImage(camera)`
+  /// (स्थिर single photo) थियो — अब live camera + on-device blink/head-turn
+  /// challenge (`captureLivenessSelfie`) पूरा गरेपछि मात्र क्याप्चर हुन्छ।
   Future<void> _takeSelfie() async {
     try {
-      final XFile? photo = await ImagePicker().pickImage(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.front,
-        imageQuality: 70,
-      );
-      if (photo != null) {
-        final bytes = await photo.readAsBytes();
-        if (!mounted || !_acceptFile(bytes, photo.name)) return;
+      final bytes = await captureLivenessSelfie(context);
+      if (bytes != null) {
+        if (!mounted || !_acceptFile(bytes, 'selfie.jpg')) return;
         setState(() {
           _selfieBytes = bytes;
           _error = null;
@@ -398,7 +402,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
 
   // ── step navigation ───────────────────────────────────────────────────────
 
-  void _next() {
+  Future<void> _next() async {
     if (_step == 0) {
       if (!_formKey.currentState!.validate()) return;
       if (_service == 'Driver' && _vehicleType == null) {
@@ -410,13 +414,46 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
         setState(() => _error = S.emailLabel);
         return;
       }
-      if (_service == 'Driver' && _dob == null) {
+      // Strict Document Cross-Matching — DOB अब सबै worker (Driver मात्र
+      // होइन) को लागि आवश्यक — नत्र पछि citizenship-OCR सँग दाँज्ने आधार
+      // नै हुँदैन (हेर्नुहोस् माथिको DOB field doc-comment)।
+      if (_dob == null) {
         setState(() => _error = S.dobRequiredError);
         return;
       }
     } else if (_step == 1) {
       if (_citFrontBytes == null || _citBackBytes == null) {
         setState(() => _error = S.uploadBothCitizenship);
+        return;
+      }
+      // Strict Document Cross-Matching — टाइप गरिएको नाम/जन्ममिति नागरिकता
+      // फोटोमा छापिएको छ कि (on-device OCR, Latin-script मात्र)।
+      setState(() => _ocrChecking = true);
+      final ocr = await OcrMatchService.matchFields(
+        imageBytesList: [_citFrontBytes!, _citBackBytes!],
+        expectations: [
+          OcrFieldExpectation(
+            fieldKey: 'name',
+            label: 'Name',
+            expectedValue: '${_firstName.text.trim()} ${_lastName.text.trim()}',
+            type: OcrFieldType.name,
+          ),
+          OcrFieldExpectation(
+            fieldKey: 'dob',
+            label: 'Date of Birth',
+            expectedValue: _dob!.toIso8601String(),
+            type: OcrFieldType.dob,
+          ),
+        ],
+      );
+      if (!mounted) return;
+      setState(() => _ocrChecking = false);
+      final mismatch = ocr.where((r) => !r.matched).map((r) => r.label).toList();
+      if (mismatch.isNotEmpty) {
+        await showMismatchAlert(context,
+            "${mismatch.join(' र ')} तपाईंको नागरिकता फोटोमा भेटिएन। कृपया फारममा सही जानकारी भर्नुहोस् वा स्पष्ट फोटो फेरि अपलोड गर्नुहोस्।");
+        if (!mounted) return;
+        setState(() => _step = 0);
         return;
       }
     } else if (_step == 2) {
@@ -510,13 +547,46 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
 
       final db = FirebaseFirestore.instance;
 
+      // Backend duplicate lock — यही फोन नम्बर अर्कै account (uid फरक) ले
+      // पहिल्यै pending/approved provider मा प्रयोग गरिसकेको भए रोक्ने।
+      // `providers` नै (pendingWorkers होइन) प्रयोग गर्नुको कारण:
+      // firestore.rules ले `providers` सबैलाई पढ्न दिन्छ, `pendingWorkers`
+      // आफ्नै/admin-मात्र — client-side cross-account query त्यहाँ
+      // सम्भवै हुँदैन। यो best-effort जाँच हो (साँचो server-side
+      // uniqueness Cloud Function/transaction नै चाहिन्छ)।
+      if (phone.isNotEmpty) {
+        try {
+          final dupCheck = await db
+              .collection('providers')
+              .where('phone', isEqualTo: phone)
+              .get()
+              .timeout(const Duration(seconds: 15));
+          final dup = dupCheck.docs.where((d) {
+            final data = d.data();
+            if (d.id == uid) return false;
+            final status = (data['verificationStatus'] ?? '').toString();
+            return status != 'rejected';
+          });
+          if (dup.isNotEmpty) {
+            if (!mounted) return;
+            setState(() {
+              _saving = false;
+              _error =
+                  'This phone number is already registered to another account.';
+            });
+            return;
+          }
+        } catch (_) {
+          // नेटवर्क/timeout भए यो best-effort जाँच नै रोक्ने कारण नबनोस्।
+        }
+      }
+
       // Driver-मात्र structured compliance विवरण — तीनवटै doc मा उस्तै दोहोरिन्छ
       // भन्दा एकैचोटि बनाएर spread गर्दा सजिलो/छोटो हुन्छ। Driver बाहेक अरू
       // service मा फेरि switch भए (जस्तै rejected भएर फेरि पेश गर्दा) पुरानो
       // driver-मात्रका field हरू users doc मा नै बसिरहन नदिन delete गरिन्छ।
       const driverOnlyKeys = [
         'vehicleDetails',
-        'dob',
         'licenseNumber',
         'licenseCategory',
         'licenseIssueDate',
@@ -531,7 +601,6 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
           ? {for (final k in driverOnlyKeys) k: FieldValue.delete()}
           : <String, dynamic>{
               'vehicleDetails': _vehicleDetailsSummary,
-              'dob': _dob?.toIso8601String(),
               'licenseNumber': _licenseNumber.text.trim(),
               'licenseCategory': _licenseCategory,
               'licenseIssueDate': _licenseIssueDate?.toIso8601String(),
@@ -572,6 +641,11 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
           'area': _area.text.trim(),
           'location': address,
           'profileComplete': true,
+          // Strict Document Cross-Matching — पहिले यो केवल Driver-मात्र
+          // (driverFields भित्र) थियो — सामान्य worker (Plumber/Electrician/
+          // आदि) को DOB कहीं लेखिँदैनथ्यो, त्यसैले citizenship-OCR सँग दाँज्ने
+          // कुनै आधार नै हुँदैनथ्यो। अब सबै worker को लागि unconditional।
+          'dob': _dob?.toIso8601String(),
           ...driverFields,
           // आशावादी: upload अझै बाँकी छ तर fail भएको छैन। चरण C ले fail भए
           // मात्र यसलाई true बनाउँछ — त्यसैले बीचमा "कागजात अपलोड भएन" warning
@@ -598,6 +672,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
           'address': address,
           'experience': experience,
           'price': priceStr,
+          'dob': _dob?.toIso8601String(),
           'verificationStatus': 'pending',
           'isVerified': false,
           'createdAt': FieldValue.serverTimestamp(),
@@ -614,6 +689,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
           'phone': phone,
           'service': _effectiveService,
           'experience': experience,
+          'dob': _dob?.toIso8601String(),
           ...driverFieldsNew,
           'price': priceStr,
           'district': _district,
@@ -902,7 +978,7 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
                           child: SecondaryButton(
                             label: S.back,
                             color: AppColors.kmText,
-                            onPressed: _saving ? null : _prev,
+                            onPressed: _saving || _ocrChecking ? null : _prev,
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -912,7 +988,8 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
                             ? KmCtaButton(
                                 label: S.next,
                                 icon: Icons.arrow_forward_rounded,
-                                onPressed: _next,
+                                loading: _ocrChecking,
+                                onPressed: _ocrChecking ? null : _next,
                               )
                             : KmCtaButton(
                                 label: S.submitForApproval,
@@ -1011,6 +1088,18 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
                 .toList(),
             onChanged: (v) => setState(() => _service = v!),
           ),
+          const SizedBox(height: 14),
+          // Strict Document Cross-Matching — पहिले यो DOB field Driver-मात्र
+          // थियो (तल) — सामान्य worker को citizenship-photo OCR-match
+          // (हेर्नुहोस् _next()) सँग दाँज्न कुनै DOB नै लेखिँदैनथ्यो। अब सबै
+          // worker को लागि (Driver सहित) एउटै ठाउँमा, एकपटक मात्र।
+          InkWell(
+            onTap: _pickDob,
+            child: InputDecorator(
+              decoration: _dec(S.dob),
+              child: Text(_dob == null ? S.selectDateHint : _fmtDate(_dob)),
+            ),
+          ),
           // यो 'Driver' शाखा अब कहिल्यै पुग्दैन (Driver अब छुट्टै
           // DriverRegistrationFlow मार्फत जान्छ, र 'Driver' _services
           // dropdown मा छैन) — तर _effectiveService/driverFields जस्ता
@@ -1036,14 +1125,6 @@ class _WorkerRegistrationPageState extends State<WorkerRegistrationPage> {
               controller: _email,
               keyboardType: TextInputType.emailAddress,
               decoration: _dec(S.emailLabel),
-            ),
-            const SizedBox(height: 14),
-            InkWell(
-              onTap: _pickDob,
-              child: InputDecorator(
-                decoration: _dec(S.dob),
-                child: Text(_dob == null ? S.selectDateHint : _fmtDate(_dob)),
-              ),
             ),
           ],
           const SizedBox(height: 18),

@@ -4,15 +4,21 @@
 //  • सीप filter (मेरो सीप / सबै / निश्चित पेसा)
 // हरेक card: काम के हो, कहिले (मिति + समय), कहाँ (स्थिर ठेगाना), ग्राहकको बजेट,
 // र कति टाढा। कुनै route/movement tracking छैन।
+import 'dart:async';
+import '../utils/price_input.dart';
+import '../utils/request_timeout.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/strings.dart';
 import '../location_util.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart' show GradientActionButton;
+import '../widgets/dashboard_exit_bar.dart';
+import '../widgets/futuristic_ui.dart';
 import '../widgets/glass_ui.dart';
 import '../widgets/job_alert_sound.dart';
 import '../widgets/worker_menu_drawer.dart';
@@ -20,6 +26,7 @@ import 'job_actions.dart';
 import 'job_map_screen.dart';
 import 'nearby_common.dart';
 import 'notification_screen.dart';
+import 'wallet_screen.dart';
 
 class JobFeedScreen extends StatefulWidget {
   const JobFeedScreen({super.key});
@@ -32,7 +39,6 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   final _uid = FirebaseAuth.instance.currentUser?.uid;
   double? _lat;
   double? _lng;
-  bool _locTried = false;
   // GPS असफल/अस्वीकृत भए काठमाडौं केन्द्रमा fallback गरिन्छ (nearby_map_screen.dart
   // कै pattern) — नत्र फिल्टर/सूची पूरै खाली देखिन्छ। यो true भएसम्म दूरी "अनुमानित"।
   bool _approxLocation = false;
@@ -41,34 +47,60 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
   String _tradeFilter = '__mine__'; // '__mine__' | '__all__' | 'Plumber' ...
 
   // Driver Control Dashboard कै "Ride Preferences" बाट सेट हुने — users/{uid}
-  // मा नै बचत हुन्छ (driverSearchRadiusKm/driverVehicleFilter/driverAutoAccept/
-  // driverOnBreak)। पहिलो snapshot मा मात्र radius/trade प्रारम्भिक मान यहीँबाट
-  // लिने (त्यसपछि chip tap ले session भरि override गर्न सक्ने — Firestore बाट
+  // मा नै बचत हुन्छ (driverSearchRadiusKm/driverVehicleFilter/driverOnBreak)।
+  // पहिलो snapshot मा मात्र radius/trade प्रारम्भिक मान यहीँबाट लिने
+  // (त्यसपछि chip tap ले session भरि override गर्न सक्ने — Firestore बाट
   // फेरि नफर्किने)।
   bool _prefsApplied = false;
-  bool _autoAccept = false;
   bool _onBreak = false;
 
   // नयाँ काम आउनेबित्तिकै ting-ting बजाउन पहिले देखिसकेका job id हरू ट्र्याक।
   final Set<String> _seenJobIds = {};
   bool _firstJobSnapshot = true;
+  // Direct Offer स्ट्रिमकै आफ्नै छुट्टै seen-tracking — broadcast स्ट्रिमसँग
+  // कुनै id कहिल्यै ठोक्किँदैन भए पनि, आआफ्नो "पहिलोपटक लोड" अवस्था छुट्टै
+  // राख्न (नत्र एउटा स्ट्रिमको पहिलो snapshot अर्कोको भन्दा अघि/पछि आउँदा
+  // गलत "नयाँ" ठान्न सक्छ)।
+  final Set<String> _seenDirectOfferIds = {};
+  bool _firstDirectOfferSnapshot = true;
 
   // '__mine__' trade filter resolve गर्न — overlay कार्ड छान्दा पनि चाहिने।
   String _myService = '';
+  // Test Mode — debug-only, हेर्नुहोस् AppBar::actions (माथि) को टिप्पणी।
+  bool _testMode = false;
   // Single Active Job Restriction — हाल कुनै अर्को साँच्चै-अझै-सक्रिय काम
   // (accepted/confirmed/in_progress) भए त्यसको requestId, नत्र खाली।
   String _myActiveJobId = '';
   // Worker Cancellation Penalty — बारम्बार आफैं cancel गर्ने worker ले
   // क्रमशः कम नयाँ job देख्ने (job_actions.dart::shouldShowJobToWorker)।
   int _myCancelCount = 0;
+  // Wallet Commission Debt Gate — widgets/complete_job_sheet.dart::
+  // _confirm()/admin_settlement_screen.dart::_markSettled() ले नै लेख्छन्।
+  // field नै नभए (पुरानो doc) eligible मानिन्छ — activeJobId कै उस्तै idiom।
+  bool _myEligible = true;
 
-  // अहिले उपलब्ध सबैभन्दा नजिकको/उपयुक्त काम सधैँ live map माथि नै (top
-  // overlay) देखिन्छ — bottom sheet को list मा लुकेर बस्दैन। नयाँ होस् वा
-  // पहिल्यैदेखि broadcasting भइरहेको, दुवै अवस्थामा यही एउटा slot देखिन्छ।
-  ({String id, Map<String, dynamic> data})? _currentIncoming;
+  // Multi-Request Floating Stack — पहिले यहाँ एकपटकमा एउटै मात्र ("सबैभन्दा
+  // नजिकको") अनुरोध queue बाट क्रमैसँग देखिन्थ्यो, बाँकी तल bottom sheet को
+  // अलग्गै list मा लुकेका हुन्थे — scroll नगरी भेट्टिँदैनथे। प्रयोगकर्ताले
+  // स्पष्ट रूपमा यो नै गुनासो गरे (screenshot सहित, पटक-पटक): Decline/Offer
+  // price/Accept भएको कार्ड list भित्र "थिचिएको" देखिन्छ, एकैचोटि धेरै
+  // अनुरोध आए सबै top मै floating देखिनुपर्छ, कुनै छुट्नु हुँदैन। अब
+  // eligible भएका सबै अनुरोध यही एउटा (scrollable) list मा, live map
+  // माथि नै floating — bottom sheet मा छुट्टै job-card list छैन।
+  List<({String id, Map<String, dynamic> data})> _incomingList = const [];
   // "X" ले बन्द गरेका (कारबाही नगरी) job id हरू — यो session भर फेरि नदेखियोस्।
   final Set<String> _skippedIds = {};
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _lastJobDocs = const [];
+  // Direct Offer (worker_list_screen.dart/worker_profile_screen.dart बाट
+  // employer ले सिधै यही worker लाई पठाएको, status: 'pending_worker') —
+  // पहिले यो floating overlay मा कहिल्यै देखिँदैनथ्यो (केवल `broadcasting`
+  // मात्र सुनिन्थ्यो), त्यसैले Plumber/Electrician जस्ता trade (जो सधैँ
+  // direct-offer बाटोबाट मात्र अनुरोध पाउँछन्, Bike/Car जस्तो broadcast
+  // कहिल्यै होइन) ले यो "Open jobs near you" dashboard मा कुनै live popup
+  // कहिल्यै नदेख्ने गुनासोको साँचो जड यही थियो। अब दुवै स्रोत एउटै
+  // floating list मा मर्ज हुन्छन्।
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _lastDirectOfferDocs =
+      const [];
 
   // Stream एकपटक मात्र बनाइन्छ — filter chip tap (setState) मा re-subscribe
   // नभएर spinner flash नहोस्; trade/radius filter client-side हुन्छ।
@@ -77,22 +109,119 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
           .collection('users')
           .doc(_uid ?? '__none__')
           .snapshots();
-  late final Stream<QuerySnapshot<Map<String, dynamic>>> _jobsStream =
+  /// खुला अनुरोधको stream। ROOT CAUSE (नापेर पुष्टि, फोनको लग): पहिले यहाँ
+  /// `orderBy` बिना `.limit(50)` थियो — Firestore ले document-id क्रममा
+  /// पहिलो ५० मात्र दिन्थ्यो, जबकि ९४ खुला (धेरैजसो पुराना/अनाथ) अनुरोध थिए।
+  /// नयाँ अनुरोधको random id पछाडि पर्‍यो भने ५० मा नै नपरी driver ले
+  /// कहिल्यै नदेख्ने (पहिलो कहिलेकाहीँ देखिने, दोस्रो नदेखिने — id भाग्य)।
+  ///
+  /// अब: नयाँ-पहिले क्रम (`createdAt` घट्दो) + पछिल्लो ३० मिनेट + limit —
+  /// नयाँ अनुरोध सधैँ पहिलो ५० मै पर्छ, पुराना जति भए पनि। यो query लाई
+  /// composite index (`status`, `createdAt`) चाहिन्छ (firestore.indexes.json);
+  /// index अझै बनेको छैन भने (`failed-precondition`) आफैं पुरानो (limit-रहित)
+  /// query मा झर्छ — कहिल्यै खाली नरहने।
+  bool _jobsIndexed = true;
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _buildJobsStream() {
+    var q = FirebaseFirestore.instance
+        .collection('serviceRequests')
+        .where('status', isEqualTo: 'broadcasting');
+    if (_jobsIndexed) {
+      final cutoff = Timestamp.fromDate(
+          DateTime.now().subtract(const Duration(minutes: 30)));
+      return q
+          .where('createdAt', isGreaterThan: cutoff)
+          .orderBy('createdAt', descending: true)
+          .limit(50)
+          .snapshots();
+    }
+    return q.snapshots();
+  }
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _directOffersStream =
       FirebaseFirestore.instance
           .collection('serviceRequests')
-          .where('status', isEqualTo: 'broadcasting')
+          .where('workerUid', isEqualTo: _uid ?? '__none__')
+          .where('status', isEqualTo: 'pending_worker')
           .snapshots();
+
+  // COLD-START AUTH-TOKEN RACE — cold app start मा persisted session
+  // restore हुँदा `FirebaseAuth.instance.currentUser` client-side मा
+  // चाँडै populate हुन्छ, तर Firestore SDK कै channel मा त्यो auth token
+  // साँच्चै attach हुन अलिकति (सामान्यतया १ सेकेन्डभित्रै) ढिलो हुन सक्छ।
+  // त्यही छोटो झ्यालमा यो screen को पहिलो subscribe भए, `users/{uid}`
+  // (rules ले `isSignedIn()` मात्र मागे पनि) र `serviceRequests` दुवै
+  // `permission-denied` मा टुट्छन् — live device मा नै पक्रिएको, user
+  // साँच्चै signed-in हुँदाहुँदै पनि। एकपटक मात्र छोटो delay पछि फेरि
+  // subscribe गर्दा (token हुनेबित्तिकै) ठीक हुन्छ — असीमित retry होइन,
+  // अरू कुनै साँचो permission त्रुटि (जस्तै rules नै साँच्चै रोकेको) लाई
+  // लुकाउँदैन, केवल यही एकपटकको cold-start race लाई।
+  bool _directOffersRetried = false;
+  bool _userRetried = false;
 
   @override
   void initState() {
     super.initState();
     _initLocation();
-    _jobsStream.listen(_onJobsSnapshot, onError: (e) {
-      // यो screen कै काम-सूची मात्र हो, sign-in/routing यसमा भर पर्दैन —
-      // network/permission त्रुटि आए पनि screen खाली/स्थिर रहन्छ, crash होइन।
+    _subscribeJobs();
+    if (_uid != null) {
+      _subscribeDirectOffers();
+      _subscribeUser();
+    }
+  }
+
+  // Firestore listener हरू — screen बन्द हुँदा cancel नगरे सर्भर/फोन दुवैमा
+  // बाँकी रहन्थे (leak); अब dispose मा बन्द।
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _jobsSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _offersSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
+
+  void _subscribeJobs() {
+    _jobsSub?.cancel();
+    _jobsSub = _buildJobsStream().listen(_onJobsSnapshot, onError: (e) {
       debugPrint('JobFeedScreen jobsStream error: $e');
+      // index अझै बनेको छैन — limit-रहित पुरानो query मा झरेर तुरुन्तै फेरि सुन्ने।
+      if (_jobsIndexed && e is FirebaseException && e.code == 'failed-precondition') {
+        _jobsIndexed = false;
+        if (mounted) _subscribeJobs();
+        return;
+      }
+      // कुनै पनि त्रुटिमा (permission-denied मात्र होइन) stream चुपचाप मर्न नदिने
+      // — बढ्दो पर्खाइसहित फेरि सुन्ने, ताकि नयाँ अनुरोध कहिल्यै नछुटोस्।
+      _jobsRetries++;
+      final wait = Duration(seconds: (_jobsRetries * 2).clamp(2, 20));
+      Future.delayed(wait, () {
+        if (mounted) _subscribeJobs();
+      });
+    }, onDone: () {
+      if (mounted) {
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) _subscribeJobs();
+        });
+      }
+    }, cancelOnError: true);
+  }
+
+  int _jobsRetries = 0;
+
+  void _subscribeDirectOffers() {
+    _offersSub?.cancel();
+    _offersSub = _directOffersStream.listen(_onDirectOffersSnapshot, onError: (e) {
+      debugPrint('JobFeedScreen directOffersStream error: $e');
+      if (!_directOffersRetried && _isPermissionDenied(e)) {
+        _directOffersRetried = true;
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) _subscribeDirectOffers();
+        });
+      }
     });
-    _userStream.listen((snap) {
+  }
+
+  bool _isPermissionDenied(Object e) =>
+      e is FirebaseException && e.code == 'permission-denied';
+
+  void _subscribeUser() {
+    _userSub?.cancel();
+    _userSub = _userStream.listen((snap) {
       final d = snap.data() ?? {};
       final s = (d['service'] ?? d['serviceType'] ?? '').toString();
       final activeId = (d['activeJobId'] ?? '').toString();
@@ -102,7 +231,7 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
           _myService = s;
           _myActiveJobId = activeId;
           _myCancelCount = cancelCount.toInt();
-          _autoAccept = d['driverAutoAccept'] == true;
+          _myEligible = (d['isEligibleForJobs'] as bool?) ?? true;
           _onBreak = d['driverOnBreak'] == true;
           if (!_prefsApplied) {
             _prefsApplied = true;
@@ -116,83 +245,230 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
       }
     }, onError: (e) {
       debugPrint('JobFeedScreen userStream error: $e');
+      if (!_userRetried && _isPermissionDenied(e)) {
+        _userRetried = true;
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) _subscribeUser();
+        });
+      }
     });
   }
 
-  /// नयाँ broadcasting job आएमा sound बजाउने, अनि अहिले "top overlay" मा
-  /// देखिनुपर्ने सबैभन्दा नजिकको/उपयुक्त काम पुनः-छान्ने — नयाँ होस् वा
+  /// नयाँ broadcasting job आएमा sound बजाउने, अनि floating stack मा
+  /// देखिनुपर्ने eligible अनुरोधहरूको पूरै सूची पुनः-गणना — नयाँ होस् वा
   /// पहिल्यैदेखि broadcasting भइरहेको (पहिलो load मा नै भए पनि), दुवैलाई।
+  /// अहिलेको trade filter (`_tradeFilter`) अनुसार यो service मिल्छ कि —
+  /// `_pickEligibleCandidates` भित्रैको उही `wantTrade` तर्क, यहाँ साझा
+  /// गरिएको (तल `_onJobsSnapshot` ले पनि उही जाँच प्रयोग गरोस् भनेर)।
+  bool _matchesTradeFilter(String svc) {
+    final wantTrade = _tradeFilter == '__mine__'
+        ? _myService
+        : (_tradeFilter == '__all__' ? '' : _tradeFilter);
+    return wantTrade.isEmpty || svc.toLowerCase() == wantTrade.toLowerCase();
+  }
+
   void _onJobsSnapshot(QuerySnapshot<Map<String, dynamic>> snap) {
+    if (kDebugMode) {
+      for (final ch in snap.docChanges) {
+        final t = ch.doc.data()?['createdAt'];
+        debugPrint('FEED_SNAPSHOT ${ch.type.name} ${ch.doc.id} '
+            'status=${ch.doc.data()?['status']} createdAt=$t '
+            'fromCache=${snap.metadata.isFromCache}');
+      }
+    }
+    _jobsRetries = 0;
     _lastJobDocs = snap.docs;
     final ids = snap.docs.map((d) => d.id).toSet();
     if (!_firstJobSnapshot) {
+      // Break Mode Sound Mismatch — यहाँ पहिले `_onBreak` जाँचिँदैनथ्यो,
+      // तर `_pickEligibleCandidates` (floating card देखाउने) ले जाँच्थ्यो
+      // — break मोडमा हुँदा sound बज्ने तर कुनै कार्ड नै नदेखिने (sound-
+      // only, no visible box) गुनासोको सम्भावित जड यही mismatch थियो।
+      //
+      // Cross-Trade/Vehicle Sound Leak — उस्तै जड, फरक field: यहाँ trade/
+      // service मिलान कहिल्यै जाँचिँदैनथ्यो — Bike driver (डिफल्ट filter
+      // `__mine__` मा समेत) ले Car राइड/Plumber/Mechanic जस्तो आफ्नो सीपसँग
+      // सर्वथा नमिल्ने जुनसुकै नयाँ broadcasting अनुरोधमा पनि sound-अलर्ट
+      // पाउँथ्यो, जबकि कार्ड-सूची (`_pickEligibleCandidates`) भने पहिल्यैदेखि
+      // सही फिल्टर गर्थ्यो — ठ्याक्कै "sound मात्र, देखिने कार्ड केही छैन"
+      // गुनासोकै अर्को वर्ग। अब sound-योग्यता पनि उही `_matchesTradeFilter`
+      // (कार्ड-सूचीसँग साझा) बाट गुज्रिन्छ।
       final newIds = ids.difference(_seenJobIds);
-      final hasNewRelevant = snap.docs.any((d) {
-        if (!newIds.contains(d.id)) return false;
-        final rejected = (d.data()['rejectedBy'] as List?) ?? const [];
-        if (rejected.contains(_uid)) return false;
-        return shouldShowJobToWorker(d.id, _myCancelCount);
-      });
+      final hasNewRelevant = !_onBreak &&
+          snap.docs.any((d) {
+            if (!newIds.contains(d.id)) return false;
+            final data = d.data();
+            if ((data['employerUid'] ?? '') == _uid &&
+                !_isVisibleSelfTestRequest(data)) {
+              return false;
+            }
+            final rejected = (data['rejectedBy'] as List?) ?? const [];
+            if (rejected.contains(_uid)) return false;
+            if (!_matchesTradeFilter((data['service'] ?? '').toString())) {
+              return false;
+            }
+            return shouldShowJobToWorker(d.id, _myCancelCount);
+          });
       if (hasNewRelevant) playNewJobAlert();
     }
     _seenJobIds
       ..clear()
       ..addAll(ids);
     _firstJobSnapshot = false;
+    _recomputeIncoming();
+  }
 
-    // अहिले देखिरहेको overlay अझै उपलब्ध/eligible छ भने नछुने (बीचमै अर्कोमा
-    // नफेरियोस्); नत्र (खाली छ, वा त्यो काम अरूले लिइसक्यो/हट्यो) पुनः-छान्ने।
-    if (_currentIncoming != null &&
-        ids.contains(_currentIncoming!.id) &&
-        !_skippedIds.contains(_currentIncoming!.id)) {
-      return;
+  /// `_onJobsSnapshot` कै उस्तै — तर Direct Offer (worker_list_screen.dart/
+  /// worker_profile_screen.dart बाट सिधै यही worker लाई addressed,
+  /// `status: 'pending_worker'`) स्ट्रिमका लागि। यसैले Plumber/Electrician
+  /// जस्ता trade ले पनि Driver मोडकै जस्तो तुरुन्तै floating popup + sound
+  /// अलर्ट पाउँछन्।
+  void _onDirectOffersSnapshot(QuerySnapshot<Map<String, dynamic>> snap) {
+    _lastDirectOfferDocs = snap.docs;
+    final ids = snap.docs.map((d) => d.id).toSet();
+    if (!_firstDirectOfferSnapshot) {
+      final newIds = ids.difference(_seenDirectOfferIds);
+      final hasNewRelevant = !_onBreak &&
+          snap.docs.any((d) {
+            if (!newIds.contains(d.id)) return false;
+            if ((d.data()['employerUid'] ?? '') == _uid) return false;
+            return shouldShowJobToWorker(d.id, _myCancelCount);
+          });
+      if (hasNewRelevant) playNewJobAlert();
     }
-    final candidate = _pickIncomingCandidate(snap.docs);
-    _setIncoming(candidate);
+    _seenDirectOfferIds
+      ..clear()
+      ..addAll(ids);
+    _firstDirectOfferSnapshot = false;
+    _recomputeIncoming();
   }
 
-  /// `_currentIncoming` सेट गर्ने एकमात्र ठाउँ — साथसाथै Auto-Accept
-  /// (Driver Dashboard कै Ride Preferences बाट अन गरिएको भए) पनि यहीँबाट जाँच।
-  void _setIncoming(({String id, Map<String, dynamic> data})? candidate) {
+  /// `_incomingList` सेट गर्ने एकमात्र ठाउँ — हरेक eligible अनुरोध यहीँबाट
+  /// floating stack मा देखिन्छ। कुनै पनि स्वत: (manual tap बिना) स्वीकृति
+  /// यहाँबाट कहिल्यै हुँदैन — Accept/Decline/Counter Offer सधैं driver
+  /// आफैंले ट्याप गर्नुपर्छ (पहिले यहीँबाट चल्ने Auto-Accept फिचरले driver
+  /// कै अनुमति बिना नै पहिलो राइड आफैं स्वीकार गरिदिने गुनासोको जड थियो —
+  /// त्यसैले पूर्ण रूपमा हटाइयो, कुनै toggle बाट पनि फेरि सक्रिय हुँदैन)।
+  void _setIncomingList(List<({String id, Map<String, dynamic> data})> list) {
     if (!mounted) return;
-    setState(() => _currentIncoming = candidate);
-    _maybeAutoAcceptRide(candidate);
+    final hadIncoming = _incomingList.isNotEmpty;
+    setState(() => _incomingList = list);
+    // Floating Card Breathing Room — तल्लो sheet डिफल्टमा स्क्रिनको 62%
+    // ओगट्छ, जसले गर्दा नयाँ अलर्ट कार्ड (माथि, floating) र sheet बीच
+    // मानचित्रमा लगभग कुनै खाली ठाउँ नै बाँकी रहँदैनथ्यो — कार्ड sheet
+    // भित्रै/टाँसिएको जस्तो, "Distance भित्र थिचिएको" देखिने गुनासोको
+    // साँचो जड। नयाँ अलर्ट आउनेबित्तिकै sheet क्षणिक संघारेर स्पष्ट
+    // floating ठाउँ दिने, अलर्ट सकिएपछि फेरि सामान्य उचाइमा फर्काउने।
+    if (_sheetController.isAttached) {
+      if (list.isNotEmpty && !hadIncoming) {
+        _sheetController.animateTo(_sheetMin,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic);
+      } else if (list.isEmpty && hadIncoming) {
+        _sheetController.animateTo(_sheetInitial,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic);
+      }
+    }
   }
 
-  /// Auto-Accept: राइड (isRide==true) अनुरोध हो, अरू कुनै सक्रिय कामले
-  /// नरोकेको हो भने, passenger कै प्रस्तावित मूल्यमै आफैं offer पठाइदिने —
-  /// driver ले हरेकपटक हातैले "Send Offer" थिच्नु नपरोस्।
-  Future<void> _maybeAutoAcceptRide(
-      ({String id, Map<String, dynamic> data})? candidate) async {
-    if (!_autoAccept || candidate == null) return;
-    if ((candidate.data['isRide'] ?? false) != true) return;
-    if (_myActiveJobId.isNotEmpty && _myActiveJobId != candidate.id) return;
-    final price = (candidate.data['proposedPrice'] as num?) ?? 0;
-    if (price <= 0) return;
-    if (!mounted) return;
-    await submitRideOffer(context, candidate.id, candidate.data, price: price);
+  /// Self-Ride Prevention फिल्टरले कहिल्यै नरोक्ने एउटै अपवाद — आफैंले Test
+  /// Mode बाट बनाएको, स्पष्ट रूपमा चिन्ने (`isTestRequest: true`) अनुरोध।
+  /// Production build मा `kDebugMode` नै false हुने भएकोले यो सँधै false
+  /// compile हुन्छ (tree-shaken) — real user ले कहिल्यै यसको फाइदा लिन
+  /// सक्दैनन्।
+  bool _isVisibleSelfTestRequest(Map<String, dynamic> data) =>
+      kDebugMode && _testMode && data['isTestRequest'] == true;
+
+  /// Test Mode — आफ्नै खातामा एउटा simulated broadcasting अनुरोध बनाउने
+  /// ताकि दोस्रो खाता/फोन बिनै नै incoming-job card, sound, र filter एक्लै
+  /// device मा जाँच्न मिलोस्। Firestore rules ले अझै employerUid आफ्नै uid
+  /// नै हुनुपर्छ भन्छ (अर्को कसैको नक्कल गर्न मिल्दैन), त्यसैले यो सधैँ
+  /// `employerUid == _uid` नै लेख्छ — self-booking सुरक्षा सीमा अछुतो।
+  Future<void> _createTestRequest() async {
+    if (_uid == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await FirebaseFirestore.instance.collection('serviceRequests').add({
+        'employerUid': _uid,
+        'employerName': '[TEST] Simulated passenger',
+        'employerPhone': '',
+        'service': _myService.isNotEmpty ? _myService : 'bike',
+        'details': 'Test Mode — simulated request, safe to ignore/skip.',
+        'proposedPrice': 100,
+        'status': 'broadcasting',
+        'isTestRequest': true,
+        'createdAt': FieldValue.serverTimestamp(),
+        'employerLat': _lat ?? fallbackLat,
+        'employerLng': _lng ?? fallbackLng,
+      });
+      if (!mounted) return;
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Simulated test request created.')));
+    } catch (e) {
+      if (!mounted) return;
+      messenger
+          .showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
+    }
   }
 
-  /// अहिलेको filter (सीप/दूरी) र session भरिको skip/reject अनुसार सबैभन्दा
-  /// नजिकको उपलब्ध काम छान्ने (कोही नभए null)।
-  ({String id, Map<String, dynamic> data})? _pickIncomingCandidate(
+  /// अहिलेको filter (सीप/दूरी) र session भरिको skip/reject अनुसार उपलब्ध
+  /// सबै उपयुक्त काम — overlay मा देखाउनुपर्ने एउटा मात्र होइन, queue
+  /// व्यवस्थापनका लागि पूरै सूची चाहिन्छ।
+  ///
+  /// Chronological Sorting — पहिले यहाँ दूरी (नजिकबाट टाढा) अनुसार क्रमबद्ध
+  /// हुन्थ्यो; अब सबैभन्दा नयाँ अनुरोध सधैँ सबैभन्दा माथि (`createdAt`
+  /// descending) — टाढाको भए पनि भर्खरैको अनुरोध पुरानो (नजिकैको भए पनि)
+  /// कार्ड मुनि नदबियोस् भनेर।
+  List<({String id, Map<String, dynamic> data})> _pickEligibleCandidates(
       List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
     // Break Mode — online रहे पनि नयाँ काम/राइड देखिनु/मिल्नु हुँदैन।
-    if (_onBreak) return null;
-    final wantTrade = _tradeFilter == '__mine__'
-        ? _myService
-        : (_tradeFilter == '__all__' ? '' : _tradeFilter);
+    if (_onBreak) return const [];
 
-    final candidates = <({String id, Map<String, dynamic> data, double? km})>[];
+    final candidates =
+        <({String id, Map<String, dynamic> data, Timestamp? createdAt})>[];
+    // debug मात्र: कुन अनुरोध किन नदेखिएको भन्ने कारण लगमा (`FEED_FILTER`)।
+    var staleCount = 0;
+    void why(String id, String reason) {
+      if (kDebugMode) debugPrint('FEED_FILTER $id hidden: $reason');
+    }
+    if (kDebugMode) {
+      debugPrint('FEED_FILTER docs=${docs.length} uid=$_uid '
+          'radius=$_radiusKm trade=$_tradeFilter cancelCount=$_myCancelCount '
+          'onBreak=$_onBreak lat=$_lat');
+    }
     for (final d in docs) {
-      if (_skippedIds.contains(d.id)) continue;
+      if (_skippedIds.contains(d.id)) {
+        why(d.id, 'skipped by user');
+        continue;
+      }
       final data = d.data();
+      // म्याद सकिएको (१० मिनेटभन्दा पुरानो) खुला अनुरोध driver लाई नदेखाउने।
+      if (isRequestStale(data)) {
+        staleCount++;
+        continue;
+      }
+      // Self-Ride Prevention — आफैंले पोस्ट गरेको अनुरोध आफैं (worker मोडमा)
+      // कहिल्यै देख्न/स्वीकार गर्न नपाओस् (एउटै खाता दुवै employer र worker
+      // भूमिकामा हुन सक्ने भएकोले)। साँचो सुरक्षा सीमा `firestore.rules` मा
+      // हो — यो client-side filter त्यही भन्दा अगाडि (UI मा नदेखाउने) मात्र।
+      if ((data['employerUid'] ?? '') == _uid &&
+          !_isVisibleSelfTestRequest(data)) {
+        why(d.id, 'own request (same account as passenger)');
+        continue;
+      }
       final rejected = (data['rejectedBy'] as List?) ?? const [];
-      if (rejected.contains(_uid)) continue;
-      if (!shouldShowJobToWorker(d.id, _myCancelCount)) continue;
+      if (rejected.contains(_uid)) {
+        why(d.id, 'rejectedBy me');
+        continue;
+      }
+      if (!shouldShowJobToWorker(d.id, _myCancelCount)) {
+        why(d.id, 'cancel-penalty filter');
+        continue;
+      }
       final svc = (data['service'] ?? '').toString();
-      if (wantTrade.isNotEmpty &&
-          svc.toLowerCase() != wantTrade.toLowerCase()) {
+      if (!_matchesTradeFilter(svc)) {
+        why(d.id, 'service "$svc" != my filter "$_tradeFilter" (mine=$_myService)');
         continue;
       }
       double? km;
@@ -201,35 +477,38 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
       if (_lat != null && jLat != null && jLng != null) {
         km = haversineKm(_lat!, _lng!, jLat, jLng);
       }
-      if (_radiusKm != null && (km == null || km > _radiusKm!)) continue;
-      candidates.add((id: d.id, data: data, km: km));
+      if (_radiusKm != null && (km == null || km > _radiusKm!)) {
+        why(d.id, 'outside radius (km=$km radius=$_radiusKm)');
+        continue;
+      }
+      candidates.add(
+          (id: d.id, data: data, createdAt: data['createdAt'] as Timestamp?));
     }
-    if (candidates.isEmpty) return null;
+    if (kDebugMode) {
+      debugPrint('FEED_FILTER result: shown=${candidates.length} '
+          'stale=$staleCount total=${docs.length} '
+          'ids=${candidates.map((c) => c.id).toList()}');
+    }
     candidates.sort((a, b) {
-      if (a.km == null && b.km == null) return 0;
-      if (a.km == null) return 1;
-      if (b.km == null) return -1;
-      return a.km!.compareTo(b.km!);
+      if (a.createdAt == null && b.createdAt == null) return 0;
+      if (a.createdAt == null) return 1;
+      if (b.createdAt == null) return -1;
+      return b.createdAt!.compareTo(a.createdAt!);
     });
-    final c = candidates.first;
-    return (id: c.id, data: c.data);
+    return [for (final c in candidates) (id: c.id, data: c.data)];
   }
 
-  /// "X" — यो काम कारबाही नगरी लुकाउने, अनि तुरुन्तै (Firestore पर्खनु नपरी)
-  /// बाँकीबाट अर्को उपयुक्त काम देखाउने।
+  /// "X" — यो काम कारबाही नगरी लुकाउने, तुरुन्तै (Firestore पर्खनु नपरी)
+  /// स्टैकबाट हटाउने।
   void _skipIncoming(String id) {
     _skippedIds.add(id);
-    final candidate = _pickIncomingCandidate(_lastJobDocs);
-    _setIncoming(candidate);
+    _setIncomingList(_incomingList.where((c) => c.id != id).toList());
   }
 
-  /// Accept/Decline/Counter पछि — तुरुन्तै overlay हटाउने (Auto-Dismiss)।
-  /// अर्को उपयुक्त काम भए, Firestore ले यो काम हटाएको live snapshot आएपछि
-  /// (`_onJobsSnapshot`) आफैं देखिन्छ — स्थानीय (stale) cache बाट तुरुन्तै
-  /// पुनः-छान्दा त्यही अहिले-कारबाही-भएको काम फेरि झलक्क देखिन सक्छ, त्यसैले
-  /// जानाजान पर्खिने।
-  void _clearIncomingAfterAction() {
-    setState(() => _currentIncoming = null);
+  /// Accept/Decline/Counter पछि — Firestore पर्खनु नपरी तुरुन्तै त्यही एक
+  /// कार्ड मात्र स्टैकबाट हटाउने (बाँकी सबै उस्तैको-उस्तै देखिरहन्छन्)।
+  void _clearIncomingAfterAction(String id) {
+    _setIncomingList(_incomingList.where((c) => c.id != id).toList());
   }
 
   Future<void> _initLocation() async {
@@ -247,7 +526,6 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
         _lng = fallbackLng;
         _approxLocation = true;
       }
-      _locTried = true;
     });
     // App खोल्दा नै worker को अन्तिम थाहा भएको स्थान प्रोफाइलमा अद्यावधिक —
     // यसैले employer को route-map (RequestTrackingScreen) मा कहिल्यै पूर्ण
@@ -285,12 +563,13 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
     _recomputeIncoming();
   }
 
-  /// फिल्टर (सीप/दूरी) बदलिएपछि — Firestore बाट नयाँ snapshot नआए पनि,
-  /// overlay मा देखिने काम अद्यावधिक (नयाँ फिल्टरसँग नमिल्ने भए हटाउने/बदल्ने)।
+  /// फिल्टर (सीप/दूरी) बदलिएपछि वा नयाँ snapshot आएपछि — floating stack मा
+  /// देखिनुपर्ने eligible अनुरोधहरूको पूरै सूची पुनः-गणना। broadcast +
+  /// direct offer दुवै स्रोतका doc एकैचोटि (id ले unique, कहिल्यै नठोक्किने
+  /// दुई फरक query भएकोले) एउटै पाइपलाइनबाट गुज्रिन्छन्।
   void _recomputeIncoming() {
-    final candidate = _pickIncomingCandidate(_lastJobDocs);
-    if (_currentIncoming?.id == candidate?.id) return;
-    _setIncoming(candidate);
+    _setIncomingList(
+        _pickEligibleCandidates([..._lastJobDocs, ..._lastDirectOfferDocs]));
   }
 
   /// अनलाइन/अफलाइन toggle — रोजगारदाताको नक्सामा देखिने/नदेखिने।
@@ -324,23 +603,44 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
     } catch (_) {}
   }
 
-  // शुरुको sheet उचाइ (screen अनुपात) — background map को camera padding र
-  // recentre FAB को स्थान यही अनुमानित उचाइमाथि राख्न प्रयोग हुन्छ। प्रयोगकर्ताले
-  // पछि तान्दा (drag) FAB/padding लाइभ ट्र्याक हुँदैन — साधारण राख्न जानाजान
-  // छोडिएको (डिजाइन trade-off)।
-  static const double _sheetInitial = 0.42;
+  // शुरुको sheet उचाइ (screen अनुपात) — पहिले 0.42 थियो, जसले गर्दा online
+  // banner + distance/trade filter chip हरूले नै त्यो ठाउँको ठूलो हिस्सा
+  // ओगट्थे, बाँकी बचेको ठाउँमा job card (Accept/Decline/Offer Price भएको
+  // scrollable feed) प्रायः पूर्ण/आंशिक रूपमा नै तल लुकिरहन्थ्यो — driver
+  // ले सानो drag-handle तानेको थाहै नपाई "एकैचोटि धेरै अनुरोध देखिने feed
+  // नै छैन" जस्तो देखिन्थ्यो (Cancel बटन जस्तै — काम त गर्थ्यो, तर पत्ता
+  // नलाग्ने)। अब सुरुमै नै (कुनै tान्नु नपरी) कम्तिमा १-२ वटा job card
+  // देखिने गरी ठूलो बनाइयो।
+  static const double _sheetInitial = 0.62;
   static const double _sheetMin = 0.16;
   static const double _sheetMax = 0.86;
+
+  // नयाँ incoming अलर्ट कार्डलाई तल्लो sheet भन्दा माथि स्पष्ट खाली
+  // (floating) ठाउँ दिन — `_setIncoming` हेर्नुहोस्।
+  final _sheetController = DraggableScrollableController();
+
+  @override
+  void dispose() {
+    _jobsSub?.cancel();
+    _offersSub?.cancel();
+    _userSub?.cancel();
+    _sheetController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final screenH = MediaQuery.of(context).size.height;
-    return Scaffold(
+    return PartnerDashboardGuard(
+      child: Scaffold(
       extendBodyBehindAppBar: true,
       backgroundColor: AppColors.kmVoid,
       drawer: const WorkerMenuDrawer(),
       appBar: AppBar(
-        title: Text(S.openJobsNearby,
+        title: Text(
+            S.isRideServiceName(_myService)
+                ? S.openRidesNearby
+                : S.openJobsNearby,
             style: const TextStyle(
                 color: AppColors.kmText, fontWeight: FontWeight.w800)),
         backgroundColor: Colors.transparent,
@@ -350,6 +650,37 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
           decoration: BoxDecoration(gradient: AppColors.kmCtaGradient),
         ),
         actions: [
+          // Dashboard-Stuck Fix (v2) — DraggableScrollableSheet (तल)
+          // `_sheetMax` सम्म तानिँदा पूरै स्क्रिन (र `DashboardExitBar`
+          // समेत) ढाक्न सक्छ। AppBar भने सधैँ sheet भन्दा माथि नै (Scaffold
+          // कै आफ्नै तह) रहने भएकोले, यहाँको "Home" बटन नै एकमात्र जहिले
+          // पनि देखिने/थिच्न मिल्ने ग्यारेन्टी बाटो हो।
+          const GoHomeAction(),
+          // Test Mode — DEBUG BUILDS ONLY (`kDebugMode`, tree-shaken out of
+          // every release build — कहिल्यै real user ले देख्दैन/प्रयोग गर्न
+          // पाउँदैन)। "Simulate" ले आफ्नै खाताबाट एउटा स्पष्ट रूपमा चिन्ने
+          // (`isTestRequest: true`, employerName मा "[TEST]") broadcasting
+          // अनुरोध बनाउँछ, ताकि दोस्रो फोन/खाता बिनै नै incoming-job card,
+          // sound alert, र skill/दूरी filter एक्लै device मा हेर्न मिलोस्।
+          // यसले Self-Ride Prevention (job_actions.dart/firestore.rules)
+          // लाई कहिल्यै bypass गर्दैन — त्यो सुरक्षा सीमा पूर्ण रूपमा उस्तै
+          // रहन्छ, त्यसैले Accept थिच्दा अझै [S.cannotAcceptOwnRequest] नै
+          // देखिन्छ (स्वयं यो सुरक्षा काम गर्छ भन्ने पुष्टि)। test मोडले
+          // केवल client-side self-request भिजिबिलिटी फिल्टर मात्र शिथिल
+          // पार्छ, त्यो पनि यही टगल खुला हुँदा मात्र।
+          if (kDebugMode)
+            IconButton(
+              icon: Icon(Icons.bug_report_rounded,
+                  color: _testMode ? Colors.amberAccent : null),
+              tooltip: 'Test Mode${_testMode ? ' (ON)' : ''}',
+              onPressed: () => setState(() => _testMode = !_testMode),
+            ),
+          if (kDebugMode && _testMode)
+            IconButton(
+              icon: const Icon(Icons.add_alert_rounded),
+              tooltip: 'Simulate incoming request',
+              onPressed: _createTestRequest,
+            ),
           IconButton(
             icon: const Icon(Icons.notifications_none_rounded),
             tooltip: S.menuNotifications,
@@ -360,6 +691,13 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
           ),
         ],
       ),
+      // Dashboard-Stuck Fix — यो screen MainContainer को IndexedStack भित्रको
+      // tab होइन (profile_screen.dart बाट छुट्टै push गरिएको), त्यसैले
+      // MainContainer कै साझा bottom nav यहाँ कहिल्यै देखिँदैनथ्यो। अब
+      // आफ्नै (देखिनमा उस्तै) bar — "Home" लगायत कुनै पनि ट्याप तुरुन्तै
+      // MainContainer कै सही tab मा फर्काउँछ (app_globals.dart::
+      // requestedMainTabIndex हेर्नुहोस्)।
+      bottomNavigationBar: const DashboardExitBar(),
       body: _uid == null
           ? const Center(
               child: Text('Login गर्नुहोस्',
@@ -381,6 +719,8 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                       radiusKm: _radiusKm,
                       trade: _tradeFilter,
                       myService: myService,
+                      myEligible:
+                          (uData['isEligibleForJobs'] as bool?) ?? true,
                       bottomInset: screenH * _sheetInitial,
                       cancelCount: _myCancelCount,
                     ),
@@ -388,6 +728,7 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                     // दूरी/सीप filter + job card हरू, सबै एउटै scroll मा
                     // (sheet handle बाट पनि तान्न मिलोस् भनेर) ──
                     DraggableScrollableSheet(
+                      controller: _sheetController,
                       initialChildSize: _sheetInitial,
                       minChildSize: _sheetMin,
                       maxChildSize: _sheetMax,
@@ -425,183 +766,88 @@ class _JobFeedScreenState extends State<JobFeedScreen> {
                               ),
                             ),
                             SliverToBoxAdapter(
+                              child: _FilterBar(
+                                radiusKm: _radiusKm,
+                                hasLocation: !_approxLocation,
+                                onRadius: _onRadiusTap,
+                              ),
+                            ),
+                            // काम-कार्डहरू अब यहाँ छैनन् — सबै eligible
+                            // अनुरोध तल्लो floating stack (live map माथि)
+                            // मा नै एकैचोटि देखिन्छन्, यो sheet मा दोहोरिएर
+                            // scroll गर्नुपर्दैन (bottom-list-buried गुनासो)।
+                            SliverToBoxAdapter(
                               child: _OnlineBanner(
                                 online: online,
                                 onChanged: _setOnline,
                               ),
                             ),
-                            SliverToBoxAdapter(
-                              child: _FilterBar(
-                                radiusKm: _radiusKm,
-                                trade: _tradeFilter,
-                                myService: myService,
-                                hasLocation: !_approxLocation,
-                                onRadius: _onRadiusTap,
-                                onTrade: (v) {
-                                  setState(() => _tradeFilter = v);
-                                  _recomputeIncoming();
-                                },
-                              ),
-                            ),
-                            _jobListSliver(myService),
                           ],
                         ),
                       ),
                     ),
-                    // ── नयाँ अफर आउनेबित्तिकै — bottom sheet मा नलुकाई, live
-                    // map माथि नै तुरुन्तै देखिने floating card। Accept/Decline/
-                    // Counter थिचेपछि आफैं हराउँछ (Auto-Dismiss)। सक्रिय काम
-                    // देखाउने काम अब MainContainer कै साझा ActiveJobBar (bottom
-                    // nav माथि, हरेक tab मा) ले गर्छ — यहाँ छुट्टै दोहोरो banner
-                    // होइन।
-                    if (_currentIncoming != null)
+                    // ── Multi-Request Floating Stack — eligible भएका सबै
+                    // अनुरोध (एकैचोटि १५-२० जनासम्म भए पनि) live map माथि
+                    // नै, bottom sheet भित्र लुकेर/scroll गर्नुपर्ने होइन।
+                    // धेरै भए यही स्टैक आफैं भित्रभित्रै scroll हुन्छ
+                    // (तल्लो collapsed sheet — _sheetMin — मुनि नछिरोस्
+                    // भनेर bottom bound)। Accept/Decline/Counter थिचेपछि
+                    // त्यही एक कार्ड मात्र तुरुन्तै हराउँछ (Auto-Dismiss),
+                    // बाँकी जस्ताको-तस्तै रहन्छन्। सक्रिय काम देखाउने काम
+                    // MainContainer कै साझा ActiveJobBar (bottom nav माथि)
+                    // ले गर्छ — यहाँ छुट्टै दोहोरो banner होइन।
+                    if (_incomingList.isNotEmpty)
                       Positioned(
                         top: MediaQuery.of(context).padding.top +
                             kToolbarHeight +
                             10,
                         left: 12,
                         right: 12,
-                        child: _IncomingOfferOverlay(
-                          key: ValueKey(_currentIncoming!.id),
-                          docId: _currentIncoming!.id,
-                          data: _currentIncoming!.data,
-                          myService: myService,
-                          blockedByOtherActiveJob: _myActiveJobId.isNotEmpty &&
-                              _myActiveJobId != _currentIncoming!.id,
-                          distanceKm: (_lat != null &&
-                                  _currentIncoming!.data['employerLat']
-                                      is num &&
-                                  _currentIncoming!.data['employerLng'] is num)
-                              ? haversineKm(
-                                  _lat!,
-                                  _lng!,
-                                  (_currentIncoming!.data['employerLat'] as num)
-                                      .toDouble(),
-                                  (_currentIncoming!.data['employerLng'] as num)
-                                      .toDouble())
-                              : null,
-                          onSkip: () => _skipIncoming(_currentIncoming!.id),
-                          onAction: _clearIncomingAfterAction,
+                        bottom: screenH * _sheetMin + 12,
+                        child: ListView.separated(
+                          padding: EdgeInsets.zero,
+                          itemCount: _incomingList.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, i) {
+                            final c = _incomingList[i];
+                            return IncomingOfferOverlay(
+                              key: ValueKey(c.id),
+                              docId: c.id,
+                              data: c.data,
+                              myService: myService,
+                              blockedByOtherActiveJob:
+                                  _myActiveJobId.isNotEmpty &&
+                                      _myActiveJobId != c.id,
+                              walletBlocked: !_myEligible,
+                              distanceKm: (_lat != null &&
+                                      c.data['employerLat'] is num &&
+                                      c.data['employerLng'] is num)
+                                  ? haversineKm(
+                                      _lat!,
+                                      _lng!,
+                                      (c.data['employerLat'] as num).toDouble(),
+                                      (c.data['employerLng'] as num).toDouble())
+                                  : null,
+                              onSkip: () => _skipIncoming(c.id),
+                              onAction: () => _clearIncomingAfterAction(c.id),
+                            );
+                          },
                         ),
                       ),
                   ],
                 );
               },
             ),
+      ),
     );
   }
-
-  Widget _jobListSliver(String myService) {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _jobsStream,
-      builder: (context, snap) {
-        // memoized stream — waiting केवल पहिलो पटक; cache हुँदा तुरुन्तै data।
-        if (!snap.hasData) {
-          return const SliverFillRemaining(
-            hasScrollBody: false,
-            child: Center(
-                child: CircularProgressIndicator(color: AppColors.kmOrange)),
-          );
-        }
-
-        final wantTrade = _tradeFilter == '__mine__'
-            ? myService
-            : (_tradeFilter == '__all__' ? '' : _tradeFilter);
-
-        final rows = <({String id, Map<String, dynamic> data, double? km})>[];
-        for (final d in snap.data?.docs ?? []) {
-          final data = d.data();
-          final svc = (data['service'] ?? '').toString();
-          final rejected = (data['rejectedBy'] as List?) ?? const [];
-          if (rejected.contains(_uid)) continue;
-          if (!shouldShowJobToWorker(d.id, _myCancelCount)) continue;
-          if (wantTrade.isNotEmpty &&
-              svc.toLowerCase() != wantTrade.toLowerCase()) {
-            continue;
-          }
-
-          double? km;
-          final jLat = (data['employerLat'] as num?)?.toDouble();
-          final jLng = (data['employerLng'] as num?)?.toDouble();
-          if (_lat != null && jLat != null && jLng != null) {
-            km = haversineKm(_lat!, _lng!, jLat, jLng);
-          }
-          if (_radiusKm != null) {
-            if (km == null || km > _radiusKm!) continue;
-          }
-          rows.add((id: d.id, data: data, km: km));
-        }
-
-        rows.sort((a, b) {
-          if (a.km == null && b.km == null) {
-            final ta = a.data['createdAt'];
-            final tb = b.data['createdAt'];
-            if (ta is Timestamp && tb is Timestamp) return tb.compareTo(ta);
-            return 0;
-          }
-          if (a.km == null) return 1;
-          if (b.km == null) return -1;
-          return a.km!.compareTo(b.km!);
-        });
-
-        if (rows.isEmpty) {
-          return SliverFillRemaining(hasScrollBody: false, child: _empty());
-        }
-
-        return SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          sliver: SliverList.separated(
-            itemCount: rows.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            // `key` नभई नयाँ राइड अनुरोध बीचमा थपिँदा/हराउँदा (सूची पुनः-क्रम
-            // हुँदा) Flutter ले पुरानै index-based element नै पुनः-प्रयोग
-            // गर्ने भएकोले कार्डको आफ्नै भित्री state (जस्तै counter-offer
-            // dialog) गलत card मा टाँसिन सक्थ्यो। RepaintBoundary ले अर्को
-            // कार्ड अपडेट हुँदा यो नछोइने।
-            itemBuilder: (context, i) => RepaintBoundary(
-              key: ValueKey(rows[i].id),
-              child: _JobCard(
-                docId: rows[i].id,
-                data: rows[i].data,
-                distanceKm: rows[i].km,
-                myService: myService,
-                blockedByOtherActiveJob:
-                    _myActiveJobId.isNotEmpty && _myActiveJobId != rows[i].id,
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _empty() => Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.radar_rounded, size: 60, color: AppColors.kmMuted),
-            const SizedBox(height: 14),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 40),
-              child: Text(S.noOpenJobs,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.kmText)),
-            ),
-            if (_locTried && _approxLocation) ...[
-              const SizedBox(height: 8),
-              Text(S.enableLocationForDistance,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.kmMuted, fontSize: 12)),
-            ],
-          ],
-        ),
-      );
 }
 
 // ── नयाँ अफर आउनेबित्तिकै — live map माथि नै floating overlay (Uber/InDrive
 // "incoming ride request" शैली)। bottom sheet/list मा लुकाउनुको सट्टा AppBar
 // मुनि तुरुन्तै देखिन्छ; Accept/Decline/Counter थिचेपछि आफैं हराउँछ। ─────────
-class _IncomingOfferOverlay extends StatelessWidget {
+class IncomingOfferOverlay extends StatelessWidget {
   final String docId;
   final Map<String, dynamic> data;
   final double? distanceKm;
@@ -613,6 +859,10 @@ class _IncomingOfferOverlay extends StatelessWidget {
   /// साँच्चै सक्रिय काम छ, Accept/Offer दुवै बटन disable हुन्छन्।
   final bool blockedByOtherActiveJob;
 
+  /// Wallet Commission Debt Gate — true भए unpaid commission debt
+  /// threshold भन्दा बढी भएकोले Accept/Offer दुवै बटन disable हुन्छन्।
+  final bool walletBlocked;
+
   /// "X" — कारबाही नगरी लुकाउने (session भर फेरि नदेखियोस्)।
   final VoidCallback onSkip;
 
@@ -620,29 +870,49 @@ class _IncomingOfferOverlay extends StatelessWidget {
   /// overlay मात्र खाली गर्ने।
   final VoidCallback onAction;
 
-  const _IncomingOfferOverlay({
+  const IncomingOfferOverlay({
     super.key,
     required this.docId,
     required this.data,
     required this.distanceKm,
     required this.myService,
     this.blockedByOtherActiveJob = false,
+    this.walletBlocked = false,
     required this.onSkip,
     required this.onAction,
   });
 
+  // active_job_bar.dart::_openInGoogleMaps कै उस्तै ढाँचा — accept गर्नुअघि
+  // नै customer को ठेगाना कता हो भनेर बाह्य Google Maps app मा हेर्न।
+  Future<void> _openInMaps(double lat, double lng) async {
+    final uri = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng');
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     final service = (data['service'] ?? '').toString();
+    final customerName = (data['employerName'] ?? '').toString();
     final desc = (data['details'] ?? '').toString();
     final address = (data['address'] ?? '').toString();
     final destinationAddress = (data['destinationAddress'] ?? '').toString();
     final budget = data['proposedPrice'];
+    final employerLat = (data['employerLat'] as num?)?.toDouble();
+    final employerLng = (data['employerLng'] as num?)?.toDouble();
+    // Direct Offer (worker_list_screen.dart/worker_profile_screen.dart बाट
+    // सिधै यही worker लाई addressed) vs Broadcast (`broadcasting`, धेरै
+    // worker एकैचोटि हेर्न सक्ने) — दुवैको Accept/Counter/Decline पछाडिको
+    // Firestore semantics फरक भएकोले (job_actions.dart::acceptDirectOffer
+    // हेर्नुहोस्), बटन action यही अनुसार छुट्याइन्छ।
+    final isDirectOffer = (data['status'] ?? '').toString() == 'pending_worker';
     final skillMismatch = myService.isNotEmpty &&
         myService.toLowerCase() != service.toLowerCase();
-    final blocked = skillMismatch || blockedByOtherActiveJob;
+    final blocked = skillMismatch || blockedByOtherActiveJob || walletBlocked;
 
-    // नोट: यहाँ कुनै key दिनु पर्दैन — parent (`_IncomingOfferOverlay` आफैं,
+    // नोट: यहाँ कुनै key दिनु पर्दैन — parent (`IncomingOfferOverlay` आफैं,
     // job id ले keyed) बदलिँदा Flutter ले यो पूरै subtree नयाँ बनाउँछ, त्यसैले
     // entrance animation आफैं फेरि चल्छ। पहिले यहाँ बाहिरी widget कै `key`
     // (outer StatelessWidget को आफ्नै key) भित्री child मा पनि दोहोर्‍याइएको
@@ -673,7 +943,10 @@ class _IncomingOfferOverlay extends StatelessWidget {
                 const Icon(Icons.notifications_active_rounded,
                     size: 15, color: AppColors.kmPink),
                 const SizedBox(width: 5),
-                Text(S.newJobNotifTitle,
+                Text(
+                    S.isRideServiceName(myService)
+                        ? S.newRideNotifTitle
+                        : S.newJobNotifTitle,
                     style: const TextStyle(
                         fontSize: 11.5,
                         fontWeight: FontWeight.w800,
@@ -683,7 +956,8 @@ class _IncomingOfferOverlay extends StatelessWidget {
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                   iconSize: 18,
-                  icon: const Icon(Icons.close_rounded, color: AppColors.kmMuted),
+                  icon:
+                      const Icon(Icons.close_rounded, color: AppColors.kmMuted),
                   onPressed: onSkip,
                 ),
               ],
@@ -699,12 +973,8 @@ class _IncomingOfferOverlay extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                   ),
                   clipBehavior: Clip.antiAlias,
-                  child: Image.asset(
-                    serviceImageFor(service),
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Icon(serviceIconFor(service),
-                        color: AppColors.kmOrange),
-                  ),
+                  child: ServicePhotoTile(
+                      service: service, iconColor: AppColors.kmOrange),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -738,12 +1008,32 @@ class _IncomingOfferOverlay extends StatelessWidget {
                 ),
               ],
             ),
+            if (customerName.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(Icons.person_outline_rounded,
+                      size: 14, color: AppColors.kmMuted),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(customerName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.kmText)),
+                  ),
+                ],
+              ),
+            ],
             if (desc.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(desc,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13, color: AppColors.kmMuted)),
+                  style:
+                      const TextStyle(fontSize: 13, color: AppColors.kmMuted)),
             ],
             if (address.isNotEmpty) ...[
               const SizedBox(height: 6),
@@ -813,68 +1103,112 @@ class _IncomingOfferOverlay extends StatelessWidget {
                             fontWeight: FontWeight.w600,
                             color: AppColors.kmAmber)),
                   ),
+                  const TestingClearActiveJobButton(),
                 ],
+              ),
+            ] else if (walletBlocked) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const Icon(Icons.account_balance_wallet_rounded,
+                      size: 14, color: AppColors.kmRose),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(S.walletBlockedWarning,
+                        style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.kmRose)),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const WalletScreen())),
+                    child: Text(S.topUpLabel),
+                  ),
+                ],
+              ),
+            ],
+            if (employerLat != null && employerLng != null) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _openInMaps(employerLat, employerLng),
+                  icon: const Icon(Icons.location_on_outlined, size: 16),
+                  label: Text(S.viewLocation),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.kmTealBlue,
+                    side: const BorderSide(color: AppColors.kmTealBlue),
+                    padding: const EdgeInsets.symmetric(vertical: 9),
+                  ),
+                ),
               ),
             ],
             const SizedBox(height: 12),
             if ((data['isRide'] ?? false) == true)
-              _SendRideOfferButton(docId: docId, data: data, blocked: blocked)
+              SendRideOfferButton(
+                  docId: docId,
+                  data: data,
+                  blocked: blocked,
+                  onAction: onAction)
             else
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () {
-                      declineBroadcastJob(docId);
-                      onAction();
-                    },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.kmRose,
-                      side: const BorderSide(color: AppColors.kmRose),
-                      padding: const EdgeInsets.symmetric(vertical: 11),
+              Row(
+                children: [
+                  Expanded(
+                    child: NeonActionButton(
+                      label: S.decline,
+                      color: kNeonRose,
+                      onTap: () {
+                        if (isDirectOffer) {
+                          declineDirectOffer(docId);
+                        } else {
+                          declineBroadcastJob(docId);
+                        }
+                        onAction();
+                      },
                     ),
-                    child: Text(S.decline),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: blocked
-                        ? null
-                        : () {
-                            onAction();
-                            counterBroadcastJob(context, docId, data,
-                                myService: myService);
-                          },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.kmOrange,
-                      side: const BorderSide(color: AppColors.kmOrange),
-                      padding: const EdgeInsets.symmetric(vertical: 11),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: NeonActionButton(
+                      label: S.offerPrice,
+                      color: kNeonBlue,
+                      onTap: blocked
+                          ? null
+                          : () {
+                              onAction();
+                              if (isDirectOffer) {
+                                counterDirectOffer(context, docId, data,
+                                    myService: myService);
+                              } else {
+                                counterBroadcastJob(context, docId, data,
+                                    myService: myService);
+                              }
+                            },
                     ),
-                    child: Text(S.offerPrice, textAlign: TextAlign.center),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: blocked
-                        ? null
-                        : () {
-                            onAction();
-                            acceptBroadcastJob(context, docId, data,
-                                myService: myService);
-                          },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.kmOrange,
-                      foregroundColor: AppColors.kmInk,
-                      padding: const EdgeInsets.symmetric(vertical: 11),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: NeonActionButton(
+                      label: S.accept,
+                      color: kNeonTeal,
+                      color2: kNeonViolet,
+                      filled: true,
+                      onTap: blocked
+                          ? null
+                          : () {
+                              onAction();
+                              if (isDirectOffer) {
+                                acceptDirectOffer(context, docId, data);
+                              } else {
+                                acceptBroadcastJob(context, docId, data,
+                                    myService: myService);
+                              }
+                            },
                     ),
-                    child: Text(S.accept,
-                        style: const TextStyle(fontWeight: FontWeight.w800)),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
           ],
         ),
       ),
@@ -887,19 +1221,101 @@ class _IncomingOfferOverlay extends StatelessWidget {
 /// doc कहिल्यै claim नगरी), आफूले पहिल्यै यो राइडका लागि प्रस्ताव
 /// पठाइसकेको भए फेरि नपठाइयोस् भनेर आफ्नै `rideOffers/{myUid}` doc लाइभ
 /// जाँच्छ।
-class _SendRideOfferButton extends StatelessWidget {
+class SendRideOfferButton extends StatefulWidget {
   final String docId;
   final Map<String, dynamic> data;
   final bool blocked;
-  const _SendRideOfferButton({
+  // Accept/Decline/Counter पछि floating stack बाट यो card तुरुन्तै (Firestore
+  // snapshot को पर्खाइ नगरी — "Rs. 200 को अफर बक्स" accept पछि पनि केही
+  // समय/सेकेन्ड बसिरहेको गुनासोको जड) हटाउन — non-ride card (माथि) ले यो
+  // पहिल्यैदेखि प्रयोग गर्थ्यो, ride card मा यो callback नै थपिएको थिएन।
+  final VoidCallback onAction;
+  const SendRideOfferButton({
+    super.key,
     required this.docId,
     required this.data,
     required this.blocked,
+    required this.onAction,
   });
 
+  @override
+  State<SendRideOfferButton> createState() => SendRideOfferButtonState();
+}
+
+class SendRideOfferButtonState extends State<SendRideOfferButton> {
+  // Firestore Internal Assertion Failed Fix — यो widget job feed को हरेक
+  // ride-request card मा एउटा-एउटा बन्छ (धेरै एकैचोटि screen मा हुन सक्छन्)।
+  // पहिले `stream:` सिधै (Stateless) `build()` भित्रै बन्थ्यो — त्यसैले
+  // parent (`_jobsStream`, नयाँ अनुरोध आउँदा) रिबिल्ड हुनेबित्तिकै स्क्रिनमा
+  // भएका सबै card ले एकैचोटि आफ्नो Firestore listener त्याग्थे र नयाँ
+  // बनाउँथे — ठ्याक्कै त्यही बेला (passenger ले नयाँ request पठाउँदा) धेरै
+  // listener एकैचोटि churn हुँदा Firestore Web SDK को WatchChangeAggregator
+  // मा "INTERNAL ASSERTION FAILED: Unexpected state" आउने गुनासोको (live
+  // browser console मा नै पक्रिएको) यो नै मुख्य जड हो — त्यसपछि यही
+  // widget (Accept/Decline/Counter देखाउने कि "already offered" भन्ने
+  // निर्णय गर्ने) आफैं सही अपडेट नहुन सक्छ, अनि driver ले request accept
+  // गर्नै नपाएको जस्तो देखिन्छ। अब stream एकपटक मात्र बन्छ — parent
+  // रिबिल्ड जतिपटक भए पनि कहिल्यै फेरि listen/unlisten हुँदैन।
+  late Stream<DocumentSnapshot<Map<String, dynamic>>> _offerStream;
+
+  // Instant Tap Feedback — Accept/Decline थिचेपछि Firestore transaction
+  // (~१-३ सेकेन्ड network round-trip) फर्कुन्जेल बटनमा कुनै दृश्य प्रतिक्रिया
+  // नै नदेखिने भएकोले, "थिचेको काम नगरेको/frozen" जस्तो देखिन्थ्यो — actual
+  // UI thread कहिल्यै block भएको थिएन (onPressed भित्रको Future await
+  // नगरिएकोले frame रेन्डर रोकिँदैन), तर प्रयोगकर्ताले देख्ने कुनै संकेत
+  // नभएकोले त्यस्तै अनुभव हुन्थ्यो। अब थिचेकै bittikai spinner देखाउने —
+  // साँचो Firestore पुष्टि नआएसम्म status भने कहिल्यै फेरिँदैन (त्यो नै हो,
+  // केवल तत्काल प्रतिक्रिया मात्र थपिएको)।
+  bool _busy = false;
+
+  Future<void> _runBusy(Future<void> Function() op) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await op();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(covariant SendRideOfferButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.docId != widget.docId) _subscribe();
+  }
+
+  void _subscribe() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    _offerStream = FirebaseFirestore.instance
+        .collection('serviceRequests')
+        .doc(widget.docId)
+        .collection('rideOffers')
+        .doc(uid)
+        .snapshots();
+  }
+
   Future<void> _openOfferDialog(BuildContext context) async {
+    final data = widget.data;
+    final docId = widget.docId;
     final suggested = (data['proposedPrice'] as num?)?.toInt() ?? 200;
     final controller = TextEditingController(text: suggested.toString());
+    // Dead Send/Cancel Fix — live Firestore listener ले यो card (job feed
+    // मा, यो अनुरोध अर्को driver ले claim गरेर वा status बदलिएर) डायलग
+    // खुलिरहेकै बेला हटाइदिए, बाहिरी context unmounted हुन्छ — पहिले
+    // `context.mounted` मात्र जाँचिँदा Send/Cancel दुवै त्यो दुर्लभ race मा
+    // चुपचाप "dead/frozen" देखिन्थे (कहिलेकाहीं null-check crash पनि)।
+    // request_tracking_screen.dart::_counterBackToWorker/bookings_screen.
+    // dart::_counterOfferToWorker कै उस्तै साँचो fix — context होइन, सधैं
+    // mounted रहने NavigatorState/ScaffoldMessengerState नै dialog
+    // खोल्नुअघि नै समातेर राख्ने।
+    final navigator = Navigator.of(context, rootNavigator: true);
     await showKmDialog(
       context: context,
       title: S.offerPrice,
@@ -914,16 +1330,20 @@ class _SendRideOfferButton extends StatelessWidget {
       actions: [
         KmDialogAction(
           label: S.cancel,
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () {
+            if (!navigator.mounted) return;
+            navigator.pop();
+          },
         ),
         KmDialogAction(
           label: 'Send',
           filled: true,
           onPressed: () {
-            final price = num.tryParse(controller.text.trim());
-            Navigator.of(context).pop();
+            final price = parseSanePrice(controller.text);
+            if (!navigator.mounted) return;
+            navigator.pop();
             if (price == null) return;
-            submitRideOffer(context, docId, data, price: price);
+            submitRideOffer(navigator.context, docId, data, price: price);
           },
         ),
       ],
@@ -934,13 +1354,11 @@ class _SendRideOfferButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return const SizedBox.shrink();
+    final docId = widget.docId;
+    final data = widget.data;
+    final blocked = widget.blocked;
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('serviceRequests')
-          .doc(docId)
-          .collection('rideOffers')
-          .doc(uid)
-          .snapshots(),
+      stream: _offerStream,
       builder: (context, snap) {
         final existing = snap.data?.data();
         if (existing != null) {
@@ -958,17 +1376,31 @@ class _SendRideOfferButton extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('${S.counterBack}: Rs. $counter',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w700, color: AppColors.kmOrange)),
-                  const SizedBox(height: 8),
+                  // ठूलो, स्पष्ट counter-offer — ग्राहकको बजेट (काटिएको) → नयाँ
+                  // मूल्य (ठूलो, हजार-विभाजक सहित) र फरक (+/−)।
+                  _CounterPriceHero(
+                    budget: data['proposedPrice'] as num?,
+                    counter: counter as num?,
+                  ),
+                  const SizedBox(height: 10),
+                  // Tap-Lock Fix — यी तीन बटनले अरू ठाउँ (माथि, `_busy`/
+                  // `_runBusy` भएको sibling branch) कै साझा `_busy` state
+                  // प्रयोग नगरेको बेला, Accept थिचेपछि card पुन:निर्माण
+                  // हुँदा/अर्को state मा सर्दा (वा दोहोरो-tap मा) त्यही
+                  // ठाउँमा सरेको फरक बटनमा दोस्रो/द्रुत tap landed भएर
+                  // "Accept थिच्दा Counter चलेको जस्तो" देखिन सक्थ्यो — अब
+                  // पहिलो tap बित्तिकै तीनै बटन instantly disabled हुन्छन्।
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: () =>
-                              driverDeclinePassengerCounter(docId, uid),
+                          onPressed: _busy
+                              ? null
+                              : () => _runBusy(() =>
+                                  driverDeclinePassengerCounter(
+                                      context, docId, uid,
+                                      employerUid: (data['employerUid'] ?? '')
+                                          .toString())),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: AppColors.kmRose,
                             side: const BorderSide(color: AppColors.kmRose),
@@ -982,8 +1414,12 @@ class _SendRideOfferButton extends StatelessWidget {
                       const SizedBox(width: 6),
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: () => driverCounterOffer(
-                              context, docId, uid, (counter as num?) ?? 0),
+                          onPressed: _busy
+                              ? null
+                              : () => _runBusy(() => driverCounterOffer(
+                                  context, docId, uid, counter ?? 0,
+                                  employerUid: (data['employerUid'] ?? '')
+                                      .toString())),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: AppColors.kmOrange,
                             side: const BorderSide(color: AppColors.kmOrange),
@@ -997,17 +1433,31 @@ class _SendRideOfferButton extends StatelessWidget {
                       const SizedBox(width: 6),
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: () => driverAcceptPassengerCounter(
-                              docId, uid, (counter as num?) ?? 0),
+                          onPressed: _busy
+                              ? null
+                              : () => _runBusy(() =>
+                                  driverAcceptPassengerCounter(
+                                      context, docId, uid,
+                                      counter ?? 0,
+                                      employerUid: (data['employerUid'] ?? '')
+                                          .toString())),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.kmOrange,
                             foregroundColor: AppColors.kmInk,
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 4, vertical: 10),
                           ),
-                          child: Text(S.accept,
-                              style: const TextStyle(
-                                  fontSize: 12.5, fontWeight: FontWeight.w800)),
+                          child: _busy
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: AppColors.kmInk),
+                                )
+                              : Text(S.accept,
+                                  style: const TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w800)),
                         ),
                       ),
                     ],
@@ -1034,32 +1484,56 @@ class _SendRideOfferButton extends StatelessWidget {
                     color: AppColors.kmMuted)),
           );
         }
+        // Ride request card — passenger ले प्रस्ताव गरेकै मूल्यमा driver ले
+        // तुरुन्तै एकै tap मा "Accept" गर्न पाओस् भनेर, अनि त्यो सिधै/तुरुन्तै
+        // confirm होस् (passenger को थप अनुमोदन नचाहिने — Ride Direct-Accept,
+        // job_actions.dart::acceptRideAtListedPrice हेर्नुहोस्)। Offer Price
+        // भने अझै छुट्टै custom-मूल्य चाहनेका लागि उपलब्ध नै रहन्छ — त्यो
+        // भने अझै passenger ले नै छान्नुपर्छ (passenger आफैंले तोकेको मूल्य
+        // होइन)।
         return Row(
           children: [
             Expanded(
-              child: OutlinedButton(
-                onPressed: () => declineBroadcastJob(docId),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.kmRose,
-                  side: const BorderSide(color: AppColors.kmRose),
-                  padding: const EdgeInsets.symmetric(vertical: 11),
-                ),
-                child: Text(S.decline),
+              child: NeonActionButton(
+                label: S.decline,
+                color: kNeonRose,
+                loading: _busy,
+                onTap: _busy
+                    ? null
+                    : () {
+                        widget.onAction();
+                        _runBusy(() => declineBroadcastJob(docId));
+                      },
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              flex: 2,
-              child: ElevatedButton.icon(
-                onPressed: blocked ? null : () => _openOfferDialog(context),
-                icon: const Icon(Icons.local_taxi_rounded, size: 18),
-                label: Text(S.offerPrice,
-                    style: const TextStyle(fontWeight: FontWeight.w800)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.kmOrange,
-                  foregroundColor: AppColors.kmInk,
-                  padding: const EdgeInsets.symmetric(vertical: 11),
-                ),
+              child: NeonActionButton(
+                label: S.offerPrice,
+                color: kNeonBlue,
+                onTap: (blocked || _busy)
+                    ? null
+                    : () {
+                        widget.onAction();
+                        _openOfferDialog(context);
+                      },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: NeonActionButton(
+                label: S.accept,
+                color: kNeonTeal,
+                color2: kNeonViolet,
+                filled: true,
+                loading: _busy,
+                onTap: (blocked || _busy)
+                    ? null
+                    : () {
+                        widget.onAction();
+                        _runBusy(() =>
+                            acceptRideAtListedPrice(context, docId, data));
+                      },
               ),
             ),
           ],
@@ -1113,19 +1587,13 @@ class _OnlineBanner extends StatelessWidget {
 // ── Filter bar ──────────────────────────────────────────────────────────────
 class _FilterBar extends StatelessWidget {
   final int? radiusKm;
-  final String trade;
-  final String myService;
   final bool hasLocation;
   final ValueChanged<int?> onRadius;
-  final ValueChanged<String> onTrade;
 
   const _FilterBar({
     required this.radiusKm,
-    required this.trade,
-    required this.myService,
     required this.hasLocation,
     required this.onRadius,
-    required this.onTrade,
   });
 
   @override
@@ -1154,12 +1622,14 @@ class _FilterBar extends StatelessWidget {
           ),
         );
 
-    final trades = <(String, String)>[
-      ('__mine__', S.myTrade),
-      ('__all__', S.allTrades),
-      for (final s in serviceFilters)
-        (s['name'] as String, S.serviceName(s['name'] as String)),
-    ];
+    // Strict Trade Isolation — worker ले आफ्नो दर्ता भएको trade बाहेक अर्को
+    // कुनै पनि श्रेणी (Mechanic/Electrician/...आदि, वा Driver) कहिल्यै
+    // browse गर्न पाउँदैन — त्यसैले अब यो trade-chip picker नै पूर्ण
+    // रूपमा हटाइयो (पहिले "All trades" + हरेक individual trade chip
+    // देखिन्थ्यो, जसले Plumber ले पनि Electrician/Mechanic काम देख्न
+    // सक्ने गर्थ्यो)। `_tradeFilter` सधैँ डिफल्ट `'__mine__'` मै बस्छ —
+    // अब कुनै UI ले त्यो बदल्दैन, त्यसैले feed सधैँ आफ्नै trade/
+    // vehicle-type मा lock रहन्छ।
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
@@ -1199,262 +1669,10 @@ class _FilterBar extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 10),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (final t in trades)
-                  chip(t.$2, trade == t.$1, () => onTrade(t.$1)),
-              ],
-            ),
-          ),
         ],
       ),
     );
   }
-}
-
-// ── Job card ────────────────────────────────────────────────────────────────
-class _JobCard extends StatelessWidget {
-  final String docId;
-  final Map<String, dynamic> data;
-  final double? distanceKm;
-
-  /// कामदारको दर्ता सीप — यो काम नमिले Accept/मूल्य प्रस्ताव बटन disable हुन्छ।
-  final String myService;
-
-  /// Single Active Job Restriction — true भए worker सँग हाल पहिल्यै अर्को
-  /// साँच्चै सक्रिय काम छ, Accept/Offer दुवै बटन disable हुन्छन्।
-  final bool blockedByOtherActiveJob;
-  const _JobCard({
-    required this.docId,
-    required this.data,
-    required this.distanceKm,
-    required this.myService,
-    this.blockedByOtherActiveJob = false,
-  });
-
-  String _fmtDate(dynamic v) {
-    if (v is Timestamp) {
-      final d = v.toDate();
-      return '${d.day}/${d.month}/${d.year}';
-    }
-    return '';
-  }
-
-  String _slotLabel(String s) => switch (s) {
-        'morning' => S.slotMorning,
-        'afternoon' => S.slotAfternoon,
-        'evening' => S.slotEvening,
-        _ => S.slotAnytime,
-      };
-
-  @override
-  Widget build(BuildContext context) {
-    final service = (data['service'] ?? '').toString();
-    final desc = (data['details'] ?? '').toString();
-    final address = (data['address'] ?? '').toString();
-    final destinationAddress = (data['destinationAddress'] ?? '').toString();
-    final budget = data['proposedPrice'];
-    final date = _fmtDate(data['preferredDate']);
-    final slot = _slotLabel((data['timeSlot'] ?? 'anytime').toString());
-    final lat = (data['employerLat'] as num?)?.toDouble();
-    final lng = (data['employerLng'] as num?)?.toDouble();
-    // सीप-आधारित प्रतिबन्ध: हेर्न सबैलाई खुला, तर Accept/मूल्य प्रस्ताव आफ्नै
-    // दर्ता सीप-श्रेणीको काममा मात्र। प्रोफाइलमा सीप नै सेट नभए (myService
-    // खाली) रोक्दैन।
-    final skillMismatch = myService.isNotEmpty &&
-        myService.toLowerCase() != service.toLowerCase();
-    final blocked = skillMismatch || blockedByOtherActiveJob;
-
-    return GlassPanel(
-      radius: AppRadius.lg,
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: Image.asset(
-                  serviceImageFor(service),
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) =>
-                      Icon(serviceIconFor(service), color: AppColors.kmOrange),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(S.serviceName(service),
-                        style: const TextStyle(
-                            color: AppColors.kmText,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 15.5)),
-                    if (distanceKm != null)
-                      Text(S.distanceLabel(distanceKm!),
-                          style: const TextStyle(
-                              fontSize: 11.5, color: AppColors.kmMuted)),
-                  ],
-                ),
-              ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: AppColors.kmPink.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(AppRadius.pill),
-                ),
-                child: Text('${S.customerBudget}: Rs. $budget',
-                    style: const TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.kmPink)),
-              ),
-            ],
-          ),
-          if (desc.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Text(desc,
-                style: const TextStyle(fontSize: 13.5, color: AppColors.kmMuted)),
-          ],
-          const SizedBox(height: 8),
-          _row(Icons.event_rounded, '$date  ·  $slot'),
-          if (address.isNotEmpty) _row(Icons.place_outlined, address),
-          if (destinationAddress.isNotEmpty)
-            _row(Icons.flag_outlined, '${S.destinationLabel}: $destinationAddress'),
-          const SizedBox(height: 10),
-          if (lat != null && lng != null)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: GradientActionButton(
-                icon: Icons.place_rounded,
-                label: S.viewJobLocation,
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => JobLocationScreen(
-                      lat: lat,
-                      lng: lng,
-                      title: S.serviceName(service),
-                      address: address,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          Divider(height: 20, color: Colors.white.withValues(alpha: 0.1)),
-          if (skillMismatch) ...[
-            Row(
-              children: [
-                const Icon(Icons.lock_outline_rounded,
-                    size: 14, color: AppColors.kmRose),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(S.notAuthorizedForJobCategory,
-                      style: const TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.kmRose)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-          ] else if (blockedByOtherActiveJob) ...[
-            Row(
-              children: [
-                const Icon(Icons.lock_clock_rounded,
-                    size: 14, color: AppColors.kmAmber),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(S.finishCurrentJobFirst,
-                      style: const TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.kmAmber)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-          ],
-          if ((data['isRide'] ?? false) == true)
-            _SendRideOfferButton(docId: docId, data: data, blocked: blocked)
-          else
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => declineBroadcastJob(docId),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.kmRose,
-                    side: const BorderSide(color: AppColors.kmRose),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  child: Text(S.decline),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: blocked
-                      ? null
-                      : () => counterBroadcastJob(context, docId, data,
-                          myService: myService),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.kmOrange,
-                    side: const BorderSide(color: AppColors.kmOrange),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  child: Text(S.offerPrice, textAlign: TextAlign.center),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: blocked
-                      ? null
-                      : () => acceptBroadcastJob(context, docId, data,
-                          myService: myService),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.kmOrange,
-                    foregroundColor: AppColors.kmInk,
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  child: Text(S.accept,
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _row(IconData icon, String text) => Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, size: 14, color: AppColors.kmMuted),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(text,
-                  style: const TextStyle(fontSize: 12, color: AppColors.kmMuted)),
-            ),
-          ],
-        ),
-      );
 }
 
 /// कामको स्थिर ठेगाना नक्सामा देखाउने (एउटा pin मात्र — route/tracking छैन)।
@@ -1489,6 +1707,7 @@ class JobLocationScreen extends StatelessWidget {
             // Close-up — street/house-level, घर/क्षेत्रको वरपर प्रष्ट देखिने।
             initialCameraPosition:
                 CameraPosition(target: LatLng(lat, lng), zoom: 18.5),
+            mapId: kCloudMapId,
             markers: {
               Marker(
                 markerId: const MarkerId('job'),
@@ -1540,6 +1759,80 @@ class JobLocationScreen extends StatelessWidget {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Driver ले देख्ने "passenger ले फिर्ता पठाएको मूल्य" — ठूलो मूल्य, काटिएको
+/// ग्राहक-बजेट, र बजेटसँगको फरक (+/−) एकैपटक स्पष्ट देखाउने।
+class _CounterPriceHero extends StatelessWidget {
+  final num? budget;
+  final num? counter;
+  const _CounterPriceHero({required this.budget, required this.counter});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = counter;
+    if (c == null) return const SizedBox.shrink();
+    final b = budget;
+    final diff = b == null ? null : c - b;
+    final up = diff != null && diff > 0;
+    final diffColor = diff == null || diff == 0
+        ? Colors.white70
+        : (up ? AppColors.kmTeal : AppColors.kmRose);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [
+          AppColors.kmOrange.withValues(alpha: 0.28),
+          AppColors.kmOrange.withValues(alpha: 0.10),
+        ]),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: AppColors.kmOrange.withValues(alpha: 0.7), width: 1.4),
+      ),
+      child: Column(
+        children: [
+          Text(S.counterBack.toUpperCase(),
+              style: TextStyle(
+                  fontSize: 11,
+                  letterSpacing: 1.2,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.kmOrange.withValues(alpha: 0.95))),
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text('Rs ${formatRs(c)}',
+                style: const TextStyle(
+                    fontSize: 34,
+                    height: 1.05,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white)),
+          ),
+          if (b != null) ...[
+            const SizedBox(height: 6),
+            Wrap(
+              alignment: WrapAlignment.center,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              children: [
+                Text('Rs ${formatRs(b)}',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        color: Colors.white60,
+                        decoration: TextDecoration.lineThrough,
+                        decorationColor: Colors.white60)),
+                if (diff != null && diff != 0)
+                  Text('${up ? '+' : '−'}Rs ${formatRs(diff.abs())}',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: diffColor)),
+              ],
+            ),
+          ],
         ],
       ),
     );

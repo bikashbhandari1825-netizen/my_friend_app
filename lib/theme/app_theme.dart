@@ -127,6 +127,13 @@ class AppColors {
   /// गाढा "glass" — .g2 (bottom nav/sheet जस्ता माथि-तैरने पट्टी)।
   static Color kmGlass2Fill = const Color(0xFF16112A).withValues(alpha: 0.76);
   static Color kmGlass2Border = Colors.white.withValues(alpha: 0.14);
+
+  /// Bike/Car selection tile (vehicle_type_picker.dart) मुनिको पृष्ठभूमि —
+  /// `bike_ride.png`/`car_ride.png` को आफ्नै स्टुडियो-फोटो backdrop
+  /// (लगभग #F6F6F6, दुवैमा उस्तै) सँग ठ्याक्कै मिल्ने गरी छानिएको, ताकि
+  /// तस्बिर र card को किनारा बीचमा कुनै छुट्टै सीमा-रेखा/discolouration
+  /// नदेखियोस्।
+  static const kmVehiclePhotoBg = Color(0xFFF6F6F6);
 }
 
 /// साझा border-radius मानहरू।

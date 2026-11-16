@@ -13,11 +13,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
 import '../widgets/glass_ui.dart';
 import 'qr_scanner_screen.dart';
 
@@ -56,6 +54,7 @@ class PaymentMethodsScreen extends StatelessWidget {
                           final data = snap.data?.data() ?? {};
                           final esewa = (data['esewaId'] ?? '').toString();
                           final khalti = (data['khaltiId'] ?? '').toString();
+                          final bankId = (data['bankId'] ?? '').toString();
                           // Worker/Employer व्यवहार फरक — `users/{uid}.role`
                           // बाटै, यही स्क्रिनले पहिल्यै पढेको doc मा भएकोले
                           // थप Firestore read नचाहिने।
@@ -70,8 +69,7 @@ class PaymentMethodsScreen extends StatelessWidget {
                                       SetOptions(merge: true));
 
                           return ListView(
-                            padding:
-                                const EdgeInsets.fromLTRB(16, 14, 16, 28),
+                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
                             children: [
                               Text(S.paymentsSub,
                                   style: const TextStyle(
@@ -91,9 +89,8 @@ class PaymentMethodsScreen extends StatelessWidget {
                                 title: S.payQr,
                                 subtitle: S.payQrSub,
                                 highlighted: true,
-                                notSet: isWorker &&
-                                    esewa.isEmpty &&
-                                    khalti.isEmpty,
+                                notSet:
+                                    isWorker && esewa.isEmpty && khalti.isEmpty,
                                 onTap: () => isWorker
                                     ? _showOwnQr(
                                         context,
@@ -112,7 +109,13 @@ class PaymentMethodsScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 12),
 
-                              // 2. eSewa
+                              // 2. eSewa — role जे भए पनि (worker/employer
+                              // दुवै), tap गर्दा सिधै आफ्नै wallet ID/मोबाइल
+                              // नम्बर टाइप गरेर save गर्ने सरल input-field
+                              // sheet (पहिले employer को हकमा esewa.com.np
+                              // कै raw लगइन पेज browser मा खोल्थ्यो, जसले
+                              // "token expired" जस्ता भ्रामक त्रुटि देखाउँथ्यो
+                              // — त्यो पूर्ण रूपमा हटाइयो)।
                               _MethodCard(
                                 icon: Icons.account_balance_wallet_rounded,
                                 iconBg: const LinearGradient(colors: [
@@ -122,25 +125,18 @@ class PaymentMethodsScreen extends StatelessWidget {
                                 title: S.payEsewa,
                                 subtitle:
                                     esewa.isEmpty ? S.walletIdLabel : esewa,
-                                notSet: isWorker && esewa.isEmpty,
-                                onTap: () => isWorker
-                                    ? _editWalletId(
-                                        context,
-                                        title: S.payEsewa,
-                                        current: esewa,
-                                        provider: 'esewa',
-                                        onSave: (v) => save('esewaId', v),
-                                      )
-                                    : _showEmployerPaySheet(
-                                        context,
-                                        provider: 'esewa',
-                                        label: S.payEsewa,
-                                        accent: const Color(0xFF60BB46),
-                                      ),
+                                notSet: esewa.isEmpty,
+                                onTap: () => _editWalletId(
+                                  context,
+                                  title: S.payEsewa,
+                                  current: esewa,
+                                  provider: 'esewa',
+                                  onSave: (v) => save('esewaId', v),
+                                ),
                               ),
                               const SizedBox(height: 12),
 
-                              // 3. Khalti
+                              // 3. Khalti — उही, माथिकै जस्तै सिधै save।
                               _MethodCard(
                                 icon: Icons.account_balance_wallet_rounded,
                                 iconBg: const LinearGradient(colors: [
@@ -150,21 +146,36 @@ class PaymentMethodsScreen extends StatelessWidget {
                                 title: S.payKhalti,
                                 subtitle:
                                     khalti.isEmpty ? S.walletIdLabel : khalti,
-                                notSet: isWorker && khalti.isEmpty,
-                                onTap: () => isWorker
-                                    ? _editWalletId(
-                                        context,
-                                        title: S.payKhalti,
-                                        current: khalti,
-                                        provider: 'khalti',
-                                        onSave: (v) => save('khaltiId', v),
-                                      )
-                                    : _showEmployerPaySheet(
-                                        context,
-                                        provider: 'khalti',
-                                        label: S.payKhalti,
-                                        accent: const Color(0xFF5C2D91),
-                                      ),
+                                notSet: khalti.isEmpty,
+                                onTap: () => _editWalletId(
+                                  context,
+                                  title: S.payKhalti,
+                                  current: khalti,
+                                  provider: 'khalti',
+                                  onSave: (v) => save('khaltiId', v),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+
+                              // 4. Mobile Banking / Bank — उही ढाँचा, आफ्नै
+                              // bank account/mobile-banking ID save गर्ने।
+                              _MethodCard(
+                                icon: Icons.account_balance_rounded,
+                                iconBg: const LinearGradient(colors: [
+                                  Color(0xFF1E5AA8),
+                                  Color(0xFF123B70)
+                                ]),
+                                title: S.payBank,
+                                subtitle:
+                                    bankId.isEmpty ? S.walletIdLabel : bankId,
+                                notSet: bankId.isEmpty,
+                                onTap: () => _editWalletId(
+                                  context,
+                                  title: S.payBank,
+                                  current: bankId,
+                                  provider: 'bank',
+                                  onSave: (v) => save('bankId', v),
+                                ),
                               ),
                             ],
                           );
@@ -267,61 +278,6 @@ class PaymentMethodsScreen extends StatelessWidget {
     );
   }
 
-  /// Employer — eSewa/Khalti click गर्दा आफ्नै QR होइन, दुई विकल्प:
-  /// आफ्नै app खोल्ने, वा worker कै QR स्क्यान गर्ने।
-  void _showEmployerPaySheet(
-    BuildContext context, {
-    required String provider,
-    required String label,
-    required Color accent,
-  }) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: AppColors.kmSurface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-          ),
-          padding: const EdgeInsets.fromLTRB(12, 18, 12, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(label,
-                    style: const TextStyle(
-                        color: AppColors.kmText,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 17)),
-              ),
-              const SizedBox(height: 10),
-              ListTile(
-                leading: Icon(Icons.open_in_new_rounded, color: accent),
-                title: Text('${S.openWallet} — $label',
-                    style: const TextStyle(color: AppColors.kmText)),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _openWalletApp(context, provider);
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.qr_code_scanner_rounded, color: accent),
-                title: Text(S.scanToPay,
-                    style: const TextStyle(color: AppColors.kmText)),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _scanAndShowResult(context);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _scanAndShowResult(BuildContext context) async {
     final result = await Navigator.push<String>(
       context,
@@ -329,7 +285,6 @@ class PaymentMethodsScreen extends StatelessWidget {
     );
     if (result == null || result.isEmpty || !context.mounted) return;
     final parts = result.split(':');
-    final provider = parts.length > 1 ? parts.first : '';
     final id = parts.length > 1 ? parts.sublist(1).join(':') : result;
     if (!context.mounted) return;
     showModalBottomSheet(
@@ -356,59 +311,36 @@ class PaymentMethodsScreen extends StatelessWidget {
                       color: AppColors.kmText,
                       fontWeight: FontWeight.w700,
                       fontSize: 15)),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: SecondaryButton(
-                      label: S.copyId,
-                      icon: Icons.copy_rounded,
-                      color: AppColors.kmText,
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: id));
-                        ScaffoldMessenger.of(sheetContext).showSnackBar(
-                          SnackBar(content: Text(S.idCopied)),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: KmCtaButton(
-                      label: S.openWallet,
-                      onPressed: () {
-                        Navigator.pop(sheetContext);
-                        _openWalletApp(context, provider);
-                      },
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 10),
+              // पहिले यहाँ "Open Wallet" बटनले सिधै esewa.com.np/khalti.com
+              // कै raw लगइन पेज browser मा खोल्थ्यो (साँचो merchant checkout
+              // session नभएकोले "token expired" जस्ता भ्रामक त्रुटि आउँथ्यो)।
+              // अब त्यसको सट्टा — ID copy गरेर आफ्नै (पहिल्यै install भएको)
+              // eSewa/Khalti app म्यानुअली खोलेर पठाउनुहोस् भन्ने स्पष्ट
+              // निर्देशन मात्र।
+              Text(S.copyIdThenOpenAppHint,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      color: AppColors.kmMuted, fontSize: 12.5)),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: KmCtaButton(
+                  label: S.copyId,
+                  icon: Icons.copy_rounded,
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: id));
+                    ScaffoldMessenger.of(sheetContext).showSnackBar(
+                      SnackBar(content: Text(S.idCopied)),
+                    );
+                  },
+                ),
               ),
             ],
           ),
         );
       },
     );
-  }
-
-  /// eSewa/Khalti को कुनै साँचो merchant deep-link/API नभएकोले, तिनकै
-  /// आधिकारिक domain खोल्ने कोसिस — ती app हरूले साधारणतया आफ्नै domain को
-  /// universal/app link handle गर्ने भएकोले, install भएको फोनमा सिधै app
-  /// खुल्छ (नत्र browser मा fallback हुन्छ)।
-  Future<void> _openWalletApp(BuildContext context, String provider) async {
-    final url = provider == 'khalti'
-        ? 'https://khalti.com'
-        : 'https://esewa.com.np';
-    bool ok = false;
-    try {
-      ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    } catch (_) {
-      ok = false;
-    }
-    if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(S.walletAppNotFound)));
-    }
   }
 }
 
@@ -465,8 +397,8 @@ class _MethodCard extends StatelessWidget {
                 Text(subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style:
-                        const TextStyle(color: AppColors.kmMuted, fontSize: 12.5)),
+                    style: const TextStyle(
+                        color: AppColors.kmMuted, fontSize: 12.5)),
               ],
             ),
           ),
@@ -545,7 +477,8 @@ class _QrSheet extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(label,
-                style: const TextStyle(color: AppColors.kmMuted, fontSize: 12.5)),
+                style:
+                    const TextStyle(color: AppColors.kmMuted, fontSize: 12.5)),
             const SizedBox(height: 14),
             KmCtaButton(
               label: S.save,

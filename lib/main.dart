@@ -2,16 +2,23 @@
 // एपको entry point मात्र। असली widget हरू आ-आफ्नै फाइलमा सारिएका छन् र तल
 // `export` गरिएका छन्, ताकि `import 'main.dart';` गर्ने पुराना फाइलहरू नबिग्रियोस्।
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode, debugPrint;
 import 'package:flutter/material.dart';
+import 'package:flutter_displaymode/flutter_displaymode.dart';
+import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
+import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
 
 import 'app.dart';
 import 'app_globals.dart';
+import 'config/app_config.dart' show FareMatrixConfig, PaymentConfig;
+import 'data/hotel_mock_data.dart' show hydrateHotelsFromFirestore;
 import 'firebase_options.dart';
 import 'prefs.dart';
 import 'services/app_update_service.dart';
@@ -42,6 +49,53 @@ export 'screens/worker_register_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // गोपनीयता — release build मा सबै `debugPrint` (uid/फोन/मार्ग आदि बोकेका
+  // लग) बन्द; `debugPrint` release मा पनि logcat मा छापिन्थ्यो।
+  if (kReleaseMode) {
+    debugPrint = (String? message, {int? wrapWidth}) {};
+  }
+
+  // धेरै Android फोन (विशेष गरी यो OEM/डिभाइस जस्तै — 90Hz/120Hz स्क्रिन
+  // भए पनि) डिफल्टमा तेस्रो-पक्ष app लाई 60Hz मै रेन्डर गर्छन्, जबसम्म
+  // app आफैंले उच्च refresh-rate mode जानाजान नमाग्छ — जति सुकै सस्तो/
+  // optimized widget tree भए पनि, यो नमागेसम्म हार्डवेयरले आफैं 120Hz
+  // दिँदैन। `flutter_displaymode` ले Android कै display mode API
+  // (`Window.attributes.preferredDisplayModeId`) मार्फत उपलब्ध
+  // सबैभन्दा उच्च refresh rate माग्छ। iOS/web मा यो package नै लागू
+  // हुँदैन (ProMotion आफैं OS-level मा handle हुन्छ) — त्यसैले
+  // `Platform.isAndroid` बाहेक कहिल्यै नकल्ने, र कुनै हालतमा (पुरानो/
+  // unsupported डिभाइस) पनि app launch नरोकियोस् भनेर try/catch।
+  if (!kIsWeb && Platform.isAndroid) {
+    try {
+      await FlutterDisplayMode.setHighRefreshRate();
+    } catch (_) {
+      // यो डिभाइसले उच्च refresh-rate API नै समर्थन नगरे पनि — सामान्य
+      // 60Hz मै app ठीकसँग चल्छ, कुनै त्रुटि देखाउनु पर्दैन।
+    }
+
+    // Cloud Console Map ID-based styling (`kCloudMapId`, nearby_common.dart)
+    // लाई Android मा "Latest" vector renderer नै चाहिन्छ — पुरानो "Legacy"
+    // renderer ले mapId लाई silently (कुनै error/warning बिना) उपेक्षा गरेर
+    // default हल्का map मात्र देखाउँछ। धेरैजसो हालका Play services मा Latest
+    // नै default भए पनि, explicit रूपमा यहाँ नै सुनिश्चित गर्दा कुनै पनि
+    // डिभाइस/Play services version मा भरोसा गर्नुपर्दैन।
+    try {
+      final mapsImplementation = GoogleMapsFlutterPlatform.instance;
+      if (mapsImplementation is GoogleMapsFlutterAndroid) {
+        final renderer = await mapsImplementation.initializeWithRenderer(
+            AndroidMapRenderer.latest);
+        debugPrint('MAPS_RENDERER_INIT_OK: $renderer');
+      } else {
+        debugPrint(
+            'MAPS_RENDERER_INIT_SKIPPED: not GoogleMapsFlutterAndroid '
+            '(${mapsImplementation.runtimeType})');
+      }
+    } catch (e) {
+      // असफल भए पनि map legacy renderer मै (वा default style मा) चल्छ —
+      // app launch रोकिनु हुँदैन।
+      debugPrint('MAPS_RENDERER_INIT_FAILED: $e');
+    }
+  }
 
   // कुनै अघिल्लो session/hot-restart बाट बाँकी रहन सक्ने stale guard — यो
   // भएको भरमा MainContainer कै active-job watcher ले route screen auto-open
@@ -90,6 +144,42 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
+  // App Check — साँचो (Play Store बाट आएको, अपरिवर्तित) एपबाट मात्र Firebase
+  // (Auth/Firestore/Storage/Functions) अनुरोध मान्य बनाउँछ; एपबाहिरका
+  // script/नक्कली क्लाइन्टबाट API दुरुपयोग (SMS pumping, scraping) रोक्न।
+  // यहाँ केवल token पठाउन थालिन्छ — Firebase Console → App Check मा
+  // "Enforce" गरेपछि मात्र नपठाउनेलाई अस्वीकार हुन्छ (README/सुरक्षा टिप्पणी)।
+  // Debug build मा debug provider (token Console मा दर्ता गर्नुपर्ने)।
+  if (!kIsWeb) {
+    try {
+      await FirebaseAppCheck.instance.activate(
+        androidProvider:
+            kReleaseMode ? AndroidProvider.playIntegrity : AndroidProvider.debug,
+        appleProvider:
+            kReleaseMode ? AppleProvider.deviceCheck : AppleProvider.debug,
+      );
+    } catch (e) {
+      debugPrint('AppCheck activate failed: $e');
+    }
+  }
+
+  // Persistent Login (Web) — Android/iOS मा Firebase Auth SDK आफैं नै सधैं
+  // session disk/keychain मा राख्छ (कुनै `setPersistence` API नै उपलब्ध
+  // छैन त्यहाँ, hot reload ले त Dart-तहको state मात्र स्वाप गर्छ, native
+  // auth session कहिल्यै touch गर्दैन — त्यसैले mobile मा यो कहिल्यै समस्या
+  // हुँदैन)। Web मा चाहिँ JS SDK ले डिफल्ट रूपमै `LOCAL` (indexedDB, ट्याब/
+  // browser बन्द गरे पनि बाँकी) persistence प्रयोग गर्छ, तर यहाँ explicit
+  // रूपमै तोकिदिँदा कुनै future SDK/config परिवर्तनले अनजानमा `SESSION`/
+  // `NONE` मा नफर्काओस् भन्ने ग्यारेन्टी हुन्छ — पेज रिफ्रेसमा पनि फेरि
+  // login नसोधिने।
+  if (kIsWeb) {
+    try {
+      await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+    } catch (e) {
+      debugPrint('setPersistence error: $e');
+    }
+  }
+
   // Google Sign-In (web) — `signInWithRedirect` ले पूरै पेज Google मा लगेर
   // फर्काउँछ (popup होइन), त्यसैले Chrome को popup-blocker ले कहिल्यै
   // silently रोक्दैन (`signInWithPopup` को ज्ञात Flutter-web समस्या — क्लिक
@@ -129,6 +219,19 @@ void main() async {
   // पहिलेको session (app बन्द/क्र्यास) मा पठाउन नसकिएको फोटो/भिडियो/
   // भ्वाइस भए — तिनलाई background मै फेरि पठाउने प्रयास सुरु गर्ने।
   unawaited(PendingMediaQueue.init());
+  // भाडा दर (config/fareMatrix) background मा एकपटक cache — `estimateFare()`
+  // यसपछि सधैँ synchronous नै रहन्छ, यो await ले app launch कहिल्यै रोक्दैन।
+  unawaited(FareMatrixConfig.preload());
+  // Commission rate + gateway (eSewa/Khalti/Bank) enabled/credential
+  // सेटिङ पनि उही ढाँचामा — owner ले Admin Dashboard बाट बदलेको तुरुन्तै
+  // (नयाँ release बिनै) सबै device मा लागू होस्।
+  unawaited(PaymentConfig.preload());
+  // Seed Hotel Claiming — पहिले यो केवल hotel_search_screen.dart खोल्दा
+  // मात्र चल्थ्यो — Search नखोली सिधै "My Bookings" → Booking Pass गएमा
+  // (seed होटल, जस्तै htl_1, लाई साँचो partner ownerId दिइएको भए पनि)
+  // त्यो session मा कहिल्यै hydrate नहुने जोखिम हुन्थ्यो। अब app startup
+  // मै एकपटक (fire-and-forget, launch कहिल्यै नरोकी)।
+  unawaited(hydrateHotelsFromFirestore());
   runApp(const KaamMitraApp());
 
   // App startup मा एकपटक — auto-update जाँच्ने। Login भए/नभए दुवै अवस्थामा
@@ -143,7 +246,10 @@ void main() async {
   // देखिएको थियो। यहाँ केही सेकेन्ड पर्खेर (route/UI settle भइसकेपछि) मात्र,
   // र त्यतिबेलाको ताजा context लिएर।
   WidgetsBinding.instance.addPostFrameCallback((_) {
-    Future.delayed(const Duration(seconds: 2), () {
+    // ७s — शुरुको logo animation (~५s) सकिएपछि मात्र; पहिले २s मा चल्दा यो
+    // जाँच (update/integrity) animation कै बीचमा परेर आधा-सेकेन्डको झट्का
+    // दिन्थ्यो (फोनमै नापिएको)।
+    Future.delayed(const Duration(seconds: 7), () {
       final ctx = rootNavigatorKey.currentContext;
       if (ctx != null) {
         AppUpdateService.checkForUpdate(ctx);

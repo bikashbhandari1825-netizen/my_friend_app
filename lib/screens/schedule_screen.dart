@@ -279,11 +279,11 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
-            CircleAvatar(
-              radius: 18,
+            ServiceIconBadge(
+              service: service,
+              size: 36,
+              iconColor: AppColors.kmOrange,
               backgroundColor: AppColors.kmOrange.withValues(alpha: 0.16),
-              child: Icon(serviceIconFor(service),
-                  color: AppColors.kmOrange, size: 18),
             ),
             const SizedBox(width: 10),
             Expanded(

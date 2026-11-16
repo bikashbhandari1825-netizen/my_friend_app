@@ -13,10 +13,10 @@
 // [checkForUpdate] अरू platform मा तुरुन्तै चुपचाप फर्कन्छ।
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -63,6 +63,15 @@ class AppUpdateService {
           !apkUri.hasScheme) {
         return;
       }
+      // सुरक्षा — APK केवल HTTPS र भरपर्दो Google Storage होस्टबाट, र admin ले
+      // `apkSha256` (64-hex) दिएको हुनैपर्छ; नत्र (admin खाता कब्जा वा गलत
+      // लिङ्कले) अर्को/नक्कली APK install गराउन नसकियोस्।
+      final apkSha256 = (data['apkSha256'] ?? '').toString().trim().toLowerCase();
+      if (!_isTrustedApkUri(apkUri) ||
+          !RegExp(r'^[0-9a-f]{64}$').hasMatch(apkSha256)) {
+        debugPrint('AppUpdateService: APK URL/hash not trusted — update ignored.');
+        return;
+      }
 
       final info = await PackageInfo.fromPlatform();
       final currentCode = int.tryParse(info.buildNumber) ?? 0;
@@ -79,6 +88,7 @@ class AppUpdateService {
       await _showUpdateDialog(
         context,
         apkUrl: apkUrlRaw,
+        apkSha256: apkSha256,
         versionName: versionName,
         releaseNotes: releaseNotes,
         forceUpdate: forceUpdate,
@@ -94,6 +104,7 @@ class AppUpdateService {
   static Future<void> _showUpdateDialog(
     BuildContext context, {
     required String apkUrl,
+    required String apkSha256,
     required String versionName,
     required String releaseNotes,
     required bool forceUpdate,
@@ -109,9 +120,7 @@ class AppUpdateService {
           insetPadding: const EdgeInsets.symmetric(horizontal: 28),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(26),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-              child: Container(
+            child: glassBackdrop(sigma: 26, child: Container(
                 padding: const EdgeInsets.fromLTRB(22, 24, 22, 16),
                 decoration: BoxDecoration(
                   color: AppColors.kmSurface.withValues(alpha: 0.92),
@@ -212,7 +221,7 @@ class AppUpdateService {
                               borderRadius: BorderRadius.circular(999),
                               onTap: () {
                                 Navigator.pop(dialogContext);
-                                _downloadAndInstall(context, apkUrl);
+                                _downloadAndInstall(context, apkUrl, apkSha256);
                               },
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -245,8 +254,14 @@ class AppUpdateService {
     );
   }
 
+  /// केवल HTTPS + Google Cloud/Firebase Storage होस्ट।
+  static bool _isTrustedApkUri(Uri u) =>
+      u.scheme == 'https' &&
+      (u.host == 'firebasestorage.googleapis.com' ||
+          u.host == 'storage.googleapis.com');
+
   static Future<void> _downloadAndInstall(
-      BuildContext context, String apkUrl) async {
+      BuildContext context, String apkUrl, String expectedSha256) async {
     if (!context.mounted) return;
     final progress = ValueNotifier<double?>(0);
     showDialog(
@@ -260,9 +275,7 @@ class AppUpdateService {
           insetPadding: const EdgeInsets.symmetric(horizontal: 28),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(26),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-              child: Container(
+            child: glassBackdrop(sigma: 26, child: Container(
                 padding: const EdgeInsets.all(22),
                 decoration: BoxDecoration(
                   color: AppColors.kmSurface.withValues(alpha: 0.92),
@@ -305,7 +318,7 @@ class AppUpdateService {
 
     try {
       final apkUri = Uri.tryParse(apkUrl);
-      if (apkUri == null || !apkUri.hasScheme) {
+      if (apkUri == null || !_isTrustedApkUri(apkUri)) {
         throw const FormatException('Invalid APK URL');
       }
       final dir = await getTemporaryDirectory();
@@ -324,6 +337,16 @@ class AppUpdateService {
         if (total > 0) progress.value = received / total;
       }).asFuture<void>();
       await sink.close();
+
+      // अखण्डता — download भएको फाइलको SHA-256 admin ले दिएकोसँग नमिले install
+      // नगर्ने (बीचमा बदलिएको/नक्कली APK रोक्न)।
+      final digest = (await sha256.bind(file.openRead()).first).toString();
+      if (digest != expectedSha256) {
+        try {
+          await file.delete();
+        } catch (_) {}
+        throw const FormatException('APK checksum mismatch');
+      }
 
       if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
       final result = await OpenFilex.open(file.path,

@@ -25,6 +25,19 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+// Play Store release signing — `android/key.properties` (gitignored, real
+// secret, see key.properties.example) if present; otherwise falls back to
+// debug signing so a plain `flutter run --release`/local build still works
+// for anyone who hasn't set up a personal upload keystore.
+def keystorePropertiesFile = rootProject.file('key.properties')
+def keystoreProperties = new Properties()
+def hasReleaseSigning = keystorePropertiesFile.exists()
+if (hasReleaseSigning) {
+    keystorePropertiesFile.withReader('UTF-8') { reader ->
+        keystoreProperties.load(reader)
+    }
+}
+
 android {
     namespace "com.example.kaamMitra.app"
     compileSdk flutter.compileSdkVersion
@@ -55,14 +68,42 @@ android {
         targetSdkVersion flutter.targetSdkVersion
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
+        // Mapbox token: android/local.properties मा MAPBOX_ACCESS_TOKEN=pk.... राख्नुहोस्
+        resValue "string", "mapbox_access_token", localProperties.getProperty('MAPBOX_ACCESS_TOKEN', System.getenv('MAPBOX_ACCESS_TOKEN') ?: '')
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
+        }
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig signingConfigs.debug
+            // `android/key.properties` नभएसम्म (local dev/testing) debug कै
+            // keys — साँचो Play Store release गर्नुअघि key.properties.example
+            // कै अनुसार आफ्नै upload keystore बनाउनुहोस्।
+            signingConfig hasReleaseSigning ? signingConfigs.release : signingConfigs.debug
+            // KYC OCR (google_mlkit_text_recognition) कै script-specific
+            // missing-class R8 error हटाउन — proguard-rules.pro हेर्नुहोस्।
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                    'proguard-rules.pro'
         }
+    }
+}
+
+// Security — Play Store का लागि AAB (`bundleRelease`) बनाउँदा आफ्नै upload
+// keystore (`android/key.properties`) अनिवार्य; नत्र debug कुञ्जीले साइन भएको
+// build गल्तीले पठाइन सक्छ। (`flutter run --release` / local APK भने अघिकै।)
+gradle.taskGraph.whenReady { graph ->
+    if (graph.hasTask(':app:bundleRelease') && !hasReleaseSigning) {
+        throw new GradleException(
+            'android/key.properties is missing — refusing to build a release bundle signed with the debug key. See android/key.properties.example.')
     }
 }
 
@@ -72,4 +113,15 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
+    // Native Vehicle Map Overlay (Phase 0, prototype — kaamMitra.app ले
+    // सिधै प्रयोग गर्ने Google Maps Android SDK। पहिले यो `google_maps_flutter`
+    // को transitive dependency मार्फत मात्र उपलब्ध थियो — सिधै आफ्नै Kotlin
+    // बाट `com.google.android.gms.maps.*` प्रयोग गर्न यहाँ explicit घोषणा
+    // चाहिन्छ, नत्र plugin अपडेट हुँदा transitive version बदलिएर build
+    // अप्रत्याशित रूपमा भाँचिन सक्छ। यो dependency अझै चाहिन्छ — Dart
+    // तर्फका अरू धेरै स्क्रिन (home_screen.dart/nearby_map_screen.dart/
+    // location_picker_page.dart/route_map_view.dart आदि, 15+ फाइल) ले
+    // `google_maps_flutter` सिधै प्रयोग गर्छन्, यो migration ले ती कहिल्यै
+    // छुँदैन।
+    implementation 'com.google.android.gms:play-services-maps:19.0.0'
 }

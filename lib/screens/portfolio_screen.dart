@@ -15,6 +15,7 @@ import '../services/document_service.dart';
 import '../services/upload_validation.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_ui.dart';
+import '../widgets/skeleton.dart';
 
 class PortfolioScreen extends StatefulWidget {
   /// null भए current user (edit गर्न मिल्ने); दिइए त्यो कामदारको (view-only)।
@@ -241,10 +242,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                                     color: AppColors.kmOrange.withValues(alpha: 0.4)),
                               ),
                               child: _busy
-                                  ? const Center(
-                                      child: CircularProgressIndicator(
-                                          color: AppColors.kmOrange,
-                                          strokeWidth: 2.4))
+                                  ? const SkeletonList()
                                   : Column(
                                       mainAxisAlignment:
                                           MainAxisAlignment.center,

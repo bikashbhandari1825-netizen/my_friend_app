@@ -5,9 +5,9 @@
 //   Support  → user ले पठाएका help/सुझाव message मात्र
 //   Users    → app का सबै user को list + status
 import 'dart:async' show unawaited;
-import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -18,6 +18,7 @@ import 'package:flutter/services.dart';
 import '../admin_notifications_page.dart';
 import '../config/app_config.dart';
 import '../l10n/strings.dart';
+import '../services/kyc_url.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
 import '../widgets/glass_ui.dart';
@@ -399,8 +400,10 @@ Future<void> _acceptWorker(BuildContext context, String docId, String uid,
     'location': data['location'] ?? 'Kathmandu, Nepal',
     'district': data['district'] ?? '',
     'document': data['documentName'] ?? '',
-    'documentUrl': data['documentUrl'] ?? '',
-    'citizenshipFrontUrl': data['citizenshipFrontUrl'] ?? '',
+    // नागरिकता/कागजातको लिङ्क यहाँ (सबै लग इन युजरले पढ्न मिल्ने सूचीमा) कहिल्यै
+    // नकपी गर्ने — ती `pendingWorkers`/`users` मा Storage path मात्र हुन्
+    // (हेर्नुहोस् `services/kyc_url.dart`)। सेल्फी (अवतार) र certificateUrls
+    // (पोर्टफोलियो) मात्र सार्वजनिक प्रदर्शन-सामग्री हुन्।
     'selfieUrl': data['selfieUrl'] ?? '',
     'certificateUrls': data['certificateUrls'] ?? <String>[],
     if ((data['vehicleDetails'] ?? '').toString().isNotEmpty)
@@ -525,6 +528,7 @@ class OwnerDashboardScreen extends StatelessWidget {
                               _PaymentConfigButton(),
                               _SettlementButton(),
                               _AppUpdateButton(),
+                              _SocialLinksButton(),
                               _NotifBell(),
                             ]),
                           ),
@@ -645,6 +649,88 @@ class _SupportNumberButton extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// सामाजिक सञ्जाल (Facebook/Instagram/TikTok/X) लिंक — home screen को
+/// promo banner मा देखिने बटनले प्रयोग गर्छन् (`config/socialLinks`,
+/// config/app_config.dart::SocialLinksConfig)। `_SupportNumberButton` कै
+/// उस्तै ढाँचा, फरक यति मात्र — यहाँ एकै dialog भित्र ४ वटा field।
+class _SocialLinksButton extends StatelessWidget {
+  const _SocialLinksButton();
+
+  Future<void> _edit(BuildContext context) async {
+    final current = await SocialLinksConfig.readOnce();
+    if (!context.mounted) return;
+    final fbCtrl = TextEditingController(text: current['facebook']);
+    final igCtrl = TextEditingController(text: current['instagram']);
+    final ttCtrl = TextEditingController(text: current['tiktok']);
+    final xCtrl = TextEditingController(text: current['twitter']);
+    await showKmDialog(
+      context: context,
+      title: 'Social Links',
+      icon: Icons.share_rounded,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: fbCtrl,
+            keyboardType: TextInputType.url,
+            style: const TextStyle(color: AppColors.kmText),
+            decoration: kmInputDecoration('Facebook URL'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: igCtrl,
+            keyboardType: TextInputType.url,
+            style: const TextStyle(color: AppColors.kmText),
+            decoration: kmInputDecoration('Instagram URL'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ttCtrl,
+            keyboardType: TextInputType.url,
+            style: const TextStyle(color: AppColors.kmText),
+            decoration: kmInputDecoration('TikTok URL'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: xCtrl,
+            keyboardType: TextInputType.url,
+            style: const TextStyle(color: AppColors.kmText),
+            decoration: kmInputDecoration('X (Twitter) URL'),
+          ),
+        ],
+      ),
+      actions: [
+        KmDialogAction(
+            label: S.cancel, onPressed: () => Navigator.pop(context)),
+        KmDialogAction(
+          label: S.save,
+          filled: true,
+          onPressed: () async {
+            await SocialLinksConfig.setLinks(
+              facebook: fbCtrl.text,
+              instagram: igCtrl.text,
+              tiktok: ttCtrl.text,
+              twitter: xCtrl.text,
+            );
+            if (context.mounted) Navigator.pop(context);
+          },
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: const Icon(Icons.share_rounded),
+      tooltip: 'Social Links',
+      onPressed: () => _edit(context),
+    );
+  }
+}
+
 /// Help & Support screen भित्रका सबै content (Service Standard, FAQ,
 /// Privacy Policy, Data Security) — यहाँबाट HelpContentEditorScreen खोल्ने।
 class _HelpContentButton extends StatelessWidget {
@@ -736,6 +822,8 @@ class _AppUpdateButton extends StatelessWidget {
         TextEditingController(text: (current?['versionName'] ?? '').toString());
     final urlCtrl =
         TextEditingController(text: (current?['apkUrl'] ?? '').toString());
+    final shaCtrl = TextEditingController(
+        text: (current?['apkSha256'] ?? '').toString());
     final notesCtrl = TextEditingController(
         text: (current?['releaseNotes'] ?? '').toString());
     var force = current?['forceUpdate'] == true;
@@ -778,6 +866,13 @@ class _AppUpdateButton extends StatelessWidget {
                       decoration: kmInputDecoration('APK download URL'),
                     ),
                     const SizedBox(height: 10),
+                    TextField(
+                      controller: shaCtrl,
+                      style: const TextStyle(color: AppColors.kmText),
+                      decoration: kmInputDecoration(
+                          'APK SHA-256 (64 hex — required; auto-filled on upload)'),
+                    ),
+                    const SizedBox(height: 10),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: OutlinedButton.icon(
@@ -800,8 +895,11 @@ class _AppUpdateButton extends StatelessWidget {
                                 }
                                 setState(() => uploading = true);
                                 try {
-                                  final url = await _uploadApkFromDevice(code);
-                                  if (url != null) urlCtrl.text = url;
+                                  final up = await _uploadApkFromDevice(code);
+                                  if (up != null) {
+                                    urlCtrl.text = up.$1;
+                                    shaCtrl.text = up.$2;
+                                  }
                                 } catch (e) {
                                   if (context.mounted) {
                                     ScaffoldMessenger.of(context)
@@ -866,10 +964,20 @@ class _AppUpdateButton extends StatelessWidget {
                           if (code == null || urlCtrl.text.trim().isEmpty) {
                             return;
                           }
+                          if (!RegExp(r'^[0-9a-fA-F]{64}$')
+                              .hasMatch(shaCtrl.text.trim())) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text(
+                                      'Enter the APK SHA-256 (64 hex characters).')),
+                            );
+                            return;
+                          }
                           await AppUpdateConfig.publish(
                             latestVersionCode: code,
                             versionName: nameCtrl.text,
                             apkUrl: urlCtrl.text,
+                            apkSha256: shaCtrl.text,
                             releaseNotes: notesCtrl.text,
                             forceUpdate: force,
                           );
@@ -887,7 +995,7 @@ class _AppUpdateButton extends StatelessWidget {
   /// Firebase Storage `releases/{versionCode}.apk` मा upload गरेर public
   /// download URL फर्काउने — देखाउने APK Android device (सामान्यतया
   /// `flutter build apk --release` ले बनाएको `app-release.apk`) बाट छानिन्छ।
-  Future<String?> _uploadApkFromDevice(int versionCode) async {
+  Future<(String, String)?> _uploadApkFromDevice(int versionCode) async {
     final file = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: const ['apk'],
@@ -899,7 +1007,8 @@ class _AppUpdateButton extends StatelessWidget {
       bytes,
       SettableMetadata(contentType: 'application/vnd.android.package-archive'),
     );
-    return ref.getDownloadURL();
+    // SHA-256 पनि निकालेर फर्काउने — एपले install अघि यही मिलाउँछ।
+    return (await ref.getDownloadURL(), sha256.convert(bytes).toString());
   }
 
   @override
@@ -1046,10 +1155,10 @@ class _LabeledPreview extends StatelessWidget {
                 backgroundColor: Colors.black,
                 insetPadding: const EdgeInsets.all(12),
                 child: InteractiveViewer(
-                  child: CachedNetworkImage(
-                    imageUrl: url,
+                  child: KycImage(
+                    url: url,
                     fit: BoxFit.contain,
-                    placeholder: (_, __) => const Padding(
+                    placeholder: const Padding(
                       padding: EdgeInsets.all(40),
                       child: CircularProgressIndicator(color: Colors.white),
                     ),
@@ -1059,16 +1168,15 @@ class _LabeledPreview extends StatelessWidget {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppRadius.sm),
-              child: CachedNetworkImage(
-                imageUrl: url,
+              child: KycImage(
+                url: url,
                 height: 100,
                 width: double.infinity,
                 fit: BoxFit.cover,
                 // Thumbnail मात्र देखाउने भएकोले सानो resolution मा नै
                 // decode गर्ने — पूरा-resolution भन्दा छिटो पेन्ट हुन्छ।
                 memCacheHeight: 200,
-                fadeInDuration: const Duration(milliseconds: 150),
-                placeholder: (_, __) => Container(
+                placeholder: Container(
                   height: 100,
                   alignment: Alignment.center,
                   color: Colors.white.withValues(alpha: 0.06),
@@ -1079,7 +1187,7 @@ class _LabeledPreview extends StatelessWidget {
                         strokeWidth: 2, color: AppColors.kmOrange),
                   ),
                 ),
-                errorWidget: (_, __, ___) => Container(
+                errorWidget: Container(
                   height: 60,
                   alignment: Alignment.center,
                   color: Colors.white.withValues(alpha: 0.06),
@@ -1093,11 +1201,16 @@ class _LabeledPreview extends StatelessWidget {
           OutlinedButton.icon(
             icon: const Icon(Icons.description_outlined, size: 16),
             label: Text(S.viewDocument, overflow: TextOverflow.ellipsis),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: url));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('${S.saved}: $url')),
-              );
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                final real = await resolveKycUrl(url);
+                Clipboard.setData(ClipboardData(text: real));
+                messenger.showSnackBar(SnackBar(content: Text(S.saved)));
+              } catch (_) {
+                messenger.showSnackBar(
+                    const SnackBar(content: Text('Could not open document.')));
+              }
             },
           ),
       ],
@@ -1717,8 +1830,97 @@ class DriversControlDashboard extends StatelessWidget {
                 padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
                 child: KmScreenHeader(title: 'Drivers Control Dashboard'),
               ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: _DriverDashboardQuickActions(),
+              ),
               Expanded(child: _DriverControlHub()),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Payment/Fare/Wallet Quick Actions — Drivers Control Dashboard कै
+// टुप्पोमा नै सिधै देखिने ठूला कार्ड (owner_dashboard_screen.dart कै
+// 4-tab Admin panel को टुप्पोको सानो icon-row मा यी पहिल्यै थिए, तर
+// त्यहाँ लुकेको/नदेखिने गुनासो आएपछि — Driver सम्बन्धी भुक्तानी/भाडा/
+// वालेट नियन्त्रण सबै यहीं, छुट्टै screen खोज्नु नपरोस् भनेर)।
+class _DriverDashboardQuickActions extends StatelessWidget {
+  const _DriverDashboardQuickActions();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _QuickActionCard(
+            icon: Icons.payments_outlined,
+            label: 'Fare & Commission\nSettings',
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const FareMatrixEditorScreen())),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _QuickActionCard(
+            icon: Icons.qr_code_2_rounded,
+            label: 'Payment &\nQR Config',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const PaymentConfigEditorScreen())),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _QuickActionCard(
+            icon: Icons.account_balance_wallet_outlined,
+            label: 'Driver Wallet &\nSettlements',
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const AdminSettlementScreen())),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _QuickActionCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  const _QuickActionCard({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      radius: AppRadius.lg,
+      padding: EdgeInsets.zero,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: AppColors.kmOrange, size: 24),
+                const SizedBox(height: 8),
+                Text(label,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w700, height: 1.2)),
+              ],
+            ),
           ),
         ),
       ),
@@ -1755,7 +1957,7 @@ void _viewDriverDoc(BuildContext context, String url) {
     builder: (_) => Dialog(
       backgroundColor: Colors.black,
       child: InteractiveViewer(
-        child: CachedNetworkImage(imageUrl: url, fit: BoxFit.contain),
+        child: KycImage(url: url, fit: BoxFit.contain),
       ),
     ),
   );
@@ -1801,12 +2003,12 @@ Widget _docThumbShared(BuildContext context, String label, String url) {
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(10),
-          child: CachedNetworkImage(
-            imageUrl: url,
+          child: KycImage(
+            url: url,
             width: 76,
             height: 76,
             fit: BoxFit.cover,
-            errorWidget: (_, __, ___) => Container(
+            errorWidget: Container(
               width: 76,
               height: 76,
               color: Colors.white.withValues(alpha: 0.06),
@@ -1831,7 +2033,7 @@ class _DriverControlHub extends StatelessWidget {
     return _AdminSelectableList(
       query: FirebaseFirestore.instance
           .collection('users')
-          .where('service', whereIn: ['Bike', 'Car']),
+          .where('service', whereIn: ['Bike', 'Car', 'Auto']),
       emptyIcon: Icons.local_taxi_outlined,
       emptyText: 'No drivers registered yet',
       noun: 'driver',
@@ -2775,6 +2977,7 @@ class _WorkerRatingsTabState extends State<_WorkerRatingsTab> {
           child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: FirebaseFirestore.instance
                 .collection('registeredWorkers')
+                .limit(500)
                 .snapshots(),
             builder: (context, snap) {
               final docs = [
@@ -2950,9 +3153,7 @@ void _showOverrideSheet(
       child: ClipRRect(
         borderRadius:
             const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-          child: Container(
+        child: glassBackdrop(sigma: 26, child: Container(
             decoration: BoxDecoration(
               color: AppColors.kmSurface.withValues(alpha: 0.94),
               borderRadius: const BorderRadius.vertical(

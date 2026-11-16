@@ -10,6 +10,7 @@ import 'location_picker_page.dart';
 import 'screens/home_work_route_screen.dart';
 import 'theme/app_theme.dart';
 import 'widgets/glass_ui.dart';
+import 'widgets/futuristic_ui.dart';
 
 class SavedPlacesScreen extends StatelessWidget {
   const SavedPlacesScreen({super.key});
@@ -19,7 +20,7 @@ class SavedPlacesScreen extends StatelessWidget {
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
     if (uid == null) {
-      return AuroraBackground(
+      return OledBackdrop(
         child: Scaffold(
           backgroundColor: Colors.transparent,
           body: SafeArea(
@@ -78,7 +79,7 @@ class SavedPlacesScreen extends StatelessWidget {
       }
     }
 
-    return AuroraBackground(
+    return OledBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
@@ -218,7 +219,7 @@ class _PlaceTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final address = (place?['address'] ?? '').toString();
 
-    return GlassPanel(
+    return NeonCard(
       padding: const EdgeInsets.all(14),
       onTap: onTap,
       child: Row(
@@ -321,7 +322,7 @@ class _AddTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassPanel(
+    return NeonCard(
       padding: const EdgeInsets.all(14),
       onTap: onTap,
       child: Row(

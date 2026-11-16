@@ -33,6 +33,16 @@
          permission Android 8+ मा manifest मै घोषणा गर्नुपर्छ, नत्र
          install intent चुपचाप असफल/अस्वीकृत हुन्छ। -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- BATTERY-KILL FIX — live device testing (Realme/ColorOS) ले नै
+         पक्रिएको: sign-in सफल भएपछि app छोटो क्षणको लागि background/
+         launcher मा गए पनि, यो OS कै आफ्नै aggressive battery/background
+         app management ले पूरै Flutter process नै मार्छ (५ पटक लगातार
+         पक्रिएको — नयाँ PID सँगै cold-restart, जसले "login पछि फेरि
+         Welcome screen मा फर्कने" जस्तो देखाउँछ, जबकि sign-in आफैं
+         साँच्चै सफल भइसकेको हुन्छ)। standard Android battery-optimization
+         exemption (otp_verification_page.dart::_showSuccessThenPop मा
+         माग्ने) यो permission बिना काम गर्दैन। -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
@@ -40,6 +50,8 @@
         android:label="Sahyatri"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:largeHeap="true"
+        android:allowBackup="false"
         android:networkSecurityConfig="@xml/network_security_config">
         <!-- Google Maps (location picker) -->
         <meta-data
@@ -65,6 +77,17 @@
         <meta-data
             android:name="io.flutter.embedding.android.EnableImpeller"
             android:value="false"/>
+        <!-- AUTOFILL FIX — live device logcat ले नै पक्रिएको: OTP verify
+             साँच्चै सफल भएपछि (Firebase ले नै confirm गरेको) पनि, Android
+             कै आफ्नै system "Autofill UI" (autofill_dataset_picker) ले 6-PIN
+             box लाई login-form ठानेर बारम्बार window focus खोस्थ्यो — ठ्याक्कै
+             त्यही क्षणमा app ले success-pop navigation गर्नुपर्ने हुन्थ्यो।
+             `AutofillGroup` (Dart-side) ले मात्र पुगेन — यो OS-level
+             heuristic हो, पूरै Activity लाई नै autofill analysis बाट बाहिर
+             राख्दा मात्र भरपर्दो रूपमा रोकिन्छ। यो single-Activity Flutter
+             app मा कतै पनि native saved-password autofill चाहिने ठाउँ छैन
+             (Google Sign-In आफ्नै छुट्टै native flow प्रयोग गर्छ, यसले असर
+             पार्दैन)। -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -72,7 +95,8 @@
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:importantForAutofill="noExcludeDescendants">
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues

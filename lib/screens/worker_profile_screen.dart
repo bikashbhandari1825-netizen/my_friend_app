@@ -70,11 +70,29 @@ class WorkerProfileScreen extends StatelessWidget {
             final price = num.tryParse(priceStr) ?? 500;
 
             final currentUser = FirebaseAuth.instance.currentUser;
+            // CUSTOMER-NAME-EMPTY FIX — nearby_common.dart/service_map_screen.dart
+            // कै उस्तै जड: `??` ले खाली string लाई null ठान्दैन, र
+            // phone-auth-only प्रयोगकर्ताको email प्रायः खाली नै हुन्छ —
+            // त्यही बेला worker ले देख्ने card मा ग्राहकको नाम पूर्ण रूपमा
+            // खाली देखिन्थ्यो। अब Firestore `users/{uid}.name` बाट साँचो
+            // नाम (भए) प्राथमिकतामा।
+            String employerName = 'Employer';
+            if ((currentUser?.email ?? '').trim().isNotEmpty) {
+              employerName = currentUser!.email!.trim();
+            }
+            try {
+              final u = await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(currentUser?.uid)
+                  .get();
+              final n = (u.data()?['name'] ?? '').toString().trim();
+              if (n.isNotEmpty) employerName = n;
+            } catch (_) {}
 
             await FirebaseFirestore.instance.collection('serviceRequests').add({
               'workerUid': worker['uid'] ?? '',
               'employerUid': currentUser?.uid ?? '',
-              'employerName': currentUser?.email ?? 'Employer',
+              'employerName': employerName,
               'workerName': name,
               'service': service,
               'details': detailsController.text.trim(),
@@ -109,7 +127,6 @@ class WorkerProfileScreen extends StatelessWidget {
       ],
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -181,7 +198,8 @@ class WorkerProfileScreen extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(AppRadius.pill),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                          border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.14)),
                         ),
                         child: Text(S.serviceName(service),
                             style: const TextStyle(
@@ -202,7 +220,8 @@ class WorkerProfileScreen extends StatelessWidget {
                           borderRadius: const BorderRadius.vertical(
                               top: Radius.circular(28)),
                           border: Border(
-                            top: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+                            top: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.12)),
                           ),
                         ),
                         padding: const EdgeInsets.fromLTRB(20, 24, 20, 28),
@@ -213,9 +232,7 @@ class WorkerProfileScreen extends StatelessWidget {
                               children: [
                                 _StatTile(
                                   icon: Icons.work_rounded,
-                                  value: experience.isEmpty
-                                      ? '—'
-                                      : experience,
+                                  value: experience.isEmpty ? '—' : experience,
                                   label: S.experienceLabel,
                                 ),
                                 const SizedBox(width: 12),
@@ -248,7 +265,9 @@ class WorkerProfileScreen extends StatelessWidget {
                                 color: AppColors.kmTeal.withValues(alpha: 0.12),
                                 borderRadius:
                                     BorderRadius.circular(AppRadius.pill),
-                                border: Border.all(color: AppColors.kmTeal.withValues(alpha: 0.3)),
+                                border: Border.all(
+                                    color: AppColors.kmTeal
+                                        .withValues(alpha: 0.3)),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -288,7 +307,8 @@ class WorkerProfileScreen extends StatelessWidget {
                                   padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
                                     border: Border.all(
-                                        color: Colors.white.withValues(alpha: 0.1)),
+                                        color: Colors.white
+                                            .withValues(alpha: 0.1)),
                                     borderRadius:
                                         BorderRadius.circular(AppRadius.md),
                                   ),
@@ -385,9 +405,7 @@ class _ContactSection extends StatelessWidget {
             _ContactRow(
               icon: Icons.call_rounded,
               label: S.phone,
-              value: unlocked
-                  ? (phone.isEmpty ? '—' : phone)
-                  : '•••• ••• ••••',
+              value: unlocked ? (phone.isEmpty ? '—' : phone) : '•••• ••• ••••',
               locked: !unlocked,
               onTap: (unlocked && phone.isNotEmpty)
                   ? () => _launchTel(phone)
@@ -475,8 +493,7 @@ class _ContactRow extends StatelessWidget {
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    gradient:
-                        locked ? null : AppColors.kmCtaGradient,
+                    gradient: locked ? null : AppColors.kmCtaGradient,
                     color: locked ? Colors.white.withValues(alpha: 0.08) : null,
                     shape: BoxShape.circle,
                   ),
@@ -548,8 +565,7 @@ class _StatTile extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style:
-                    const TextStyle(fontSize: 11, color: AppColors.kmMuted)),
+                style: const TextStyle(fontSize: 11, color: AppColors.kmMuted)),
           ],
         ),
       ),

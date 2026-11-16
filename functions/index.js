@@ -24,6 +24,8 @@ const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const {onCall, HttpsError} = require("firebase-functions/v2/https");
 const {defineSecret} = require("firebase-functions/params");
 const admin = require("firebase-admin");
+const {enforceRateLimit} = require("./ratelimit");
+const {ENFORCE_APP_CHECK} = require("./appcheck");
 
 admin.initializeApp();
 
@@ -53,10 +55,19 @@ const MAPS_API_KEY = defineSecret("MAPS_API_KEY");
 const VALID_MODES = new Set(["driving", "walking", "bicycling"]);
 const OSRM_PROFILE = {driving: "driving", walking: "foot", bicycling: "cycling"};
 
-exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
+exports.getRoute = onCall({secrets: [MAPS_API_KEY], enforceAppCheck: ENFORCE_APP_CHECK}, async (request) => {
+  // पहिले यहाँ कुनै auth जाँच नै थिएन — जोकोहीले (app नै नखोलिकनै, project
+  // config मात्र भेटेर) यो function कल गरी Google Maps billing/quota दुरुपयोग
+  // गर्न सक्थ्यो। Firebase Auth ले नै हरेक साँचो app-user को call मा ID token
+  // (JWT) स्वतः जोड्ने भएकोले, real user लाई यसले कुनै असर पार्दैन।
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in required.");
+  }
+  await enforceRateLimit(request.auth.uid, "getRoute", 120);
   const {originLat, originLng, destLat, destLng} = request.data || {};
   const nums = [originLat, originLng, destLat, destLng];
-  if (nums.some((v) => typeof v !== "number" || Number.isNaN(v))) {
+  if (nums.some((v) => typeof v !== "number" || !Number.isFinite(v) ||
+      Math.abs(v) > 180)) {
     throw new HttpsError(
         "invalid-argument",
         "originLat, originLng, destLat, destLng (numbers) चाहिन्छ।",
@@ -77,16 +88,8 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
     const leg = route?.legs?.[0];
     const encoded = route?.overview_polyline?.points;
     if (encoded && leg) {
-      console.log("getRoute google source origin=", originLat, originLng,
-          "dest=", destLat, destLng, "km=", (leg.distance?.value || 0) / 1000,
-          "steps=", leg.steps?.length, "encodedLen=", encoded.length,
-          "summary=", route.summary, "polyline=", encoded);
-      console.log("getRoute step start/end points=", JSON.stringify(
-          (leg.steps || []).map((s) => ({
-            start: s.start_location, end: s.end_location,
-            instr: (s.html_instructions || "").replace(/<[^>]+>/g, ""),
-          })),
-      ));
+      // स्थान/मार्ग (प्रयोगकर्ताको आवागमन) लगमा नराख्ने — केवल स्रोत र दूरी।
+      console.log("getRoute google ok km=", (leg.distance?.value || 0) / 1000);
       return {
         polyline: encoded,
         km: (leg.distance?.value || 0) / 1000,
@@ -117,9 +120,7 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
     const body = await res.json();
     const route = body.routes?.[0];
     if (route?.geometry) {
-      console.log("getRoute osrm source origin=", originLat, originLng,
-          "dest=", destLat, destLng, "km=", (route.distance || 0) / 1000,
-          "encodedLen=", route.geometry.length);
+      console.log("getRoute osrm ok km=", (route.distance || 0) / 1000);
       return {
         polyline: route.geometry,
         km: (route.distance || 0) / 1000,
@@ -150,8 +151,14 @@ exports.getRoute = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
  * Nepal-नजिकका नतिजा प्राथमिकतामा राख्छ, तर बाहिरका पूर्ण रूपमा रोक्दैन —
  * ठ्याक्कै native Google Maps जस्तै global खोजी।
  */
-exports.geocodeSearch = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
-  const query = String(request.data?.query || "").trim();
+exports.geocodeSearch = onCall({secrets: [MAPS_API_KEY], enforceAppCheck: ENFORCE_APP_CHECK}, async (request) => {
+  // getRoute कै उस्तै — sign-in नगरी कसैले पनि यो function (र त्यसैसँगै
+  // Google Maps billing) कल गर्न नपाओस्।
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in required.");
+  }
+  await enforceRateLimit(request.auth.uid, "geocodeSearch", 60);
+  const query = String(request.data?.query || "").trim().slice(0, 200);
   if (query.length < 2) {
     throw new HttpsError("invalid-argument", "query (कम्तिमा २ अक्षर) चाहिन्छ।");
   }
@@ -206,8 +213,7 @@ exports.geocodeSearch = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
   };
 
   try {
-    console.log("geocodeSearch query:", query, "hasBias:", hasBias,
-        "biasLat:", biasLat, "biasLng:", biasLng);
+    // खोजी-शब्द र प्रयोगकर्ताको स्थान (bias) लगमा नराख्ने (गोपनीयता)।
     let body = await runGeocode(true);
     // Local-First Fallback — स्थानीय (bounds-सीमित) खोजीले केही नभेटे मात्र
     // (कहिल्यै त्यसैले सधैँ हुने होइन) फेरि सिधै bounds-रहित (फराकिलो/global)
@@ -217,8 +223,6 @@ exports.geocodeSearch = onCall({secrets: [MAPS_API_KEY]}, async (request) => {
       console.log("geocodeSearch local bounds empty — falling back to wider search");
       body = await runGeocode(false);
     }
-    console.log("geocodeSearch status:", body.status,
-        "topResult:", body.results?.[0]?.formatted_address);
     if (body.status !== "OK" && body.status !== "ZERO_RESULTS") {
       console.warn("Geocode non-OK:", body.status, body.error_message);
     }
@@ -307,3 +311,72 @@ exports.sendPushForNotification = onDocumentCreated(
 // doc — only transaction metadata (price, payment method, timestamps,
 // commission split) remains, which is exactly what accounting needs.
 // `reviews` docs were already permanent and are unaffected.
+
+/**
+ * Hotel room availability — कुनै कोठा-प्रकारका कति युनिट मितिको दायरामा
+ * अझै खाली छन्। पहिले client ले सिधै सबै `hotel_bookings` query गर्थ्यो
+ * (त्यसैले rules ले सबै signed-in user लाई सबै बुकिङ — guest नाम/फोन/
+ * इमेल समेत — पढ्न दिनुपर्थ्यो)। अब गन्ती यहीँ (Admin SDK) हुन्छ र client
+ * ले केवल संख्या मात्र पाउँछ, त्यसैले rules मा बुकिङ पढ्ने अधिकार कडा
+ * गर्न सकियो।
+ *
+ * Input:  {roomId, checkIn (epoch ms), checkOut (epoch ms), totalInventory?}
+ * Output: {remaining, total}
+ * `totalInventory` केवल `rooms/{roomId}` doc नभएको (seed/sample) कोठाको
+ * लागि fallback हो।
+ */
+exports.hotelRoomAvailability = onCall({enforceAppCheck: ENFORCE_APP_CHECK}, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in required.");
+  }
+  await enforceRateLimit(request.auth.uid, "hotelRoomAvailability", 60);
+  const data = request.data || {};
+  const roomId = data.roomId;
+  const checkIn = Number(data.checkIn);
+  const checkOut = Number(data.checkOut);
+  if (typeof roomId !== "string" || roomId.length === 0 ||
+      roomId.length > 200) {
+    throw new HttpsError("invalid-argument", "roomId is required.");
+  }
+  if (!Number.isFinite(checkIn) || !Number.isFinite(checkOut) ||
+      checkOut <= checkIn) {
+    throw new HttpsError("invalid-argument", "Invalid date range.");
+  }
+  const db = admin.firestore();
+  const roomSnap = await db.collection("rooms").doc(roomId).get();
+  let total;
+  if (roomSnap.exists) {
+    total = Number(roomSnap.get("totalInventory")) || 0;
+  } else {
+    total = Math.max(0, Math.min(1000, Number(data.totalInventory) || 0));
+  }
+  const snap = await db.collection("hotel_bookings")
+      .where("roomId", "==", roomId)
+      .where("status", "in", ["pending", "confirmed", "checked_in"])
+      .get();
+  let used = 0;
+  snap.forEach((doc) => {
+    const b = doc.data();
+    const ci = b.checkInDate && b.checkInDate.toMillis ?
+      b.checkInDate.toMillis() : null;
+    const co = b.checkOutDate && b.checkOutDate.toMillis ?
+      b.checkOutDate.toMillis() : null;
+    if (ci === null || co === null) return;
+    if (checkIn < co && checkOut > ci) {
+      used += Number(b.unitsCount) || 1;
+    }
+  });
+  return {remaining: Math.max(0, Math.min(total, total - used)), total};
+});
+
+// Salon / Beauty Appointment Booking — salon.js
+Object.assign(exports, require("./salon"));
+
+// Server-side job completion + wallet/commission — wallet.js
+Object.assign(exports, require("./wallet"));
+
+// राइड सुरु गर्ने OTP (सर्भर-साइड) — rideCode.js
+Object.assign(exports, require("./rideCode"));
+
+// म्याद सकिएका खुला अनुरोध सफा गर्ने — requestExpiry.js
+Object.assign(exports, require("./requestExpiry"));

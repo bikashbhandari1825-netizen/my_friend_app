@@ -2,7 +2,7 @@
   "name": "kaammitra-functions",
   "description": "Cloud Functions for KaamMitra — sends the FCM push behind every in-app notification doc.",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "dependencies": {

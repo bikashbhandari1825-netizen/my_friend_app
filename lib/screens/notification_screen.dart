@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/futuristic_ui.dart';
 import '../widgets/glass_ui.dart';
 import 'job_actions.dart';
+import '../widgets/skeleton.dart';
 
 // 8. Notifications Screen (Firestore सँग जोडिएको)
 class NotificationScreen extends StatelessWidget {
@@ -19,11 +21,7 @@ class NotificationScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    return AuroraBackground(
-      orbs: const [
-        KmOrb(Alignment.topRight, AppColors.kmOrangeDeep),
-        KmOrb(Alignment.bottomLeft, AppColors.kmPurple),
-      ],
+    return OledBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
@@ -47,9 +45,7 @@ class NotificationScreen extends StatelessWidget {
                         builder: (context, snapshot) {
                           if (snapshot.connectionState ==
                               ConnectionState.waiting) {
-                            return const Center(
-                                child: CircularProgressIndicator(
-                                    color: AppColors.kmTeal));
+                            return const SkeletonList();
                           }
                           if (!snapshot.hasData ||
                               snapshot.data!.docs.isEmpty) {
@@ -65,7 +61,7 @@ class NotificationScreen extends StatelessWidget {
                             padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
                             itemCount: docs.length,
                             separatorBuilder: (_, __) =>
-                                const SizedBox(height: 4),
+                                const SizedBox(height: 10),
                             itemBuilder: (context, index) {
                               final data = docs[index].data()
                                   as Map<String, dynamic>;
@@ -124,8 +120,7 @@ class NotificationScreen extends StatelessWidget {
   }
 }
 
-/// एउटा notification row — timeline glow ring node + title/body + समय,
-/// साइड-रेखा (मोकअप कै "nd"/timeline) सहित।
+/// एउटा notification row — neon-glass card; unread मा teal चमक र बिन्दु।
 class _NotifRow extends StatelessWidget {
   final String title;
   final String body;
@@ -148,89 +143,83 @@ class _NotifRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ringColor = unread ? AppColors.kmPurple : AppColors.kmTeal;
-    return InkWell(
+    final ring = unread ? kNeonTeal : kNeonViolet;
+    return NeonCard(
+      accent: ring,
       onTap: onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 46,
-                child: Stack(
-                  alignment: Alignment.topCenter,
+      padding: const EdgeInsets.all(13),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: ring.withValues(alpha: 0.10),
+              border: Border.all(color: ring.withValues(alpha: 0.6)),
+              boxShadow: [
+                BoxShadow(
+                    color: ring.withValues(alpha: unread ? 0.4 : 0.15),
+                    blurRadius: 14),
+              ],
+            ),
+            child: Icon(
+              unread
+                  ? Icons.notifications_active_rounded
+                  : Icons.notifications_none_rounded,
+              size: 20,
+              color: ring,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    Positioned(
-                      top: first ? 23 : 0,
-                      bottom: last ? 23 : 0,
-                      child: Container(width: 2, color: Colors.white12),
+                    Expanded(
+                      child: Text(title,
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 15.5,
+                              fontWeight:
+                                  unread ? FontWeight.w800 : FontWeight.w600)),
                     ),
-                    Container(
-                      width: 46,
-                      height: 46,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: AppColors.kmSurface,
-                        border: Border.all(
-                            color: ringColor.withValues(alpha: 0.55)),
-                        boxShadow: [
-                          BoxShadow(
-                              color: ringColor.withValues(alpha: 0.3),
-                              blurRadius: 16),
-                        ],
-                      ),
-                      child: Icon(
-                        unread
-                            ? Icons.videocam_rounded
-                            : Icons.call_rounded,
-                        size: 18,
-                        color: ringColor,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 4, bottom: 8),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(title,
-                                style: TextStyle(
-                                    color: AppColors.kmText,
-                                    fontSize: 16,
-                                    fontWeight: unread
-                                        ? FontWeight.w800
-                                        : FontWeight.w700)),
-                            const SizedBox(height: 3),
-                            Text(body,
-                                style: const TextStyle(
-                                    color: AppColors.kmMuted, fontSize: 13)),
+                    if (unread)
+                      Container(
+                        width: 9,
+                        height: 9,
+                        margin: const EdgeInsets.only(left: 6),
+                        decoration: BoxDecoration(
+                          color: kNeonTeal,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                                color: kNeonTeal.withValues(alpha: 0.7),
+                                blurRadius: 8),
                           ],
                         ),
                       ),
-                      if (time.isNotEmpty)
-                        Text(time,
-                            style: const TextStyle(
-                                color: AppColors.kmText,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700)),
-                    ],
-                  ),
+                  ],
                 ),
-              ),
-            ],
+                const SizedBox(height: 4),
+                Text(body,
+                    style: const TextStyle(
+                        color: AppColors.kmMuted, fontSize: 13, height: 1.3)),
+                if (time.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(time,
+                      style: TextStyle(
+                          color: ring.withValues(alpha: 0.85),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

@@ -1,0 +1,14 @@
+# Copy this file to `android/key.properties` (same folder) and fill in your
+# own release keystore details. `key.properties` itself is gitignored — it
+# must NEVER be committed. Generate the keystore yourself with:
+#
+#   keytool -genkey -v -keystore ~/upload-keystore.jks -keyalg RSA \
+#     -keysize 2048 -validity 10000 -alias upload
+#
+# Keep that .jks file and these passwords somewhere safe outside the repo —
+# losing them means you can never publish an update to this app listing again.
+
+storePassword=REPLACE_ME
+keyPassword=REPLACE_ME
+keyAlias=upload
+storeFile=/absolute/path/to/upload-keystore.jks

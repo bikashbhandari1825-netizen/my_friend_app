@@ -1,8 +1,9 @@
 // onboarding/onboarding_gate.dart
 //
-// एप पहिलोपटक खोल्दा मात्र देखिने ३-चरण gate — भाषा छनोट →
-// [OnboardingScreen] (intro slides) → अन्त्यमा [PhoneLandingPage]। दुवै चरण
-// आ-आफ्नै SharedPreferences flag मा save हुन्छन्, अर्को पटकदेखि सिधै
+// एप पहिलोपटक खोल्दा मात्र देखिने ४-चरण gate — [MascotIntroScreen] (२-स्लाइड
+// mascot illustration carousel) → भाषा छनोट → [OnboardingScreen] (3-slide
+// feature carousel) → अन्त्यमा [PhoneLandingPage]। तीनै चरण आ-आफ्नै
+// SharedPreferences flag मा save हुन्छन्, अर्को पटकदेखि सिधै
 // [PhoneLandingPage] (फोन नम्बर/OTP login) मै लैजान्छ। कुनै auth/OTP logic
 // यहाँ छैन।
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../auth/phone_landing_page.dart';
 import 'language_selection_screen.dart';
+import 'mascot_intro_screen.dart';
 import 'onboarding_screen.dart';
 
 class OnboardingGate extends StatefulWidget {
@@ -20,9 +22,11 @@ class OnboardingGate extends StatefulWidget {
 }
 
 class _OnboardingGateState extends State<OnboardingGate> {
+  static const _kMascotSeen = 'onboarding.mascotSeen';
   static const _kLanguageChosen = 'onboarding.languageChosen';
   static const _kSeenOnboarding = 'onboarding.seen';
 
+  bool? _mascotSeen;
   bool? _languageChosen;
   bool? _seen;
 
@@ -35,10 +39,12 @@ class _OnboardingGateState extends State<OnboardingGate> {
   Future<void> _load() async {
     try {
       final p = await SharedPreferences.getInstance();
+      final mascotSeen = p.getBool(_kMascotSeen) ?? false;
       final languageChosen = p.getBool(_kLanguageChosen) ?? false;
       final seen = p.getBool(_kSeenOnboarding) ?? false;
       if (mounted) {
         setState(() {
+          _mascotSeen = mascotSeen;
           _languageChosen = languageChosen;
           _seen = seen;
         });
@@ -46,11 +52,20 @@ class _OnboardingGateState extends State<OnboardingGate> {
     } catch (_) {
       if (mounted) {
         setState(() {
+          _mascotSeen = true;
           _languageChosen = true;
           _seen = true;
         });
       }
     }
+  }
+
+  Future<void> _finishMascotIntro() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(_kMascotSeen, true);
+    } catch (_) {}
+    if (mounted) setState(() => _mascotSeen = true);
   }
 
   Future<void> _chooseLanguage() async {
@@ -71,11 +86,14 @@ class _OnboardingGateState extends State<OnboardingGate> {
 
   @override
   Widget build(BuildContext context) {
-    if (_languageChosen == null || _seen == null) {
+    if (_mascotSeen == null || _languageChosen == null || _seen == null) {
       return const Scaffold(
         backgroundColor: Color(0xFF07060D),
         body: SizedBox.shrink(),
       );
+    }
+    if (_mascotSeen == false) {
+      return MascotIntroScreen(onFinish: _finishMascotIntro);
     }
     if (_languageChosen == false) {
       return LanguageSelectionScreen(onNext: _chooseLanguage);

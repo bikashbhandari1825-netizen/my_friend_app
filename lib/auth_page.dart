@@ -1,6 +1,6 @@
 // auth_page.dart
+import 'widgets/glass_ui.dart';
 import 'dart:async' show TimeoutException;
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -421,9 +421,7 @@ class _AuthPageState extends State<AuthPage> {
                   // २. Frosted-glass login card
                   ClipRRect(
                     borderRadius: BorderRadius.circular(24),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                      child: Container(
+                    child: glassBackdrop(sigma: 18, child: Container(
                         padding: const EdgeInsets.all(22),
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.14),

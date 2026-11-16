@@ -14,9 +14,11 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/futuristic_ui.dart';
 import '../widgets/glass_ui.dart';
 import 'job_actions.dart';
 import 'nearby_common.dart';
+import 'wallet_screen.dart';
 
 class JobsMapLayer extends StatefulWidget {
   final double lat;
@@ -24,6 +26,11 @@ class JobsMapLayer extends StatefulWidget {
   final int? radiusKm;
   final String trade; // '__mine__' | '__all__' | service name
   final String myService;
+
+  /// Wallet Commission Debt Gate — widgets/complete_job_sheet.dart::
+  /// _confirm()/admin_settlement_screen.dart::_markSettled() ले नै
+  /// गणना/लेख्छन्। false भए Accept बटन disable हुन्छ।
+  final bool myEligible;
 
   /// Map को तल्लो किनारमा कति ठाउँ छोप्ने (draggable sheet ले) — recentre
   /// FAB त्यसमाथि राख्न, र camera padding मिलाउन।
@@ -40,6 +47,7 @@ class JobsMapLayer extends StatefulWidget {
     required this.radiusKm,
     required this.trade,
     required this.myService,
+    this.myEligible = true,
     this.bottomInset = 0,
     this.cancelCount = 0,
   });
@@ -159,6 +167,7 @@ class _JobsMapLayerState extends State<JobsMapLayer> {
         data: data,
         distanceKm: km,
         myService: widget.myService,
+        myEligible: widget.myEligible,
         // sheet बन्द भएपछि पनि ScaffoldMessenger/Navigator चाहिने काम
         // (accept/counter) यही stable, कहिल्यै deactivate नहुने context
         // मार्फत गर्ने — sheet आफ्नै context pop भएलगत्तै अमान्य हुन्छ।
@@ -183,6 +192,7 @@ class _JobsMapLayerState extends State<JobsMapLayer> {
                     target: LatLng(widget.lat, widget.lng),
                     zoom: 13.5,
                   ),
+                  mapId: kCloudMapId,
                   onMapCreated: (c) {
                     _map = c;
                     if (!_centeredOnce) _recentre();
@@ -219,6 +229,7 @@ class _JobMapSheet extends StatelessWidget {
   final Map<String, dynamic> data;
   final double distanceKm;
   final String myService;
+  final bool myEligible;
   final BuildContext outerContext;
 
   const _JobMapSheet({
@@ -226,6 +237,7 @@ class _JobMapSheet extends StatelessWidget {
     required this.data,
     required this.distanceKm,
     required this.myService,
+    this.myEligible = true,
     required this.outerContext,
   });
 
@@ -237,6 +249,8 @@ class _JobMapSheet extends StatelessWidget {
     final budget = data['proposedPrice'];
     final skillMismatch = myService.isNotEmpty &&
         myService.toLowerCase() != service.toLowerCase();
+    final walletBlocked = !myEligible;
+    final blocked = skillMismatch || walletBlocked;
 
     return Padding(
       padding: const EdgeInsets.all(12),
@@ -257,12 +271,8 @@ class _JobMapSheet extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                   ),
                   clipBehavior: Clip.antiAlias,
-                  child: Image.asset(
-                    serviceImageFor(service),
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Icon(serviceIconFor(service),
-                        color: AppColors.kmOrange),
-                  ),
+                  child: ServicePhotoTile(
+                      service: service, iconColor: AppColors.kmOrange),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -333,81 +343,72 @@ class _JobMapSheet extends StatelessWidget {
                   ),
                 ],
               ),
+            ] else if (walletBlocked) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const Icon(Icons.account_balance_wallet_rounded,
+                      size: 14, color: AppColors.kmRose),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(S.walletBlockedWarning,
+                        style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.kmRose)),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      Navigator.push(outerContext, MaterialPageRoute(
+                          builder: (_) => const WalletScreen()));
+                    },
+                    child: Text(S.topUpLabel),
+                  ),
+                ],
+              ),
             ],
             const SizedBox(height: 14),
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton(
-                    onPressed: () {
+                  child: NeonActionButton(
+                    label: S.decline,
+                    color: kNeonRose,
+                    onTap: () {
                       declineBroadcastJob(docId);
                       Navigator.pop(context);
                     },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.kmRose,
-                      side: BorderSide(color: AppColors.kmRose),
-                      padding: const EdgeInsets.symmetric(vertical: 11),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(999)),
-                    ),
-                    child: Text(S.decline),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: OutlinedButton(
-                    onPressed: skillMismatch
+                  child: NeonActionButton(
+                    label: S.offerPrice,
+                    color: kNeonBlue,
+                    onTap: blocked
                         ? null
                         : () {
                             Navigator.pop(context);
                             counterBroadcastJob(outerContext, docId, data,
                                 myService: myService);
                           },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.kmOrange,
-                      side: BorderSide(color: AppColors.kmOrange),
-                      padding: const EdgeInsets.symmetric(vertical: 11),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(999)),
-                    ),
-                    child: Text(S.offerPrice, textAlign: TextAlign.center),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: skillMismatch ? null : AppColors.kmCtaGradient,
-                      color: skillMismatch
-                          ? Colors.white.withValues(alpha: 0.08)
-                          : null,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Material(
-                      type: MaterialType.transparency,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(999),
-                        onTap: skillMismatch
-                            ? null
-                            : () {
-                                Navigator.pop(context);
-                                acceptBroadcastJob(outerContext, docId, data,
-                                    myService: myService);
-                              },
-                        child: Padding(
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 11),
-                          child: Center(
-                            child: Text(S.accept,
-                                style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    color: skillMismatch
-                                        ? AppColors.kmMuted
-                                        : AppColors.kmInk)),
-                          ),
-                        ),
-                      ),
-                    ),
+                  child: NeonActionButton(
+                    label: S.accept,
+                    color: kNeonTeal,
+                    color2: kNeonViolet,
+                    filled: true,
+                    onTap: blocked
+                        ? null
+                        : () {
+                            Navigator.pop(context);
+                            acceptBroadcastJob(outerContext, docId, data,
+                                myService: myService);
+                          },
                   ),
                 ),
               ],

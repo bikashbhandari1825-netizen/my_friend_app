@@ -55,9 +55,8 @@ class PhoneLandingPage extends StatelessWidget {
                         fontWeight: FontWeight.w500)),
                 const Spacer(flex: 3),
                 // फोन नम्बर (OTP) मात्र — साधारण user को खाता बनाउने/लगइन
-                // गर्ने एकमात्र बाटो। बटन थिचेपछिको वास्तविक व्यवहार
-                // (test-mode बनाम साँचो SMS) `kUseRealPhoneSms` ले नियन्त्रण
-                // गर्छ — phone_input_page.dart हेर्नुहोस्।
+                // गर्ने एकमात्र बाटो। बटन थिचेपछि साँचो Firebase Phone Auth
+                // (SMS + reCAPTCHA) चल्छ — phone_input_page.dart हेर्नुहोस्।
                 KmCtaButton(
                   label: S.continueWithPhone,
                   icon: Icons.phone_iphone_rounded,

@@ -1,10 +1,13 @@
 // settings_page.dart
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:local_auth/local_auth.dart';
 import 'app_globals.dart';
 import 'auth/dev_login.dart';
 import 'l10n/strings.dart';
 import 'main.dart'; // themeNotifier / localeNotifier प्रयोग गर्नको लागि
+import 'services/hotel_partner_service.dart';
 import 'theme/app_theme.dart';
 import 'widgets/glass_ui.dart';
 
@@ -203,6 +206,47 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  // Biometric/Passkey toggle — ऐच्छिक, जहिले पनि Settings बाट on/off गर्न
+  // मिल्ने (auth/passkey_setup_page.dart कै OTP-पछिको ऐच्छिक step सँगै
+  // यही एउटै global state साझा गरेर)। On गर्दा device ले साँच्चै
+  // biometric support गर्छ/गर्दैन भनी पुष्टि गर्न एकपटक authenticate
+  // गरिन्छ — Off गर्न भने पुष्टि चाहिँदैन।
+  Future<void> _onBiometricToggle(bool v) async {
+    if (!v) {
+      biometricEnabled.value = false;
+      _savedToast();
+      return;
+    }
+    try {
+      final auth = LocalAuthentication();
+      final supported = await auth.isDeviceSupported();
+      final canCheck = await auth.canCheckBiometrics;
+      if (!supported && !canCheck) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(S.biometricUnsupported)),
+        );
+        return;
+      }
+      final ok = await auth.authenticate(
+        localizedReason: 'Confirm your identity to enable fast, secure login',
+        options: const AuthenticationOptions(
+          biometricOnly: false,
+          stickyAuth: true,
+        ),
+      );
+      if (ok) {
+        biometricEnabled.value = true;
+        _savedToast();
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(S.biometricUnsupported)),
+      );
+    }
+  }
+
   String _themeModeLabel() {
     switch (themeNotifier.value) {
       case ThemeMode.light:
@@ -294,6 +338,58 @@ class _SettingsPageState extends State<SettingsPage> {
                               },
                             ),
                           ),
+                          const SizedBox(height: 10),
+                          ValueListenableBuilder<bool>(
+                            valueListenable: biometricEnabled,
+                            builder: (context, on, _) => KmListTile(
+                              icon: Icons.fingerprint_rounded,
+                              iconBg: KmListTile.gradients[3],
+                              title: S.biometricLoginLabel,
+                              subtitle:
+                                  on ? S.notificationsOn : S.notificationsOff,
+                              trailing: Switch(
+                                value: on,
+                                activeThumbColor: AppColors.kmTeal,
+                                onChanged: _onBiometricToggle,
+                              ),
+                              onTap: () => _onBiometricToggle(!on),
+                            ),
+                          ),
+                          // Hotel Partner Registration/Dashboard access अब
+                          // Profile screen मा prominent banner को रूपमा
+                          // (profile_screen.dart::_HotelPartnerBanner हेर्नुहोस्)
+                          // — यहाँ Settings भित्र गहिरो लुकाइएको थिएन। यो demo
+                          // shortcut (साँचो registration होइन, सबै mock होटल
+                          // self-assign) भने यथावत् यहीं।
+                          StreamBuilder<List<String>>(
+                            stream: myPartnerHotelIds(),
+                            builder: (context, snap) {
+                              final ids = snap.data ?? const [];
+                              // Demo shortcut सबै sample होटल self-assign गर्थ्यो
+                              // — security hole (firestore.rules ले अब admin
+                              // बाहेक रोक्छ) — त्यसैले release मा कहिल्यै नदेखिने।
+                              if (!kDebugMode || ids.isNotEmpty) {
+                                return const SizedBox.shrink();
+                              }
+                              return Column(
+                                children: [
+                                  const KmSectionLabel('Hotel Partner'),
+                                  const SizedBox(height: 10),
+                                  KmListTile(
+                                    icon: Icons.storefront_rounded,
+                                    iconBg: KmListTile.gradients[3],
+                                    title: 'Become a Hotel Partner (Demo)',
+                                    subtitle:
+                                        'Self-service demo — assigns all sample hotels to your account',
+                                    onTap: () async {
+                                      await becomeDemoPartner();
+                                      _savedToast();
+                                    },
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
                           KmSectionLabel(S.settingsAboutSection),
                           const SizedBox(height: 10),
                           KmListTile(
@@ -316,7 +412,8 @@ class _SettingsPageState extends State<SettingsPage> {
                             iconBg: KmListTile.gradients[1],
                             title: S.deleteAccount,
                             titleColor: AppColors.kmRose,
-                            borderColor: AppColors.kmRoseSoft.withValues(alpha: 0.5),
+                            borderColor:
+                                AppColors.kmRoseSoft.withValues(alpha: 0.5),
                             fillColor: AppColors.kmPink.withValues(alpha: 0.08),
                             onTap: _confirmDeleteAccount,
                           ),

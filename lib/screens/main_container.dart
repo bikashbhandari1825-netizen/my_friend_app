@@ -17,6 +17,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../app_globals.dart';
 import '../l10n/strings.dart';
 import '../services/call_service.dart';
+import '../services/online_location_service.dart';
 import '../services/presence_service.dart';
 import '../theme/app_theme.dart';
 import '../watchlist_screen.dart';
@@ -24,12 +25,10 @@ import '../widgets/active_job_bar.dart';
 import '../widgets/glass_ui.dart';
 import '../widgets/job_alert_sound.dart';
 import '../widgets/spring_tap.dart';
-import '../worker_requests_page.dart';
 import 'bookings_screen.dart';
 import 'call_screen.dart';
 import 'home_screen.dart';
-import 'job_actions.dart' show openJobRoute;
-import 'job_feed_screen.dart';
+import 'job_actions.dart' show openJobRoute, takeCancelNoticeReason;
 import 'messages_screen.dart';
 import 'profile_screen.dart';
 import 'request_tracking_screen.dart';
@@ -43,7 +42,6 @@ class MainContainer extends StatefulWidget {
 
 class _MainContainerState extends State<MainContainer> {
   int _currentIndex = 0;
-  String? _role; // null = अझै load हुँदै
   bool _loading = true;
 
   // negotiation (counter-offer) अलर्ट — role थाहा भएपछि एकपटक मात्र subscribe
@@ -54,6 +52,19 @@ class _MainContainerState extends State<MainContainer> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _negotiationSub;
   final Set<String> _waitingOnMeIds = {};
   bool _firstNegotiationSnapshot = true;
+
+  // NOTE: यहाँ पहिले driver आफैंले पठाएका ride-offer हरूमध्ये passenger ले
+  // counter गरेकालाई tab-independent देखाउने watcher थियो
+  // (`collectionGroup('rideOffers').where('workerUid', ...)`)। त्यो हटाइयो
+  // — Firestore ले यो query लाई rules-स्तरमा कहिल्यै अनुमति दिएन (live
+  // device मा दोहोरिएर PERMISSION_DENIED), र त्यो अनुमति दिने एकमात्र
+  // सुरक्षित तरिका (`get()`-विनाको छुट्टै `allow list`) ले employer-तर्फको
+  // *पहिल्यैदेखि काम गरिरहेको* "मेरो ride मा भएका सबै प्रतिस्पर्धी offer
+  // हेर्ने" feature नै भत्काउँथ्यो (firestore.rules मा नै त्यो जोखिम
+  // नलिने निर्णयको टिप्पणी हेर्नुहोस्)। driver ले आफ्नो offer card
+  // त्यही Job Feed tab मा भएसम्म अझै live देखिन्छ
+  // (`job_feed_screen.dart::_SendRideOfferButtonState._offerStream`) —
+  // अन्तै गए in-app notification मात्र, पहिले जस्तै।
 
   // सक्रिय काम (accepted/confirmed/in_progress) भेटिनेबित्तिकै — कुन tab मा
   // भए पनि, तुरुन्तै route-map screen खोल्ने (InDrive/Uber जस्तै, tap गर्नु
@@ -89,10 +100,56 @@ class _MainContainerState extends State<MainContainer> {
   // वटा भए पनि) ती हरेकको `calls/{id}` doc सुन्ने, ringing भेटिए जुनसुकै
   // tab/screen मा भए पनि तुरुन्तै incoming-call dialog देखाउने।
   String _myName = '';
-  final Map<String, StreamSubscription<Map<String, dynamic>?>>
-      _callWatchers = {};
+  final Map<String, StreamSubscription<Map<String, dynamic>?>> _callWatchers =
+      {};
   final Set<String> _ringingHandledFor = {};
   bool _inCall = false;
+
+  // Hotel Booking Call-Ring Fix — माथिको ride/job watcher ले मात्र
+  // `_syncCallWatchers` चलाउँथ्यो, confirmed/checked-in hotel booking कहिल्यै
+  // होइन — त्यसैले त्यस्तो booking मा गरिएको Call/Video कल अर्को पक्ष (guest
+  // वा hotel partner, दुवैतिरबाट) को फोनमा foreground मा कहिल्यै रिङ
+  // हुँदैनथ्यो ("Calling…" मै अड्किने गुनासोको साँचो जड — push notification
+  // tap बाटै मात्र जोडिन्थ्यो, app खुला छँदा होइन)। अब ride/job + hotel-guest
+  // + hotel-partner तीनै source लाई संयुक्त गरेर एकैचोटि `_syncCallWatchers`
+  // लाई दिने (हेर्नुहोस् `_recomputeCallWatchers`)।
+  Set<String> _activeRideCallIds = {};
+  Set<String> _hotelGuestCallIds = {};
+  Set<String> _hotelPartnerCallIds = {};
+  // Salon ग्राहक↔मालिक chat (`salon_chats`) — दुवै पक्षको लागि एउटै query
+  // (`participants` मा आफ्नो uid)।
+  Set<String> _salonChatCallIds = {};
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _salonChatCallSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _hotelGuestCallSub;
+  // Partner तर्फ प्रति-होटल एउटा equality (`hotelId == X`) listener — firestore
+  // rules ले `hotel_bookings` पढ्न partner लाई त्यो होटल चिन्ने हिसाबले मात्र
+  // दिने भएकोले `whereIn` (धेरै होटल एकैचोटि) query rule-ले प्रमाणित गर्न
+  // सक्दैन।
+  final List<StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>
+      _hotelPartnerCallSubs = [];
+  final Map<String, Set<String>> _hotelPartnerCallIdsByHotel = {};
+
+  void _recomputeCallWatchers() {
+    _syncCallWatchers({
+      ..._activeRideCallIds,
+      ..._hotelGuestCallIds,
+      ..._hotelPartnerCallIds,
+      ..._salonChatCallIds,
+    });
+  }
+
+  void _startSalonChatCallWatcher(String uid) {
+    _salonChatCallSub?.cancel();
+    _salonChatCallSub = FirebaseFirestore.instance
+        .collection('salon_chats')
+        .where('participants', arrayContains: uid)
+        .limit(50)
+        .snapshots()
+        .listen((snap) {
+      _salonChatCallIds = snap.docs.map((d) => d.id).toSet();
+      _recomputeCallWatchers();
+    }, onError: (_) {});
+  }
 
   @override
   void initState() {
@@ -100,17 +157,35 @@ class _MainContainerState extends State<MainContainer> {
     _loadRole();
     _loadMyName();
     PresenceService.start();
+    OnlineLocationService.start();
+    // Worker/Driver Dashboard (job_feed_screen.dart) कै आफ्नै bottom nav बाट
+    // "Home" (वा अरू कुनै ट्याब) थिचेपछि यहाँ फर्कँदा सही tab मै पुगोस् भनेर
+    // (app_globals.dart::requestedMainTabIndex हेर्नुहोस्)।
+    requestedMainTabIndex.addListener(_onRequestedTabChanged);
+  }
+
+  void _onRequestedTabChanged() {
+    if (!mounted) return;
+    final target = requestedMainTabIndex.value;
+    if (target != _currentIndex) setState(() => _currentIndex = target);
   }
 
   @override
   void dispose() {
+    requestedMainTabIndex.removeListener(_onRequestedTabChanged);
     _negotiationSub?.cancel();
     _activeJobSub?.cancel();
     _workerPosSub?.cancel();
+    _hotelGuestCallSub?.cancel();
+    _salonChatCallSub?.cancel();
+    for (final s in _hotelPartnerCallSubs) {
+      s.cancel();
+    }
     for (final s in _callWatchers.values) {
       s.cancel();
     }
     PresenceService.stop();
+    OnlineLocationService.stop();
     super.dispose();
   }
 
@@ -319,12 +394,13 @@ class _MainContainerState extends State<MainContainer> {
       role = (snap.data()?['role'] ?? 'employer').toString();
     } catch (_) {}
     if (!mounted) return;
-    setState(() {
-      _role = role;
-      _loading = false;
-    });
+    setState(() => _loading = false);
     _startNegotiationWatcher(uid, role == 'worker');
     _startActiveJobWatcher(uid, role == 'worker');
+    if (uid != null) {
+      _startHotelBookingCallWatchers(uid);
+      _startSalonChatCallWatcher(uid);
+    }
   }
 
   /// employer/worker दुवैका लागि — आफ्नो कुनै काम accepted/confirmed/
@@ -362,9 +438,25 @@ class _MainContainerState extends State<MainContainer> {
       _firstActiveJobSnapshot = false;
 
       if (activeDocs.isEmpty) {
+        // Cross-Screen Cancellation Notice — अर्को पक्षले (employer/worker
+        // जो भए पनि) cancel गर्दा `deleteCancelledBooking()` ले सिधै doc
+        // नै मेटाइदिन्छ (कुनै 'cancelled' status होइन) — यो watcher ले
+        // त्यही क्षणमा नै `activeDocs.isEmpty` देख्छ र माथिकै pinned
+        // bar/badge/location-tracking सबै सफा गर्छ, तर पहिले यहाँ कुनै
+        // देखिने संकेत (toast/dialog) थिएन — `job_route_screen.dart` मै
+        // भएको बेला मात्र त्यहाँको आफ्नै dialog देखिन्थ्यो। अर्को पक्ष
+        // Driver/Earnings dashboard, Home, वा जुनसुकै अर्को screen मा भए
+        // active-job indicator चुपचाप हराउँथ्यो — "मेरो तर्फ cancel
+        // भएकै देखिएन" भन्ने गुनासोको साँचो जड। अब यहीं (app-shell तहमै,
+        // कुन screen मा छु भन्दा स्वतन्त्र) एकपटक मात्र doc साँच्चै मेटिएको
+        // हो (cancel) वा होइन (जस्तै स्वाभाविक रूपमा 'completed' मा गएर
+        // active-set बाट बाहिरिएको) जाँचेर, मेटिएकोमा मात्र global
+        // SnackBar।
+        final previouslyActive = Set<String>.from(_knownActiveJobIds);
         _knownActiveJobIds.clear();
         _autoOpenedForJobId = null;
-        _syncCallWatchers(const {});
+        _activeRideCallIds = const {};
+        _recomputeCallWatchers();
         if (isWorker) _stopWorkerLocationTracking();
         if (mounted && (_pinnedActiveJobId != null || _activeJobCount != 0)) {
           setState(() {
@@ -373,9 +465,13 @@ class _MainContainerState extends State<MainContainer> {
             _activeJobCount = 0;
           });
         }
+        if (previouslyActive.isNotEmpty) {
+          unawaited(_notifyIfCancelledElsewhere(previouslyActive, isWorker));
+        }
         return;
       }
-      _syncCallWatchers(activeIds);
+      _activeRideCallIds = activeIds;
+      _recomputeCallWatchers();
 
       // pinned ActiveJobBar + Bookings tab badge — सधैँ सबैभन्दा पछिल्लो
       // सक्रिय काम, cold start मा र नयाँ थपिँदा दुवैमा (माथि नै sort भइसकेको)।
@@ -439,6 +535,93 @@ class _MainContainerState extends State<MainContainer> {
     });
   }
 
+  /// माथिको watcher ले active-set बाट बाहिरिएको हरेक doc एक-एक गरेर साँच्चै
+  /// मेटिएको (cancel) हो कि अरू कुनै सामान्य कारण (जस्तै 'completed' मा
+  /// पुगेर status नै active-set बाहिर गएको) हो भनेर एकपटक (one-shot `.get()`,
+  /// कुनै थप listener होइन) जाँच्छ — मेटिएकोमा मात्र, जुनसुकै screen/tab मा
+  /// भए पनि, एउटै प्रस्ट SnackBar।
+  Future<void> _notifyIfCancelledElsewhere(
+      Set<String> previouslyActiveIds, bool isWorker) async {
+    for (final id in previouslyActiveIds) {
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('serviceRequests')
+            .doc(id)
+            .get();
+        if (!snap.exists) {
+          if (!mounted) return;
+          // Role-Aware Confirmation — worker-तर्फ ठ्याक्कै "cancelled by
+          // the employer" भन्ने स्पष्ट शब्द (directive कै अनुरोध अनुसार,
+          // `S.taskCancelledByEmployerBody` — job_route_screen.dart कै
+          // भित्रैको dialog ले पनि उही शब्द प्रयोग गर्छ, यहाँ केवल त्यही
+          // screen मा नभई अन्त कतै भए पनि उस्तै शब्द देखियोस् भनेर)।
+          // employer-तर्फ (worker ले cancel गर्दा) भने सोही-अनुरूप साँचो
+          // "cancelled by the worker" भन्ने छुट्टै string अहिलेसम्म
+          // अवस्थित छैन — त्यो दिशाको लागि request_tracking_screen.dart
+          // कै उस्तै प्रमाणित generic `S.requestCancelled` मा नै।
+          // cancel गर्नेले छानेको कारण (भए) सँगै देखाउने।
+          final reason = await takeCancelNoticeReason(id);
+          if (!mounted) return;
+          final base =
+              isWorker ? S.taskCancelledByEmployerBody : S.requestCancelled;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              duration: const Duration(seconds: 6),
+              content: Text(reason == null
+                  ? base
+                  : '$base\n${S.cancelReasonLabel}: $reason')));
+          return; // एकैचोटि धेरै job सकिए पनि एउटा सूचना नै पर्याप्त।
+        }
+      } catch (_) {
+        // best-effort — Firestore अफलाइन/अस्थायी त्रुटि भए पनि चुपचाप।
+      }
+    }
+  }
+
+  /// Hotel Booking Call-Ring Fix — माथिको ride/job watcher कै उस्तै
+  /// tab-independent shell-level pattern, `hotel_bookings` का लागि।
+  /// Guest-तर्फ (आफैंले बुक गरेको) र partner-तर्फ (आफूले managed गर्ने
+  /// होटलको), दुवै एकैचोटि (एउटै user guest र partner दुवै हुन सक्ने
+  /// भएकोले) सुरु गरिन्छ। Communication Never Locks — यहाँ *कुनै* status
+  /// filter छैन (पहिले `kActiveHotelBookingStatuses` मात्र थियो, completed/
+  /// cancelled भइसकेको booking को कल कहिल्यै सुनिँदैनथ्यो) — booking जे
+  /// स्थितिमा भए पनि त्यसको `calls/{bookingId}` सधैं सुनिन्छ। कुनै
+  /// auto-navigate छैन (ride/job watcher भन्दा फरक) — केवल
+  /// `_recomputeCallWatchers` लाई खुवाउने मात्र हो।
+  void _startHotelBookingCallWatchers(String uid) {
+    _hotelGuestCallSub = FirebaseFirestore.instance
+        .collection('hotel_bookings')
+        .where('userId', isEqualTo: uid)
+        .snapshots()
+        .listen((snap) {
+      _hotelGuestCallIds = snap.docs.map((d) => d.id).toSet();
+      _recomputeCallWatchers();
+    });
+
+    // "कुन होटल मैले managed गर्छु" (`users/{uid}.partnerHotelIds`) एकपटक
+    // मात्र पढ्ने (negotiation/active-job watcher हरू कै उस्तै "role
+    // एकपटक मात्र read" pattern)।
+    FirebaseFirestore.instance.collection('users').doc(uid).get().then((u) {
+      if (!mounted) return;
+      final hotelIds = List<String>.from(
+          u.data()?['partnerHotelIds'] as List? ?? const []);
+      if (hotelIds.isEmpty) return;
+      for (final hotelId in hotelIds.take(10)) {
+        _hotelPartnerCallSubs.add(FirebaseFirestore.instance
+            .collection('hotel_bookings')
+            .where('hotelId', isEqualTo: hotelId)
+            .snapshots()
+            .listen((snap) {
+          _hotelPartnerCallIdsByHotel[hotelId] =
+              snap.docs.map((d) => d.id).toSet();
+          _hotelPartnerCallIds = {
+            for (final ids in _hotelPartnerCallIdsByHotel.values) ...ids,
+          };
+          _recomputeCallWatchers();
+        }, onError: (_) {}));
+      }
+    }).catchError((_) {});
+  }
+
   /// employer/worker दुवैका लागि उही tab-independent listener — worker लाई
   /// employer ले counter गर्दा, employer लाई worker ले counter गर्दा, दुवैतिर
   /// (कुनै round-सीमा बिना) तुरुन्तै sound + banner। App खुला भएसम्म काम
@@ -452,6 +635,9 @@ class _MainContainerState extends State<MainContainer> {
     _negotiationSub = FirebaseFirestore.instance
         .collection('serviceRequests')
         .where(ownerField, isEqualTo: uid)
+        // केवल "मेरो जवाफ पर्खिरहेको" स्थिति — पहिले यो user को सबै इतिहास
+        // (हरेक पूरा/रद्द काम) सुनिन्थ्यो, जुन समयसँगै अनन्त बढ्छ।
+        .where('status', isEqualTo: waitingStatus)
         .snapshots()
         .listen((snap) {
       final currentlyWaiting = snap.docs
@@ -464,8 +650,8 @@ class _MainContainerState extends State<MainContainer> {
         if (newlyWaiting.isNotEmpty) {
           playCounterOfferAlert();
           if (mounted) {
-            final latest = snap.docs
-                .firstWhere((d) => newlyWaiting.contains(d.id));
+            final latest =
+                snap.docs.firstWhere((d) => newlyWaiting.contains(d.id));
             final price = isWorker
                 ? (latest.data()['employerCounterPrice'] as num?)
                 : (latest.data()['workerCounterPrice'] as num?);
@@ -508,38 +694,39 @@ class _MainContainerState extends State<MainContainer> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final isWorker = _role == 'worker';
+    // Home tab जहिले पनि मुख्य Super-App Home Screen (3x2 neon grid) नै —
+    // role जे भए पनि (worker/driver/hotel partner लगायत)। Job Feed/My
+    // Requests जस्ता worker-विशेष dashboard अब यहाँ मुख्य tab bar मा होइन,
+    // बरु profile_screen.dart कै "Dashboard" बटनबाट मात्र पुगिने (push
+    // गरिएको छुट्टै screen) — साझा Home experience सबैलाई उस्तै रहोस्
+    // भनेर।
+    // Localization Live-Toggle Fix — यहाँ पहिले `const screens = [...]`
+    // थियो। माथिको `MainContainer()` आफैं (app.dart) बाट `const` हटाइए
+    // पनि, यो भित्री सूची स्वयं const भएकोले हरेक तत्व (HomeScreen(),
+    // ProfileScreen() आदि) पनि Dart-मा छुट्टै canonicalize हुन्थ्यो —
+    // `MainContainer.build()` फेरि चले पनि, `IndexedStack`-ले उही पुरानो
+    // (identical) child-list भेट्दा हरेक ट्याबको भित्री content कहिल्यै
+    // rebuild नगर्ने (bottom-nav label त अपडेट हुने तर Home/Profile ट्याब
+    // भित्रकै banner/tile/row जस्ता कुरा पुरानै भाषामा अडकिरहने) बग यहीँ
+    // थियो। `const` हटाउँदा पनि IndexedStack-ले tab-state (same runtimeType
+    // + null key) अझै जोगाइरहन्छ — केवल build() फेरि चल्छ, re-init/spinner
+    // होइन।
+    final screens = [
+      HomeScreen(), // ignore: prefer_const_constructors
+      BookingsScreen(), // ignore: prefer_const_constructors
+      WatchlistScreen(), // ignore: prefer_const_constructors
+      MessagesScreen(), // ignore: prefer_const_constructors
+      ProfileScreen(), // ignore: prefer_const_constructors
+    ];
 
-    final screens = isWorker
-        ? const [
-            JobFeedScreen(),
-            WorkerRequestsPage(),
-            MessagesScreen(),
-            ProfileScreen(),
-          ]
-        : const [
-            HomeScreen(),
-            BookingsScreen(),
-            WatchlistScreen(),
-            MessagesScreen(),
-            ProfileScreen(),
-          ];
-
-    final items = isWorker
-        ? [
-            _NavItem(Icons.radar_rounded, S.navJobFeed),
-            _NavItem(Icons.assignment_rounded, S.navRequests),
-            _NavItem(Icons.chat_bubble_rounded, S.navMessages),
-            _NavItem(Icons.person_rounded, S.navProfile),
-          ]
-        : [
-            _NavItem(Icons.home_rounded, S.navHome),
-            _NavItem(Icons.assignment_rounded, S.navBookings,
-                badgeCount: _activeJobCount),
-            _NavItem(Icons.bookmark_rounded, S.navWatchlist),
-            _NavItem(Icons.chat_bubble_rounded, S.navMessages),
-            _NavItem(Icons.person_rounded, S.navProfile),
-          ];
+    final items = [
+      _NavItem(Icons.home_rounded, S.navHome),
+      _NavItem(Icons.assignment_rounded, S.navBookings,
+          badgeCount: _activeJobCount),
+      _NavItem(Icons.bookmark_rounded, S.navWatchlist),
+      _NavItem(Icons.chat_bubble_rounded, S.navMessages),
+      _NavItem(Icons.person_rounded, S.navProfile),
+    ];
 
     // IndexedStack ले सबै tab जीवितै राख्छ — switch गर्दा re-init/spinner छैन।
     return Scaffold(
@@ -657,8 +844,7 @@ class _NavTab extends StatelessWidget {
               children: [
                 TweenAnimationBuilder<Color?>(
                   duration: const Duration(milliseconds: 240),
-                  tween: ColorTween(
-                      end: selected ? AppColors.kmInk : muted),
+                  tween: ColorTween(end: selected ? AppColors.kmInk : muted),
                   builder: (_, c, __) => Icon(item.icon, size: 23, color: c),
                 ),
                 if (item.badgeCount > 0)
@@ -672,9 +858,8 @@ class _NavTab extends StatelessWidget {
                         color: AppColors.kmPink,
                         borderRadius: BorderRadius.circular(999),
                         border: Border.all(
-                            color: selected
-                                ? AppColors.kmInk
-                                : Colors.transparent,
+                            color:
+                                selected ? AppColors.kmInk : Colors.transparent,
                             width: 1.4),
                       ),
                       constraints:

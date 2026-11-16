@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_globals.dart';
+import 'auth/passkey_setup_page.dart' show kPasskeyEnabledPrefKey;
 
 class Prefs {
   Prefs._();
@@ -33,6 +34,9 @@ class Prefs {
 
       final n = _p!.getBool(_kNotif);
       if (n != null) notificationsEnabled.value = n;
+
+      final bio = _p!.getBool(kPasskeyEnabledPrefKey);
+      if (bio != null) biometricEnabled.value = bio;
     } catch (_) {
       // prefs नपाए default मै चल्छ
     }
@@ -44,5 +48,7 @@ class Prefs {
         () => _p?.setString(_kLocale, localeNotifier.value.languageCode));
     notificationsEnabled
         .addListener(() => _p?.setBool(_kNotif, notificationsEnabled.value));
+    biometricEnabled.addListener(
+        () => _p?.setBool(kPasskeyEnabledPrefKey, biometricEnabled.value));
   }
 }

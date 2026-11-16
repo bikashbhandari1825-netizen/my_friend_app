@@ -37,15 +37,15 @@ class AdminNotificationsPage extends StatelessWidget {
                               color: AppColors.kmOrange));
                     }
                     if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                      return Center(
+                      return const Center(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.notifications_none_rounded,
+                            Icon(Icons.notifications_none_rounded,
                                 size: 56, color: AppColors.kmMuted),
-                            const SizedBox(height: 12),
+                            SizedBox(height: 12),
                             Text('अहिलेसम्म कुनै Notification छैन।',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     color: AppColors.kmMuted)),
                           ],
                         ),

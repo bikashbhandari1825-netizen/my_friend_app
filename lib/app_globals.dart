@@ -17,22 +17,31 @@ final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.dark);
 
 // एपको भाषा नियन्त्रण गर्ने ग्लोबल भेरिएबल।
-//  'ne' = नेपाली (default), 'en' = English.
+//  'en' = English (default — पहिलोपटक खोल्दा, prefs.dart मा कुनै बचत
+//  नभएसम्म), 'ne' = नेपाली।
 // Settings मा touch गर्दा तुरुन्तै पूरै app को भाषा बदलिन्छ (app.dart मा
-// MaterialApp यसैको ValueListenableBuilder भित्र छ)।
-ValueNotifier<Locale> localeNotifier = ValueNotifier(const Locale('ne'));
+// MaterialApp यसैको ValueListenableBuilder भित्र छ), र त्यो छनोट
+// prefs.dart ले बचत गरेर भविष्यका सबै launch मा यही डिफल्टभन्दा
+// प्राथमिकता पाउँछ।
+ValueNotifier<Locale> localeNotifier = ValueNotifier(const Locale('en'));
 
 // एप भित्रको notification देखाउने/नदेखाउने (Settings को toggle — session भरि)।
 ValueNotifier<bool> notificationsEnabled = ValueNotifier(true);
 
+// Biometric/Passkey protection — auth/passkey_setup_page.dart (OTP पछिको
+// ऐच्छिक step) र Settings को toggle दुवैले यही एउटै global state साझा
+// गर्छन् (prefs.dart ले kPasskeyEnabledPrefKey कुञ्जीमै persist गर्छ), ताकि
+// जहाँबाट बदले पनि अर्को ठाउँमा तुरुन्तै सिंक देखियोस्। डिफल्ट false —
+// कहिल्यै जबरजस्ती होइन, प्रयोगकर्ताले आफैं enable गरेपछि मात्र।
+ValueNotifier<bool> biometricEnabled = ValueNotifier(false);
+
 // Firestore सर्भरसँग हाल पहुँच छ/छैन — `services/connectivity_service.dart`
-// ले नियमित रूपमा ताजा गर्छ। `true` हुँदा `app.dart` ले सबै स्क्रिनमाथि
-// साझा "अफलाइन — पुरानो डाटा देखाइँदैछ" ब्यानर देखाउँछ (हेर्नुहोस्
-// `widgets/offline_banner.dart`) — [cloud_firestore/unavailable] जस्ता
-// त्रुटि प्रयोगकर्तालाई चुपचाप/डरलाग्दो रूपमा नदेखियोस्, बरु प्रस्ट र
-// शान्त सन्देश देखियोस् भनेर। Firestore persistence पहिल्यै (main.dart)
-// सक्रिय भएकोले, अफलाइनमा पनि पुरानो (cache) डाटा हेर्न/काम गर्न रोकिँदैन —
-// यो ब्यानरले केवल त्यो अवस्था प्रस्ट पार्छ।
+// ले नियमित रूपमा ताजा गर्छ। `services/pending_media_queue.dart` ले यो
+// फेरि `true`->`false` हुनेबित्तिकै (नेटवर्क फर्कनेबित्तिकै) पर्खिरहेका
+// अपलोड/सन्देश पठाउन सुरु गर्छ। (पहिले यहाँ यो true हुँदा सबै स्क्रिनमाथि
+// एउटा "अफलाइन" UI ब्यानर पनि देखिन्थ्यो — प्रयोगकर्तालाई भ्रमित/अनावश्यक
+// लागेकोले हटाइयो; यो flag भने अझै माथिको queue-retry प्रयोजनका लागि
+// चाहिन्छ।)
 ValueNotifier<bool> isOffline = ValueNotifier(false);
 
 /// कल/भ्वाइस-नोट दुवैको लम्बाइ देखाउन साझा — m:ss (घण्टौं लामो कल भए
@@ -59,6 +68,22 @@ String? activeTestPhone;
 // ताकि उपयोगकर्ता पहिल्यै त्यही काम को route screen मा हुँदा (जस्तै आफैं
 // त्यहीँबाटै counter-offer accept गर्दा) उही screen दोहोरिएर नखुलियोस्।
 String? visibleRouteScreenRequestId;
+
+// Worker/Driver Dashboard (job_feed_screen.dart कै JobsMapLayer — "Open jobs
+// near you") MainContainer को IndexedStack भित्रको tab होइन, बरु
+// profile_screen.dart बाट Navigator.push गरिएको छुट्टै full-screen route हो
+// (आफ्नै live map/AppBar/drawer चाहिने भएकोले)। त्यसैले त्यहाँ MainContainer
+// कै साझा bottom nav bar कहिल्यै देखिँदैनथ्यो — worker/driver त्यो screen
+// भित्र पसेपछि Home/Bookings/Messages/Profile कुनैमा पनि एक ट्याप तान फर्कन
+// नपाई "अड्किएको" (केवल Android back बटन, जसले drawer भएकोले पहिले hamburger
+// अनि पछि पूरै app नै बन्द गरिदिन्थ्यो) जस्तो हुन्थ्यो।
+//
+// अब त्यो screen ले आफ्नै (देखिनमा उस्तै) bottom nav bar देखाउँछ — त्यहाँको
+// कुनै पनि ट्याप यही notifier मा चाहिएको tab index राखेर MainContainer सम्म
+// (Navigator.popUntil((r) => r.isFirst) ले) फर्कन्छ, र MainContainer ले
+// आफ्नो `_currentIndex` यही अनुसार तुरुन्तै अद्यावधिक गर्छ — त्यसैले "Home"
+// ट्याप गर्दा role जे भए पनि सधैँ मुख्य Super-App Home Screen मै पुगिन्छ।
+final ValueNotifier<int> requestedMainTabIndex = ValueNotifier<int>(0);
 
 // अहिले स्क्रिनमा नै देखिरहेको `CallScreen` (ringing/awaiting-accept वा
 // जोडिएको, दुवै) को requestId — `CallScreen` आफैंले initState/dispose मा
@@ -95,14 +120,22 @@ Future<void> createNotificationForUser(
   String body, {
   Map<String, dynamic>? data,
 }) async {
-  await FirebaseFirestore.instance.collection('notifications').add({
-    'uid': uid,
-    'title': title,
-    'body': body,
-    'read': false,
-    'createdAt': FieldValue.serverTimestamp(),
-    ...?data,
-  });
+  // यो सधैँ best-effort side-effect मात्र हो (मूल काम — offer/accept/
+  // counter आदि — यसमा कहिल्यै निर्भर हुँदैन); धेरैजसो caller ले
+  // `unawaited(...)` गरी बोलाउँछन्, त्यसैले यहाँ नसमातिए कुनै पनि असफलता
+  // (permission/network) uncaught async exception भएर UI मा "Future
+  // error" flash हुन्थ्यो — मूल action (जस्तै "प्रस्ताव पठाइयो" भन्ने
+  // सफल SnackBar) पहिल्यै देखिसकेपछि पनि।
+  try {
+    await FirebaseFirestore.instance.collection('notifications').add({
+      'uid': uid,
+      'title': title,
+      'body': body,
+      'read': false,
+      'createdAt': FieldValue.serverTimestamp(),
+      ...?data,
+    });
+  } catch (_) {}
 }
 
 Future<void> createAdminNotification(String title, String body) async {

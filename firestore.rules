@@ -13,7 +13,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn()
-        && request.auth.token.email == 'bikashbhandari1825@gmail.com';
+        && request.auth.token.email == 'bikashbhandari1825@gmail.com'
+        && request.auth.token.email_verified == true;
     }
 
     function isOwner(uid) {
@@ -29,34 +30,198 @@ service cloud.firestore {
       return ['accepted', 'confirmed', 'in_progress'];
     }
 
+    // admin ले approve गरेको (KYC सकिएको) कामदार/ड्राइभर मात्र। `verificationStatus`/
+    // `isVerified` मालिकले आफैं बदल्न नपाउने (`ownerUpdateSafe`) भएकोले भरपर्दो।
+    function isApprovedDriver(uid) {
+      let u = get(/databases/$(database)/documents/users/$(uid)).data;
+      return u.get('verificationStatus', '') == 'approved'
+        || u.get('isVerified', false) == true;
+    }
+
+    // अर्काको `activeJobId` खाली गर्न: आफ्नै; वा त्यो काम अस्तित्वमै नभएको/सक्रिय
+    // नभएको; वा म त्यो कामको employer। (सवारी बीचमै रहेको driver को pointer
+    // तेस्रो व्यक्तिले मेट्न नपाउने।)
+    function activeJobClearAllowed(target) {
+      let cur = resource.data.get('activeJobId', '');
+      return request.auth.uid == target
+        || !(cur is string) || cur == ''
+        || !exists(/databases/$(database)/documents/serviceRequests/$(cur))
+        || get(/databases/$(database)/documents/serviceRequests/$(cur))
+             .data.employerUid == request.auth.uid
+        || !(get(/databases/$(database)/documents/serviceRequests/$(cur))
+               .data.get('status', '') in ['accepted', 'confirmed', 'in_progress']);
+    }
+
     function workerFreeToClaim(workerUid, docId) {
       let u = get(/databases/$(database)/documents/users/$(workerUid)).data;
-      return !('activeJobId' in u) || u.activeJobId == '' || u.activeJobId == docId;
+      return (!('activeJobId' in u) || u.activeJobId == '' || u.activeJobId == docId)
+          // Wallet Commission Debt Gate — widgets/complete_job_sheet.dart::
+          // _confirm() ले नै unpaid cash/QR commission threshold भन्दा बढी
+          // भएमा `isEligibleForJobs: false` लेख्छ। field नै नभए (पुरानो
+          // doc, यो फिचर आउनुअघिकै) eligible मानिन्छ — activeJobId कै उस्तै idiom।
+          && (!('isEligibleForJobs' in u) || u.isEligibleForJobs == true);
     }
 
     // ── users ────────────────────────────────────────────────
     // signed-in युजरले profile पढ्न सक्छन् (chat/booking नाम देखाउन);
     // आफ्नै doc मात्र लेख्न पाउँछन्; एडमिनले जुनसुकै।
+    // Hotel-Partner Privilege Escalation Fix — पहिले मालिकले आफ्नो doc को जुनसुकै
+    // field (`partnerHotelIds` समेत) लेख्न पाउँथ्यो, त्यसैले जो कोहीले
+    // आफूलाई जुनसुकै (सबै) होटलको partner बनाएर अरूका बुकिङ हेर्न/बदल्न
+    // सक्थ्यो। अब `partnerHotelIds` मा मालिकले केवल *आफैंले दर्ता गरेको*
+    // (`hotels/{id}.ownerId == आफ्नो uid`) एउटा होटल थप्न मात्र पाउँछ
+    // (arrayUnion — सूचीको अन्त्यमा एउटा थपिन्छ), बाँकी बदल्न/हटाउन admin मात्र।
+    function partnerIdsUpdateOk(oldIds, newIds) {
+      return newIds == oldIds
+        || (newIds.size() == oldIds.size() + 1
+            && newIds[0:oldIds.size()] == oldIds
+            && get(/databases/$(database)/documents/hotels/$(newIds[oldIds.size()]))
+                 .data.ownerId == request.auth.uid);
+    }
+    function partnerIdsAllowed() {
+      return (resource == null
+              && !('partnerHotelIds' in request.resource.data))
+        || (resource != null
+              && partnerIdsUpdateOk(
+                   resource.data.get('partnerHotelIds', []),
+                   request.resource.data.get('partnerHotelIds', [])));
+    }
+    // ── Security audit fixes (users) ─────────────────────────
+    // कुनै पनि signed-in user ले अर्काको वालेट/रेटिङ/active-job बदल्न नसकोस्
+    // र आफैंले आफूलाई verified/unblocked बनाउन नसकोस्:
+    //  • अर्काको doc मा `activeJobId` सेट गर्न — त्यो job आफैंले employer
+    //    भएको हुनुपर्छ। खाली (clear) गर्न भने कसैलाई छुट (employer ले cancel
+    //    गर्दा booking doc पहिल्यै मेटिइसकेको हुन्छ, जाँच्न मिल्दैन)।
+    //  • अर्काको rating/wallet/eligibility बदल्न — त्यो worker को हालको
+    //    active job मा आफू employer हुनुपर्छ (Complete Job मा मात्र)।
+    //  • मालिकले आफ्नै doc मा verification/block/rating फिल्ड बदल्न
+    //    नपाउने (केवल 'none'/'pending'/false मा रिसेट मिल्छ)।
+    function employsJob(jobId) {
+      return jobId is string && jobId != ''
+        && exists(/databases/$(database)/documents/serviceRequests/$(jobId))
+        && get(/databases/$(database)/documents/serviceRequests/$(jobId))
+             .data.employerUid == request.auth.uid;
+    }
+    function safeNewUserDoc(d) {
+      return (!('isVerified' in d) || d.isVerified == false)
+        && (!('verificationStatus' in d)
+            || d.verificationStatus in ['none', 'pending'])
+        && (!('accountStatus' in d) || d.accountStatus == 'active')
+        && (!('ratingSum' in d) || d.ratingSum == 0)
+        && (!('ratingCount' in d) || d.ratingCount == 0)
+        && (!('completedRidesCount' in d) || d.completedRidesCount == 0)
+        // वालेट/योग्यता अब सर्भर (Cloud Function) ले मात्र — नयाँ खातामा ०/योग्य।
+        && (!('walletBalance' in d) || d.walletBalance == 0)
+        && (!('isEligibleForJobs' in d) || d.isEligibleForJobs == true);
+    }
+    // मासिक order-quota कहिल्यै घट्न नपाउने (आफ्नै वा अरूको रिसेट/भर्न रोक):
+    // उही महिनामा +० वा +१ मात्र; नयाँ (पछिल्लो) महिनामा ≤१।
+    function quotaOk() {
+      let n = request.resource.data;
+      let o = resource.data;
+      return !n.diff(o).affectedKeys().hasAny(['orderQuotaUsed', 'orderQuotaMonth'])
+        || (n.get('orderQuotaMonth', '') == o.get('orderQuotaMonth', '')
+            && n.get('orderQuotaUsed', 0) >= o.get('orderQuotaUsed', 0)
+            && n.get('orderQuotaUsed', 0) <= o.get('orderQuotaUsed', 0) + 1)
+        || (n.get('orderQuotaMonth', '') > o.get('orderQuotaMonth', '')
+            && n.get('orderQuotaUsed', 0) <= 1);
+    }
+    // अर्को user (target) को doc मा `activeJobId`/quota लेख्न मिल्ने एउटै अवस्था:
+    // म त्यो job को employer हुँ, र target साँच्चै त्यही job को worker हो
+    // (वा त्यसमा उसले आफैं भाडा-प्रस्ताव पठाएको छ)।
+    function employerOfWorkerJob(jobId, target) {
+      return jobId is string && jobId != ''
+        && exists(/databases/$(database)/documents/serviceRequests/$(jobId))
+        && get(/databases/$(database)/documents/serviceRequests/$(jobId))
+             .data.employerUid == request.auth.uid
+        && (get(/databases/$(database)/documents/serviceRequests/$(jobId))
+              .data.get('workerUid', '') == target
+            || exists(/databases/$(database)/documents/serviceRequests/$(jobId)/rideOffers/$(target)));
+    }
+    function ownerUpdateSafe() {
+      let k = request.resource.data.diff(resource.data).affectedKeys();
+      return quotaOk()
+        && !k.hasAny(['ratingSum', 'ratingCount', 'completedRidesCount',
+                        'walletBalance', 'isEligibleForJobs'])
+        && (!k.hasAny(['accountStatus'])
+            || (!('accountStatus' in resource.data)
+                && request.resource.data.accountStatus == 'active'))
+        && (!k.hasAny(['isVerified'])
+            || request.resource.data.isVerified == false)
+        && (!k.hasAny(['verificationStatus'])
+            || request.resource.data.verificationStatus in ['none', 'pending']);
+    }
     match /users/{uid} {
       allow read: if isSignedIn();
-      allow create, update: if isOwner(uid) || isAdmin()
+      allow create: if (isOwner(uid) && partnerIdsAllowed()
+                         && safeNewUserDoc(request.resource.data)) || isAdmin();
+      allow update: if (isOwner(uid) && partnerIdsAllowed() && ownerUpdateSafe())
+        || isAdmin()
         // Single Active Job Restriction — employer ले worker कै counter-
-        // offer accept गर्दा (acceptWorkerCounterOffer) त्यो worker को
-        // `activeJobId` pointer पनि employer कै transaction भित्रै लेख्नु
-        // पर्छ (worker त्यो क्षणमा अनलाइन नहुन सक्छ)। यहाँ त्यही एउटा
-        // field मात्र (अरू कुनै होइन) बदलिइरहेको भए जुनसुकै signed-in
-        // user लाई अनुमति — worst-case प्रभाव अर्को worker "व्यस्त"
-        // देखिनु मात्र हो, कुनै संवेदनशील डेटा लेखिँदैन।
+        // offer accept गर्दा (acceptWorkerCounterOffer) वा ride-offer
+        // accept गर्दा (acceptRideOffer) त्यो worker को `activeJobId`
+        // pointer पनि employer कै transaction भित्रै लेख्नु पर्छ (worker
+        // त्यो क्षणमा अनलाइन नहुन सक्छ)। यहीं त्यही transaction भित्रै
+        // (job_actions.dart::consumeOrderQuotaInTransaction) मासिक
+        // order-quota (`orderQuotaMonth`/`orderQuotaUsed`) पनि उही worker
+        // doc मा सँगसँगै लेखिन्छ — Firestore ले उही doc मा भएका दुई/बढी
+        // `tx.set`/`tx.update` लाई commit हुँदा एउटै final diff मा गाँसिदिने
+        // भएकोले, यी दुई अलग-अलग लेखाइ मिलेर एकैचोटि ३ वटा key बदलिन्छ,
+        // कुनै एउटा मात्र होइन। पहिले यहाँ `hasOnly(['activeJobId'])`
+        // मात्र (एउटै key) अनुमति भएकोले त्यो combined-diff कहिल्यै
+        // नमिली चुपचाप (rules ले नै) असफल हुन्थ्यो — ठ्याक्कै live
+        // logcat/screenshot मा नै पक्रिएको
+        // "[cloud_firestore/permission-denied]" गुनासोको साँचो जड। अब यी
+        // तीनै field (जति नै बदलिए पनि, `hasOnly` ले subset पनि दिन्छ)
+        // सँगै भएको diff लाई पनि अनुमति — worst-case प्रभाव अझै उस्तै
+        // (अर्को worker "व्यस्त"/quota-counter मात्र बदलिनु), कुनै
+        // संवेदनशील डेटा लेखिँदैन।
+        // Hardening: (क) कसैले पनि अर्काको `activeJobId` खाली मात्र गर्न सक्छ;
+        // (ख) सेट/quota गर्न त्यो job को employer र त्यही worker हुनैपर्छ।
         || (isSignedIn() && request.resource.data.diff(resource.data)
-              .affectedKeys().hasOnly(['activeJobId']));
-      allow delete: if isOwner(uid) || isAdmin();
+              .affectedKeys().hasOnly(['activeJobId'])
+            && (!('activeJobId' in request.resource.data)
+                || request.resource.data.activeJobId == '')
+            && activeJobClearAllowed(uid))
+        || (isSignedIn() && request.resource.data.diff(resource.data)
+              .affectedKeys().hasOnly(
+                  ['activeJobId', 'orderQuotaMonth', 'orderQuotaUsed'])
+            && quotaOk()
+            // quota केवल नयाँ काम जोडिँदा (activeJobId साँच्चै बदलिँदा) मात्र;
+            // त्यही काममा बारम्बार +१ गरेर अर्काको कोटा सक्न नपाइने।
+            && request.resource.data.get('activeJobId', '')
+                 != resource.data.get('activeJobId', '')
+            && employerOfWorkerJob(
+                 request.resource.data.get('activeJobId', ''), uid))
+        ;
+      // ऋण (ऋणात्मक वालेट) भएको खाता मेटेर कमिसन छल्न नपाइने।
+      allow delete: if (isOwner(uid)
+            && resource.data.get('walletBalance', 0) >= 0) || isAdmin();
     }
 
     // ── providers ────────────────────────────────────────────
+    // Security audit fix — मालिकले आफैंलाई verified/approved बनाउन नपाउने।
+    function providerOwnerSafe(d) {
+      return (!('isVerified' in d) || d.isVerified == false)
+        && (!('verificationStatus' in d)
+            || d.verificationStatus in ['none', 'pending', 'rejected']);
+    }
     match /providers/{uid} {
       allow read: if isSignedIn();
-      allow create, update: if isOwner(uid) || isAdmin();
-      allow delete: if isAdmin();
+      allow create: if (isOwner(uid) && providerOwnerSafe(request.resource.data))
+        || isAdmin();
+      allow update: if (isOwner(uid)
+            && (request.resource.data.diff(resource.data).affectedKeys()
+                  .hasAny(['isVerified', 'verificationStatus']) == false
+                || providerOwnerSafe(request.resource.data)))
+        || isAdmin();
+      // पहिले यहाँ `delete` एडमिन-मात्र थियो — तर Settings > Delete Account
+      // (settings_page.dart) ले आफ्नै खाता मेटाउँदा यही doc पनि मेटाउनुपर्छ
+      // (नत्र त्यही फोन नम्बरले फेरि नयाँ खाता खोल्दा dev_login.dart::
+      // _migrateIdentity() ले यो बाँकी रहेको पुरानो profile नयाँ खातामा
+      // फेरि clone गरिदिन्थ्यो — "deleted account resurrecting" गुनासोको
+      // जड)। `users/{uid}` कै उस्तै owner-delete ढाँचा — आफ्नै doc मात्र।
+      allow delete: if isOwner(uid) || isAdmin();
     }
 
     // ── pendingWorkers (verification queue) ──────────────────
@@ -90,35 +255,97 @@ service cloud.firestore {
     match /registeredWorkers/{doc} {
       allow read: if isSignedIn();
       allow create, delete: if isAdmin();
+      // Hardening: मालिकले रेटिङ/समीक्षा/प्रमाणीकरण/सेवा जस्ता विश्वास-फिल्ड
+      // बदल्न नपाउने (रेटिङ अब `completeJob` function ले मात्र सिंक गर्छ)।
       allow update: if isAdmin()
-        || (isSignedIn() && doc == request.auth.uid)
-        || (isSignedIn() && request.resource.data.uid == request.auth.uid);
+        || (isSignedIn()
+            && (doc == request.auth.uid
+                // अरूको listing हडप्न नपाइने — आफ्नै (uid == self) भएको row मात्र।
+                || resource.data.get('uid', '') == request.auth.uid)
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+                 ['rating', 'reviews', 'isVerified', 'verified',
+                  'verificationStatus', 'status', 'badge', 'featured',
+                  'isFeatured', 'service', 'document', 'role', 'userType'])
+            && (!request.resource.data.diff(resource.data).affectedKeys()
+                  .hasAny(['uid'])
+                || request.resource.data.uid == request.auth.uid));
     }
 
     // ── phoneAccounts (phone → uid index, test login persistence) ──
+    // Security audit fix — पहिले जो कोहीले (login नगरी) सबै नम्बर list गर्न
+    // र कुनै पनि signed-in user ले जुनसुकै नम्बरको uid बदल्न सक्थ्यो
+    // (अर्काको profile आफ्नो खातामा migrate गराउने जोखिम)। अब: login अघि
+    // एउटा नम्बर `get` मात्र (login/signup छुट्याउन), list बन्द; लेख्न
+    // त्यो नम्बर साँच्चै OTP बाट verify गरेको user (token.phone_number)
+    // वा पहिल्यैदेखि उही uid को मालिक मात्र।
+    function ownsPhoneIndex(key) {
+      return isSignedIn()
+        && (('+' + key) == request.auth.token.get('phone_number', ''));
+    }
     match /phoneAccounts/{key} {
-      allow read: if true;
-      allow write: if isSignedIn();
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if ownsPhoneIndex(key)
+        && request.resource.data.uid == request.auth.uid;
+      allow update: if (ownsPhoneIndex(key)
+            && request.resource.data.uid == request.auth.uid)
+        || (isSignedIn() && resource.data.uid == request.auth.uid
+            && request.resource.data.uid == request.auth.uid);
+      allow delete: if ownsPhoneIndex(key)
+        || (isSignedIn() && resource.data.uid == request.auth.uid)
+        || isAdmin();
     }
 
     // ── serviceRequests (bookings / bids) ───────────────────
     // broadcast अनुरोध (status == 'broadcasting') कुनै पनि signed-in worker ले
     // पढ्न सक्छ; accept गर्दा आफूलाई workerUid राख्न वा rejectedBy मा थप्न पाउँछ।
+    // सहमत भएको मूल्य: अनुरोधमा रहेको प्रस्तावित/काउन्टर मूल्य, वा त्यस
+    // कामदारले पठाएको भाडा-प्रस्ताव (rideOffers/{workerUid}.offerPrice)।
+    function srPriceAgreed(p) {
+      return p == resource.data.get('proposedPrice', null)
+        || p == resource.data.get('workerCounterPrice', null)
+        || p == resource.data.get('employerCounterPrice', null)
+        || (exists(/databases/$(database)/documents/serviceRequests/$(resource.id)/rideOffers/$(request.resource.data.get('workerUid', 'none')))
+            && p == get(/databases/$(database)/documents/serviceRequests/$(resource.id)/rideOffers/$(request.resource.data.get('workerUid', 'none'))).data.get('offerPrice', null));
+    }
     match /serviceRequests/{doc} {
       allow read: if isSignedIn() && (
         resource.data.employerUid == request.auth.uid
         || resource.data.workerUid == request.auth.uid
         || resource.data.status == 'broadcasting'
         || isAdmin());
+      // Hardening: नयाँ अनुरोध केवल 'broadcasting' (खुला) वा 'pending_worker'
+      // (सिधै कामदारलाई) बाट सुरु हुन्छ। भुक्तानी/सुरु/पुष्टि/स्वीकृत-मूल्य जस्ता
+      // फिल्ड सिर्जनामै राखेर नक्कली "सक्रिय/पूरा" काम बनाउन नपाइने, र आफैंलाई
+      // worker तोक्न नपाइने।
       allow create: if isSignedIn()
-        && request.resource.data.employerUid == request.auth.uid;
+        && request.resource.data.employerUid == request.auth.uid
+        && request.resource.data.status in ['broadcasting', 'pending_worker']
+        && request.resource.data.get('workerUid', '') != request.auth.uid
+        && !request.resource.data.keys().hasAny(
+             ['startedAt', 'workerConfirmedComplete',
+              'workerConfirmedCompleteAt', 'finalPrice', 'agreedAmount',
+              'acceptedAt', 'completedAt', 'paymentConfirmed', 'paymentMethod',
+              'paidAmount', 'commissionAmount', 'workerPayoutAmount',
+              'commissionRate', 'payerWalletId', 'rideStartCode'])
+        // नक्कली Rs ०/ऋणात्मक/अति-ठूलो भाडा रोक्न; र ठूलो/फुलेको doc रोक्न।
+        && (!('proposedPrice' in request.resource.data)
+            || (request.resource.data.proposedPrice is number
+                && request.resource.data.proposedPrice >= 10
+                && request.resource.data.proposedPrice <= 100000))
+        && request.resource.data.keys().size() <= 60;
       allow update: if isSignedIn() && (
         resource.data.employerUid == request.auth.uid
         || resource.data.workerUid == request.auth.uid
         || isAdmin()
-        // कुनै worker ले broadcast job claim गर्दा वा decline गर्दा
-        || (resource.data.status == 'broadcasting' && (
-              request.resource.data.workerUid == request.auth.uid
+        // कुनै worker ले broadcast job claim गर्दा वा decline गर्दा — तर
+        // आफैंले आफ्नै पोस्ट गरेको अनुरोध (employerUid == आफ्नै uid) कहिल्यै
+        // claim गर्न नपाओस् (Self-Ride Prevention — client-side filter
+        // bypass भए पनि यहीँ रोकिने साँचो सुरक्षा सीमा)।
+        || (resource.data.status == 'broadcasting'
+              && resource.data.employerUid != request.auth.uid && (
+              (request.resource.data.workerUid == request.auth.uid
+                && isApprovedDriver(request.auth.uid))
               || request.resource.data.status == 'broadcasting')))
         // Single Active Job Restriction (backend/rules-level defense-in-
         // depth) — यो अनुरोध नयाँ-नयाँ सक्रिय (accepted/confirmed/
@@ -133,6 +360,83 @@ service cloud.firestore {
           || !('workerUid' in request.resource.data)
           || request.resource.data.workerUid == ''
           || workerFreeToClaim(request.resource.data.workerUid, doc)
+        )
+        // Security audit fix — भुक्तानी/कमिसन/पूरा-भएको स्थिति र employer पहिचान
+        // अब क्लाइन्टले बदल्न नपाउने (`completeJob` Cloud Function ले मात्र);
+        // कुनै पनि worker ले broadcast काम claim गर्दा मूल्य, employer-विवरण
+        // वा सेवा-प्रकार बदल्न नपाउने, र `finalPrice` ठ्याक्कै माग गरिएको
+        // `proposedPrice` हुनुपर्ने।
+        && (
+          isAdmin()
+          || (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+                ['employerUid', 'paymentConfirmed', 'paymentMethod',
+                 'paidAmount', 'commissionAmount', 'workerPayoutAmount',
+                 'commissionRate', 'payerWalletId', 'completedAt'])
+            && (request.resource.data.status != 'completed'
+                || resource.data.status == 'completed')
+            && (!(resource.data.status == 'broadcasting'
+                  && resource.data.employerUid != request.auth.uid
+                  && resource.data.get('workerUid', '') != request.auth.uid)
+                || (
+                  !request.resource.data.diff(resource.data).affectedKeys()
+                      .hasAny(['proposedPrice', 'employerCounterPrice',
+                               'employerName', 'employerPhone', 'isRide',
+                               'service'])
+                  && (!('finalPrice' in request.resource.data)
+                      || request.resource.data.finalPrice
+                           == resource.data.get('proposedPrice', null))
+                ))
+            // ── Hardening (नक्कली काम / कमिसन छल्ने बाटो बन्द) ──
+            // कामदार र ग्राहक एउटै हुन नपाउने।
+            && request.resource.data.get('workerUid', '')
+                 != request.resource.data.employerUid
+            // काम सुरु/पूरा-पुष्टिको प्रमाण केवल assigned कामदारले मात्र लेख्ने
+            // (ग्राहकले आफैं "काम भयो" भनेर देखाउन नपाउने)।
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(
+                    ['startedAt', 'workerConfirmedComplete',
+                     'workerConfirmedCompleteAt'])
+                || resource.data.get('workerUid', '') == request.auth.uid)
+            && (request.resource.data.status != 'in_progress'
+                || resource.data.status == 'in_progress'
+                || resource.data.get('workerUid', '') == request.auth.uid)
+            // काम सक्रिय भएपछि मूल्य बदल्न नपाइने (कमिसन शून्य पार्न)।
+            && (!(resource.data.status in activeJobStatuses())
+                || !request.resource.data.diff(resource.data).affectedKeys()
+                     .hasAny(['finalPrice', 'agreedAmount', 'proposedPrice',
+                              'employerCounterPrice', 'workerCounterPrice']))
+            // तय हुने मूल्य पहिले सहमत भएका मूल्यमध्ये एउटा नै हुनुपर्छ।
+            && (!request.resource.data.diff(resource.data).affectedKeys()
+                     .hasAny(['finalPrice', 'agreedAmount'])
+                || (srPriceAgreed(request.resource.data.get('finalPrice', null))
+                    && srPriceAgreed(request.resource.data.get('agreedAmount',
+                         request.resource.data.get('finalPrice', null)))))
+            // workerUid केवल: खाली गर्न, आफैं claim गर्न, वा त्यस कामदारले
+            // पठाएको भाडा-प्रस्ताव स्वीकार गर्दा बदलिन सक्छ।
+            && (!request.resource.data.diff(resource.data).affectedKeys()
+                     .hasAny(['workerUid'])
+                || request.resource.data.workerUid == ''
+                || (request.resource.data.workerUid == request.auth.uid
+                    && isApprovedDriver(request.auth.uid))
+                || exists(/databases/$(database)/documents/serviceRequests/$(doc)/rideOffers/$(request.resource.data.workerUid)))
+            // राइड-सुरु OTP: राइडमा status 'in_progress' / `startedAt` /
+            // `rideStartCode` क्लाइन्टले लेख्न नपाउने — केवल
+            // `verifyRideStartCode` Cloud Function (सही OTP मिलेपछि) ले।
+            && (!(resource.data.get('isRide', false) == true
+                  || resource.data.get('service', '') in ['Bike', 'Car', 'Auto'])
+                || (!request.resource.data.diff(resource.data).affectedKeys()
+                      .hasAny(['startedAt', 'rideStartCode'])
+                    && (request.resource.data.status != 'in_progress'
+                        || resource.data.status == 'in_progress')))
+            // ग्राहकले एक्लै काम 'सक्रिय' बनाउन नपाउने — कामदारको कार्य
+            // (प्रस्ताव/काउन्टर) अघि भइसकेको हुनुपर्छ।
+            && (resource.data.status in activeJobStatuses()
+                || !(request.resource.data.status in activeJobStatuses())
+                || request.resource.data.get('workerUid', '') == request.auth.uid
+                || resource.data.get('workerUid', '') == request.auth.uid
+                || resource.data.status == 'pending_employer_approval'
+                || exists(/databases/$(database)/documents/serviceRequests/$(doc)/rideOffers/$(request.resource.data.get('workerUid', 'none'))))
+          )
         );
       // employer वा assigned worker ले आफ्नै request cancel गर्दा
       // (deleteCancelledBooking, job_actions.dart) डिलिट गर्न पाउनुपर्छ —
@@ -155,13 +459,44 @@ service cloud.firestore {
         // नभए पनि) सबै driver को प्रतिस्पर्धी भाडा प्रस्ताव हेर्न सक्थे —
         // अब त्यो offer आफ्नै (driver) वा parent request कै employer
         // (यात्रु) वा admin मात्र।
+        //
+        // `resource.data.workerUid` होइन `offerId` सँग तुलना गर्नुको कारण:
+        // यो doc अझै सिर्जना नभएकै बेला पनि (driver ले अझै कहिल्यै offer
+        // नपठाएको, त्यसैले doc नै अस्तित्वमा नभएको) client (job_feed_screen.dart
+        // कै `_SendRideOfferButtonState._offerStream`) ले "मैले पहिल्यै
+        // offer पठाइसकेको छु?" जाँच्न यही doc path मा सधैँ listen गर्छ —
+        // `resource` doc नभएको बेला null हुन्छ, `resource.data.workerUid`
+        // पढ्न खोज्दा rule नै असफल हुन्थ्यो (live logcat मा नै "PERMISSION_
+        // DENIED" यही query मा पक्रिएको)। यो schema मा `offerId` सधैँ
+        // driver आफ्नै uid नै हो (`doc(uid)` ले लेख्छ) — doc अस्तित्वमा
+        // नभए पनि path segment (`offerId`) सधैँ उपलब्ध हुन्छ, त्यसैले यही
+        // प्रयोग गर्दा doc बन्नुअघि/पछि दुवै अवस्थामा driver आफैंले पढ्न पाउँछ।
+        // Collection-Group Query — `get()` (employer-check) यो rule भित्रै
+        // भएकोले, driver आफ्नै pending offer हरू सबै ride भरि एकसाथ हेर्ने
+        // collectionGroup('rideOffers').where('workerUid', ...) query
+        // (resource.data.workerUid == uid ले एक्लै प्रमाणित गर्न सक्ने भए
+        // पनि) Firestore ले अस्वीकार गर्दो रहेछ — `get()`/split rule दुवै
+        // कोसिस गरियो, दुवैपटक live device मा उस्तै PERMISSION_DENIED
+        // दोहोरियो (deploy साँच्चै भएको पुष्टि गरिसकेर पनि)। `list` लाई
+        // get() बिना छुट्याउँदा त employer को आफ्नै ride मा भएका *अरूका*
+        // (कुनै workerUid नमिल्ने) प्रतिस्पर्धी offer हरू हेर्ने — पहिल्यैदेखि
+        // काम गरिरहेको, धेरै महत्वपूर्ण — feature नै बिग्रिने जोखिम हुन्थ्यो।
+        // त्यसैले collectionGroup-based client feature नै हटाइयो
+        // (main_container.dart हेर्नुहोस्) — यो पुरानै, प्रमाणित-काम-गर्ने
+        // rule मा फर्काइएको।
         allow read: if isSignedIn() && (
-          resource.data.workerUid == request.auth.uid
+          offerId == request.auth.uid
           || get(/databases/$(database)/documents/serviceRequests/$(doc))
                .data.employerUid == request.auth.uid
           || isAdmin());
+        // Self-Ride Prevention — driver आफैंले पोस्ट गरेको राइड अनुरोधमा
+        // आफैं भाडा-प्रस्ताव पठाउन नपाओस् (parent request कै employerUid
+        // सँग आफ्नै uid नमिलोस्)।
         allow create: if isSignedIn()
-          && request.resource.data.workerUid == request.auth.uid;
+          && request.resource.data.workerUid == request.auth.uid
+          && isApprovedDriver(request.auth.uid)
+          && get(/databases/$(database)/documents/serviceRequests/$(doc))
+               .data.employerUid != request.auth.uid;
         allow update: if isSignedIn() && (
           resource.data.workerUid == request.auth.uid
           || get(/databases/$(database)/documents/serviceRequests/$(doc))
@@ -177,9 +512,33 @@ service cloud.firestore {
     // booking का employer/worker (वा admin) मात्र। parent doc — "seen/
     // read" receipt (`readBy.{uid}`) राख्न मात्र प्रयोग हुन्छ; message
     // हरू भने subcollection मै छन्।
+    function isServiceRequestParticipant(requestId) {
+      let path = /databases/$(database)/documents/serviceRequests/$(requestId);
+      return exists(path) && (
+        get(path).data.employerUid == request.auth.uid
+        || get(path).data.workerUid == request.auth.uid);
+    }
+    // Hotel booking communication (chat/calls) — guest वा त्यो होटल
+    // managed गर्ने partner। `isPartnerOfHotel` तल hotel_bookings rule
+    // नजिकै परिभाषित छ, Firestore rules मा function order मात्तर गर्दैन।
+    function isHotelBookingParticipant(requestId) {
+      let path = /databases/$(database)/documents/hotel_bookings/$(requestId);
+      return exists(path) && (
+        get(path).data.userId == request.auth.uid
+        || isPartnerOfHotel(get(path).data.hotelId));
+    }
+    // `chats`/`calls` का `requestId` ride/service job (serviceRequests) वा
+    // hotel booking (hotel_bookings) दुवैबाट आउन सक्छ — दुवै जाँच्ने।
+    // Salon ग्राहक ↔ मालिक chat — `salon_chats/{id}.participants` मा आफ्नो uid।
+    function isSalonChatParticipant(requestId) {
+      let path = /databases/$(database)/documents/salon_chats/$(requestId);
+      return exists(path)
+        && request.auth.uid in get(path).data.participants;
+    }
     function isChatParticipant(requestId) {
-      let r = get(/databases/$(database)/documents/serviceRequests/$(requestId)).data;
-      return r.employerUid == request.auth.uid || r.workerUid == request.auth.uid;
+      return isServiceRequestParticipant(requestId)
+        || isHotelBookingParticipant(requestId)
+        || isSalonChatParticipant(requestId);
     }
     match /chats/{requestId} {
       allow read, create, update: if isSignedIn()
@@ -192,8 +551,17 @@ service cloud.firestore {
       allow delete: if isSignedIn()
         && (isChatParticipant(requestId) || isAdmin());
       match /messages/{msg} {
-        allow read, create, update, delete: if isSignedIn()
+        allow read, delete: if isSignedIn()
           && (isChatParticipant(requestId) || isAdmin());
+        // अर्काको नाममा सन्देश बनाउन/पठाउनेको पहिचान बदल्न नपाइने।
+        allow create: if isSignedIn()
+          && (isChatParticipant(requestId) || isAdmin())
+          && request.resource.data.get('senderUid', request.auth.uid)
+               == request.auth.uid;
+        allow update: if isSignedIn()
+          && (isChatParticipant(requestId) || isAdmin())
+          && request.resource.data.get('senderUid', '')
+               == resource.data.get('senderUid', '');
       }
     }
 
@@ -213,41 +581,106 @@ service cloud.firestore {
     // ── notifications (per user) ────────────────────────────
     // कुनै पनि signed-in user ले अर्को user लाई notification पठाउन सक्छ
     // (जस्तै: employer ले काम post गर्दा नजिकका worker लाई radar alert)।
+    // Security audit fix — पहिले जुनसुकै शीर्षक/सामग्री/`callerUid` सहित जसले पनि
+    // जसलाई पनि सूचना (र push) पठाउन सक्थ्यो। अब: आकार सीमा, `read: false`,
+    // र नक्कली कल-सूचना रोक्न `callerUid` आफ्नै हुनैपर्छ।
+    // Hardening: अर्काको uid मा सूचना पठाउन त्यो साझा booking (`requestId`)
+    // मा पठाउने आफू सहभागी र प्राप्तकर्ता अर्को सहभागी (वा खुला broadcast को
+    // radar alert) हुनैपर्छ — अपरिचित व्यक्तिलाई नक्कली push पठाउन नपाइने।
+    function notifTargetAllowed() {
+      let d = request.resource.data;
+      let rid = d.get('requestId', '');
+      return d.uid == request.auth.uid
+        || (rid is string && rid != ''
+            && ((exists(/databases/$(database)/documents/serviceRequests/$(rid))
+                 && (
+                   (get(/databases/$(database)/documents/serviceRequests/$(rid))
+                      .data.employerUid == request.auth.uid
+                    && (get(/databases/$(database)/documents/serviceRequests/$(rid))
+                          .data.get('workerUid', '') == d.uid
+                        // खुला (radar) सूचना: प्राप्तकर्ता approve भएको ड्राइभर
+                        // मात्र, र नक्कली कल/type-वाला सूचना होइन।
+                        || (get(/databases/$(database)/documents/serviceRequests/$(rid))
+                              .data.status in ['broadcasting', 'pending_worker',
+                                               'pending_worker_counter',
+                                               'pending_employer_approval']
+                            && isApprovedDriver(d.uid)
+                            && !('callerUid' in d)
+                            && d.get('type', '') == '')))
+                   || ((get(/databases/$(database)/documents/serviceRequests/$(rid))
+                         .data.get('workerUid', '') == request.auth.uid
+                        || exists(/databases/$(database)/documents/serviceRequests/$(rid)/rideOffers/$(request.auth.uid)))
+                       && get(/databases/$(database)/documents/serviceRequests/$(rid))
+                            .data.employerUid == d.uid)))
+                || isHotelBookingParticipant(rid)
+                // Salon chat — पठाउने र प्राप्तकर्ता दुवै त्यही chat का सहभागी।
+                || (exists(/databases/$(database)/documents/salon_chats/$(rid))
+                    && request.auth.uid in get(/databases/$(database)/documents/salon_chats/$(rid)).data.participants
+                    && d.uid in get(/databases/$(database)/documents/salon_chats/$(rid)).data.participants)));
+    }
     match /notifications/{doc} {
       allow read, update: if isSignedIn()
         && resource.data.uid == request.auth.uid;
       allow create: if isSignedIn()
-        && request.resource.data.uid is string;
+        && notifTargetAllowed()
+        && request.resource.data.uid is string
+        && request.resource.data.uid.size() > 0
+        && request.resource.data.uid.size() <= 128
+        && request.resource.data.get('title', '') is string
+        && request.resource.data.get('title', '').size() <= 120
+        && request.resource.data.get('body', '') is string
+        && request.resource.data.get('body', '').size() <= 500
+        && request.resource.data.get('read', false) == false
+        && (!('callerUid' in request.resource.data)
+            || request.resource.data.callerUid == request.auth.uid);
       allow delete: if (isSignedIn() && resource.data.uid == request.auth.uid)
         || isAdmin();
     }
 
     // ── adminNotifications ─────────────────────────────────
+    // Hardening: spam/आकार-दुरुपयोग रोक्न हरेक create मा फिल्ड-संख्या सीमा।
+    function smallDoc() {
+      return request.resource.data.keys().size() <= 25;
+    }
     match /adminNotifications/{doc} {
-      allow create: if isSignedIn();
+      allow create: if isSignedIn() && smallDoc();
       allow read, update, delete: if isAdmin();
     }
 
     // ── reports / supportMessages (user → admin) ───────────
     match /reports/{doc} {
-      allow create: if isSignedIn();
+      allow create: if isSignedIn() && smallDoc();
       allow read, update, delete: if isAdmin();
     }
     match /supportMessages/{doc} {
-      allow create: if isSignedIn();
+      allow create: if isSignedIn() && smallDoc();
       allow read, update, delete: if isAdmin();
     }
 
     // ── cancellations (ride/job cancel reason — analytics-only log,
     // बुकिङ आफैं cancel हुँदा पूर्ण रूपमा मेटिन्छ, यो छुट्टै हल्का log हो) ──
     match /cancellations/{doc} {
-      allow create: if isSignedIn();
+      allow create: if isSignedIn() && smallDoc();
       allow read, update, delete: if isAdmin();
+    }
+
+    // ── cancelNotices (cancel गर्दा छानिएको कारण अर्को पक्षलाई पुर्‍याउने,
+    // एकपटक पढेपछि उसैले मेट्छ) ──
+    match /cancelNotices/{doc} {
+      // doc id = booking id; पठाउने त्यही booking को सहभागी हुनैपर्छ भन्ने
+      // जाँच booking मेटिएपछि सम्भव छैन, त्यसैले आकार मात्र सीमित।
+      allow create: if isSignedIn() && smallDoc()
+        && request.resource.data.get('reason', '') is string
+        && request.resource.data.get('reason', '').size() <= 200;
+      allow read, delete: if isSignedIn() &&
+        (resource.data.targetUid == request.auth.uid || isAdmin());
+      allow update: if isAdmin();
     }
 
     // ── sosAlerts (emergency SOS button — admin/support ले पछि हेर्ने) ──
     match /sosAlerts/{doc} {
-      allow create: if isSignedIn();
+      allow create: if isSignedIn() && smallDoc()
+        && request.resource.data.get('uid', '') == request.auth.uid;
       allow read: if isSignedIn()
         && (resource.data.uid == request.auth.uid || isAdmin());
       allow update, delete: if isAdmin();
@@ -258,22 +691,322 @@ service cloud.firestore {
     // (अरू कसैको नाममा समेत) फर्जी review लेख्न सक्थे — रेटिङ बढाउने/
     // प्रतिस्पर्धीलाई तल झार्ने दुरुपयोग हुन सक्थ्यो। अब authorUid
     // आफ्नै हुनैपर्छ, र जुन booking (`requestId`) को नाममा review
-    // लेखिँदैछ त्यो साँच्चै आफूले नै employer भएर पूरा गरेको (completed)
-    // काम नै हुनुपर्छ — worker को uid पनि मिल्नुपर्छ।
+    // लेखिँदैछ त्यो साँच्चै आफूले नै employer भएर गरिरहेको काम नै
+    // हुनुपर्छ — worker को uid पनि मिल्नुपर्छ।
+    //
+    // Same-Batch Status Check Bug — पहिले यहाँ `status == 'completed'`
+    // थियो। तर `complete_job_sheet.dart::_confirm()` ले review लेखाइ र
+    // status लाई 'completed' मा बदल्ने लेखाइ दुवै उही एउटा atomic batch
+    // मा गर्छ — Firestore rules ले batch भित्रैको अर्को (अझै commit
+    // नभएको) लेखाइ कहिल्यै देख्दैन, हरेक `get()` ले सधैं batch सुरु हुनुअघिकै
+    // (अझै 'completed' नभएको) स्थिति मात्र पढ्छ। त्यसैले यो rule सधैं असफल
+    // हुन्थ्यो — review/rating/status-completed/wallet-ledger भएको पूरै
+    // batch नै हरेकपटक PERMISSION_DENIED भई असफल ("Complete Job" बटन
+    // थिचेर पनि केही नहुने" गुनासोको साँचो, 100% दोहोरिने जड)। तल्लै
+    // `walletLedger` rule (उही batch, उस्तै समस्या) ले पहिल्यै सही गरेको
+    // `activeJobStatuses()` जाँच यहाँ पनि मिलाइयो।
     match /reviews/{doc} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn()
-        && request.resource.data.authorUid == request.auth.uid
-        && get(/databases/$(database)/documents/serviceRequests/$(request.resource.data.requestId)).data.employerUid == request.auth.uid
-        && get(/databases/$(database)/documents/serviceRequests/$(request.resource.data.requestId)).data.workerUid == request.resource.data.targetUid
-        && get(/databases/$(database)/documents/serviceRequests/$(request.resource.data.requestId)).data.status == 'completed';
+      // Security audit fix — review अब Cloud Function (`completeJob`) ले मात्र
+      // लेख्छ (रेटिङ फर्जी बनाउन/बढाउन नमिल्ने)।
+      allow create: if isAdmin();
       allow update, delete: if isAdmin();
     }
 
-    // ── config (support number etc.) ──────────────────────
+    // ── config (support number, fare matrix, payments/commission etc.) ──
+    // Security audit fix — पहिले सबै config (बैंक खाता नम्बर, eSewa/Khalti
+    // merchant ID, TURN प्रमाण) लग इन नगरी इन्टरनेटमा जसले पनि पढ्न सक्थ्यो।
+    // अब `payments` र `webrtc` लग इन युजरलाई मात्र; बाँकी (भाडा-दर, support,
+    // social, help, appUpdate — connectivity ping पनि यही) सार्वजनिक सामग्री।
     match /config/{doc} {
-      allow read: if true;
+      allow read: if isSignedIn() || !(doc in ['payments', 'webrtc']);
       allow write: if isAdmin();
+    }
+
+    // ── walletLedger (Wallet & Commission Ledger) ───────────
+    // हरेक job-completion (widgets/complete_job_sheet.dart::_confirm())
+    // ले यहाँ एउटा entry लेख्छ — employer ले (worker आफैं होइन) लेख्छ,
+    // त्यही booking का साँचो employer/worker pair हो भनेर पुष्टि गरेर मात्र।
+    // नोट: यो `get()` ले batch भित्रकै अर्को write (serviceRequests को
+    // status → 'completed') भन्दा *अघिको* अवस्था नै देख्छ (Firestore
+    // batched writes मा rules ले request सुरु हुँदाकै state प्रयोग गर्छ,
+    // सोही batch भित्रका अन्य pending write होइन) — त्यसैले यहाँ status
+    // 'completed' भइसकेको जाँच्नु सम्भवै छैन; बरु completion हुनुअघिको
+    // सक्रिय अवस्था (`activeJobStatuses()`) मै रहेको जाँचिन्छ।
+    match /walletLedger/{doc} {
+      allow read: if isSignedIn()
+        && (resource.data.workerUid == request.auth.uid || isAdmin());
+      // Security audit fix — ledger/commission अब Cloud Function (`completeJob`,
+      // Admin SDK) ले मात्र लेख्छ। क्लाइन्टबाट (जस्तै नक्कली top-up वा कमिसन
+      // शून्य) कुनै पनि entry बन्न नपाइने।
+      allow create: if isAdmin();
+      // Settlement (admin_settlement_screen.dart) ले settled/settledAt/
+      // settlementId मात्र अपडेट गर्छ — admin-मात्र।
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── settlements (Admin Settlement Dashboard hooks) ──────
+    // Admin ले worker को pending ledger entry हरू settle गर्दा बन्ने
+    // record — driver आफैंले आफ्नो settlement history हेर्न पाउँछ,
+    // तर लेख्ने/बदल्ने भने admin-मात्र (साँचो पैसा app भित्र चलेको होइन,
+    // यो केवल admin ले बाहिर वास्तविक भुक्तानी गरिसकेको log हो)।
+    match /settlements/{doc} {
+      allow read: if isSignedIn()
+        && (resource.data.workerUid == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ── Hotel Booking System ─────────────────────────────────
+    // `hotels` — Hotel Registration/Onboarding स्क्रिनबाट कुनै पनि signed-in
+    // user ले आफैंलाई `ownerId` तोकेर नयाँ होटल सिर्जना गर्न पाउँछ (अरू
+    // कसैलाई ownerId नतोकी)। सम्पादन (amenities/rules/दर आदि) त्यही मालिक
+    // वा admin-मात्र — अरू कसैले आफूले सिर्जना नगरेको होटल बदल्न पाउँदैनन्।
+    // Hotel Registration/Onboarding — Super-Admin verification। नयाँ होटल
+    // सधैं `status: 'pending'` बाटै सुरु हुनुपर्छ (client ले जे पठाए पनि
+    // यहीं जाँचिन्छ), र मालिकले पछि आफैं त्यो field बदल्न पाउँदैन — केवल
+    // admin ले (hotel_verification_admin_screen.dart)। owner_activeJobId
+    // कै उस्तै `diff().affectedKeys()` pattern।
+    match /hotels/{doc} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        !request.resource.data.keys().hasAny(
+          ['isVerified', 'verified', 'featured', 'isFeatured']);
+      allow update: if isAdmin() ||
+        (isSignedIn() && resource.data.ownerId == request.auth.uid &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['status', 'ownerId', 'isVerified', 'verified',
+                     'featured', 'isFeatured']));
+      allow delete: if isAdmin();
+    }
+    // `rooms` — नयाँ कोठा सिर्जना त्यही होटलको मालिक (वा admin) मात्र;
+    // status/दर बदल्ने (Partner Dashboard) पनि उस्तै।
+    match /rooms/{doc} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() || (isSignedIn() &&
+        get(/databases/$(database)/documents/hotels/$(request.resource.data.hotelId))
+          .data.ownerId == request.auth.uid);
+      allow update: if isAdmin() || (isSignedIn() &&
+        get(/databases/$(database)/documents/hotels/$(resource.data.hotelId))
+          .data.ownerId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+    // `hotel_bookings` — हरेक signed-in user ले सबै booking पढ्न पाउँछन्
+    // (केवल आफ्नै होइन) — inventory/availability जाँच (services/
+    // hotel_booking_service.dart::remainingRoomUnits) ले roomId+dateRange
+    // अनुसार *सबैको* active booking count गर्नुपर्ने भएकोले। Firestore
+    // security rules ले query result लाई doc-by-doc partially filter
+    // गर्दैन — query ले फर्काउने सम्भाव्य कुनै doc rule-ले deny गरे पूरै
+    // query नै permission-denied हुन्छ (यही बग अघिल्लो "owner-मात्र read"
+    // rule ले ल्यायो: availability query अरूको booking समेत खोज्ने भएकोले
+    // सिधै असफल हुन्थ्यो, अनि client-साइड त्यो exception नसमातिएकोले
+    // "Confirm Booking" बटन सधैँ loading मै अड्किन्थ्यो)। guest ले आफ्नै
+    // बुकिङ सिर्जना/cancel मात्र गर्न पाउँछन्, तर बाँकी status transition
+    // (confirmed/checked_in — hotel-साइड) हाल admin-मात्र।
+    // Hotel Partner Dashboard — receptionist/manager ले आफूले managed गर्ने
+    // होटलका booking को status बदल्न (Confirm/Check-In/Check-Out/Cancel/
+    // No-Show) पाउँछन्। "कुन होटल मैले managed गर्छु" भन्ने list
+    // `users/{uid}.partnerHotelIds` मा नै बस्छ (हाल `hotels` भनेर छुट्टै
+    // Firestore collection छैन — hotel catalog अझै mock/in-memory छ, तल
+    // hotel_mock_data.dart हेर्नुहोस्) — त्यसैले यहाँ caller आफ्नै
+    // `users/{uid}` doc मात्र पढ्छ (अरू कसैको होइन), कुनै थप collection
+    // चाहिँदैन।
+    // Owner-Based Partner — होटल दर्ता गर्ने मालिक (`hotels/{id}.ownerId`)
+    // सधैं आफ्नो होटलको partner हो, `partnerHotelIds` सूचीमा नभए पनि (सूची
+    // अब client ले आफूखुसी लेख्न नसक्ने — माथि `users` rule हेर्नुहोस्)।
+    function isHotelOwner(hotelId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/hotels/$(hotelId)) &&
+        get(/databases/$(database)/documents/hotels/$(hotelId))
+          .data.ownerId == request.auth.uid;
+    }
+    function isPartnerOfHotel(hotelId) {
+      return isSignedIn() &&
+        (isHotelOwner(hotelId) ||
+          hotelId in get(/databases/$(database)/documents/users/$(request.auth.uid))
+            .data.get('partnerHotelIds', []));
+    }
+    // Guest-ले कहिल्यै बदल्न नपाउने बुकिङ field (मूल्य/मिति/कोठा/भुक्तानी/QR/
+    // check-in-out stamp आदि) — पहिले guest ले status नबदली जुनसुकै field
+    // (totalPrice सहित) बदल्न सक्थ्यो।
+    function guestProtectedBookingKeys() {
+      return ['userId', 'hotelId', 'roomId', 'checkInDate', 'checkOutDate',
+              'guestsCount', 'totalPrice', 'unitsCount', 'paymentType',
+              'qrCodeData', 'depositAmount', 'depositReference',
+              'checkedInAt', 'checkedOutAt', 'checkoutAdditionalCharges',
+              'createdAt'];
+    }
+    match /hotel_bookings/{doc} {
+      // Booking PII (guest नाम/फोन/इमेल) Leak Fix — पहिले जुनसुकै signed-in
+      // user ले सबै बुकिङ पढ्न सक्थ्यो (availability गन्न)। अब आफ्नै बुकिङ,
+      // त्यो होटलको partner/मालिक, वा admin मात्र। availability अब
+      // Cloud Function (`hotelRoomAvailability`, Admin SDK) ले गन्छ।
+      allow read: if isSignedIn() &&
+        (resource.data.userId == request.auth.uid ||
+          isPartnerOfHotel(resource.data.hotelId) ||
+          isAdmin());
+      // नयाँ बुकिङ pending/confirmed बाट मात्र सुरु हुन सक्छ (checked_in/
+      // completed आदि आफैं लेख्न नपाइने) र check-in/out stamp आफैं नलेखिने।
+      allow create: if isSignedIn() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status in ['pending', 'confirmed'] &&
+        !request.resource.data.keys().hasAny(
+          ['checkedInAt', 'checkedOutAt', 'checkoutAdditionalCharges']);
+      allow update: if isAdmin() ||
+        (isSignedIn() && resource.data.userId == request.auth.uid &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(guestProtectedBookingKeys()) &&
+          // status नबदली chat (lastMessage/lastMessageAt/lastSenderUid,
+          // readBy — chat_screen.dart) वा cancel — तर cancel केवल
+          // pending/confirmed बाट (checked_in/completed/no_show बाट होइन)।
+          (request.resource.data.status == resource.data.status ||
+            (request.resource.data.status == 'cancelled' &&
+              resource.data.status in ['pending', 'confirmed']))) ||
+        isPartnerOfHotel(resource.data.hotelId);
+      allow delete: if isAdmin();
+    }
+    // `hotel_reviews` — सबैले पढ्न पाउँछन्; आफ्नै नाममा मात्र लेख्न पाउँछन्।
+    // Two-Tier Admin Control — admin ले जुनसुकै field बदल्न/मेटाउन पाउँछ;
+    // त्यो होटलकै partner ले चाहिं केवल `featured` (Guest Quote छनोट) मात्र
+    // बदल्न पाउँछ — rating/comment/reviewerName जस्ता guest-कै आफ्नै डेटा
+    // partner ले कहिल्यै touch गर्न नपाओस् भनेर diff-limited।
+    match /hotel_reviews/{doc} {
+      allow read: if true;
+      allow create: if isSignedIn() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.rating is number &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5 &&
+        request.resource.data.get('featured', false) == false &&
+        smallDoc();
+      allow update: if isAdmin() ||
+        (isSignedIn() && isPartnerOfHotel(resource.data.hotelId) &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['userId', 'hotelId', 'rating', 'comment',
+              'reviewerName', 'country', 'createdAt']));
+      allow delete: if isAdmin();
+    }
+
+    // ── Salon / Beauty Appointment Booking (Booksy-style) ────
+    // Hotel module मा ठीक गरिएका गल्ती दोहोर्‍याइएको छैन:
+    //  • provider-भूमिका कसैले आफैं दिन नमिल्ने — `users` doc मा कुनै list
+    //    छैन; "मालिक" = `salons/{id}.ownerId` (create मा आफ्नै uid मात्र, पछि
+    //    बदल्न नपाइने), staff/service/appointment सबैको अधिकार यही एक जाँचबाट।
+    //  • बुकिङ PII (नाम/फोन) world-readable छैन — ग्राहक आफैं, त्यो salon को
+    //    मालिक, वा admin मात्र।
+    //  • बुकिङ create client बाट असम्भव (`create: false`) — मूल्य/अवधि/staff/
+    //    QR-token/payment status सबै Cloud Function (`bookSalonAppointment`,
+    //    transaction भित्र, Admin SDK) ले मात्र लेख्छ। ग्राहकले केवल cancel
+    //    (status मात्र) गर्न सक्छ।
+    //  • rating/review फर्जी लेख्न नसकिने — `salon_reviews` र salon को
+    //    `ratingSum/ratingCount` केवल `submitSalonReview` function ले।
+    function isSalonOwner(salonId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/salons/$(salonId)) &&
+        get(/databases/$(database)/documents/salons/$(salonId))
+          .data.ownerId == request.auth.uid;
+    }
+    match /salons/{salonId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        // नयाँ salon सधैँ 'pending' — admin ले approve गरेपछि मात्र 'active'।
+        request.resource.data.status == 'pending' &&
+        request.resource.data.ratingSum == 0 &&
+        request.resource.data.ratingCount == 0 &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 1 &&
+        request.resource.data.name.size() <= 80;
+      allow update: if isAdmin() ||
+        (isSignedIn() && resource.data.ownerId == request.auth.uid &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['ownerId', 'ratingSum', 'ratingCount', 'createdAt',
+                     'rejectionReason', 'reviewedAt']) &&
+          // मालिकले status: active ↔ paused मात्र (pending/rejected मा
+          // admin ले मात्र बदल्छ) — आफैं approve गर्न नपाइने।
+          (request.resource.data.status == resource.data.status ||
+            (resource.data.status in ['active', 'paused'] &&
+              request.resource.data.status in ['active', 'paused'])));
+      allow delete: if isAdmin();
+
+      // service menu — मूल्य संख्या र अवधि ५–६०० मिनेट मात्र।
+      match /services/{serviceId} {
+        allow read: if isSignedIn();
+        allow create, update: if (isAdmin() || isSalonOwner(salonId)) &&
+          request.resource.data.name is string &&
+          request.resource.data.name.size() > 0 &&
+          request.resource.data.name.size() <= 80 &&
+          request.resource.data.price is number &&
+          request.resource.data.price >= 0 &&
+          request.resource.data.durationMin is int &&
+          request.resource.data.durationMin >= 5 &&
+          request.resource.data.durationMin <= 600;
+        allow delete: if isAdmin() || isSalonOwner(salonId);
+      }
+      // staff + साप्ताहिक कामको समय।
+      match /staff/{staffId} {
+        allow read: if isSignedIn();
+        allow create, update: if (isAdmin() || isSalonOwner(salonId)) &&
+          request.resource.data.name is string &&
+          request.resource.data.name.size() > 0 &&
+          request.resource.data.name.size() <= 60;
+        allow delete: if isAdmin() || isSalonOwner(salonId);
+      }
+    }
+    match /salon_appointments/{apptId} {
+      allow read: if isSignedIn() &&
+        (resource.data.userId == request.auth.uid ||
+          resource.data.ownerId == request.auth.uid ||
+          isAdmin());
+      allow create: if false;
+      allow update: if isAdmin() ||
+        // ग्राहक — confirmed बुकिङ cancel मात्र (अरू कुनै field होइन)।
+        (isSignedIn() && resource.data.userId == request.auth.uid &&
+          resource.data.status == 'confirmed' &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status']) &&
+          request.resource.data.status == 'cancelled') ||
+        // salon मालिक — status/payment status मात्र (मूल्य/मिति/ग्राहक होइन)।
+        // 'completed' अपोइन्टमेन्ट सुरु हुनुअघि हुन नसक्ने (review-farming रोक)।
+        (isSignedIn() && resource.data.ownerId == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'paymentStatus', 'completedAt']) &&
+          request.resource.data.status in
+            ['confirmed', 'checked_in', 'completed', 'cancelled', 'no_show'] &&
+          request.resource.data.paymentStatus in ['unpaid', 'declared', 'paid'] &&
+          (request.resource.data.status != 'completed' ||
+            request.time >= resource.data.startAt));
+      allow delete: if isAdmin();
+    }
+    // Salon ग्राहक ↔ मालिक सम्पर्क (Message/Call/Video) — doc id =
+    // `{salonId}_{customerUid}`; ग्राहकले आफ्नै नाममा मात्र बनाउँछ र
+    // `participants` ठ्याक्कै [ग्राहक, salon-मालिक] हुनुपर्छ (मालिक salon doc बाट
+    // प्रमाणित)। बनेपछि participants/salon/uid बदल्न नपाइने।
+    match /salon_chats/{chatId} {
+      allow read: if isSignedIn() &&
+        (resource == null || request.auth.uid in resource.data.participants
+          || isAdmin());
+      allow create: if isSignedIn() &&
+        request.resource.data.customerUid == request.auth.uid &&
+        chatId == request.resource.data.salonId + '_' + request.auth.uid &&
+        request.resource.data.ownerUid != request.auth.uid &&
+        request.resource.data.participants == [request.auth.uid,
+          request.resource.data.ownerUid] &&
+        get(/databases/$(database)/documents/salons/$(request.resource.data.salonId))
+          .data.ownerId == request.resource.data.ownerUid &&
+        request.resource.data.keys().size() <= 20;
+      allow update: if isSignedIn() &&
+        request.auth.uid in resource.data.participants &&
+        !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['participants', 'salonId', 'ownerUid', 'customerUid']);
+      allow delete: if isAdmin();
+    }
+    match /salon_reviews/{reviewId} {
+      allow read: if isSignedIn();
+      allow create, update: if false;
+      allow delete: if isAdmin();
     }
 
     // बाँकी सबै बन्द

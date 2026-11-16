@@ -7,7 +7,7 @@
 //   • Instagram gradient (violet → pink → orange) + frosted-glass भित्री प्यानल
 //   • पुरानो मूल्य काटिएको + नयाँ मूल्य ठूलो/हाइलाइट
 //   • दुई ठूला बटन: Accept  |  Decline / Counter back
-import 'dart:ui' show ImageFilter;
+import 'glass_ui.dart';
 
 import 'package:flutter/material.dart';
 
@@ -120,9 +120,18 @@ class _CounterOfferCardState extends State<CounterOfferCard>
   }
 
   Widget _cardBody() {
+    // `_actions()` (Accept/Decline बटन) लाई `AnimatedBuilder.child` बाट
+    // स्थिर राखिएको — यसले `t` (pulse) मा भर पर्दैन। पहिले यो सिधै
+    // `builder:` भित्रै थियो, जसले गर्दा `_pulse` (अनन्त `repeat()`)
+    // को हरेक frame मा (120Hz सम्म, सेकेन्डमा धेरैपटक) बटनको पूरै
+    // `Material > InkWell` subtree भत्काएर फेरि बनाउँथ्यो — यसले
+    // Chrome/web मा click लाई बीचमै टुट्न (pointer-down → pointer-up
+    // बीच hit-test target नै बदलिएर) वा अत्यन्त गाह्रो/लट्ठ देखिन बाध्य
+    // पार्थ्यो। अब बटन एकपटक मात्र बन्छ, हरेक pulse tick मा होइन।
     return AnimatedBuilder(
       animation: _pulse,
-      builder: (context, _) {
+      child: _actions(),
+      builder: (context, actionsChild) {
         final t = Curves.easeInOut.transform(_pulse.value); // 0..1
         return Container(
           decoration: BoxDecoration(
@@ -147,9 +156,7 @@ class _CounterOfferCardState extends State<CounterOfferCard>
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(24),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-              child: Container(
+            child: glassBackdrop(sigma: 12, child: Container(
                 padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.13),
@@ -164,8 +171,24 @@ class _CounterOfferCardState extends State<CounterOfferCard>
                     _header(t),
                     const SizedBox(height: 14),
                     _priceRow(t),
-                    const SizedBox(height: 18),
-                    _actions(),
+                    const SizedBox(height: 10),
+                    // Mutual Consent Rule — दुवै पक्ष (counter-offer पठाउने
+                    // र प्राप्त गर्ने दुवै) ले आ-आफ्नै छुट्टै Accept नथिचेसम्म
+                    // राइड कहिल्यै सुरु हुँदैन (job_actions.dart::
+                    // driverAcceptPassengerCounter/acceptWorkerCounterOffer/
+                    // _acceptEmployerCounter हेर्नुहोस्) — यो UI-स्तरमा नै
+                    // स्पष्ट पारिदिने, "accept गरें तर राइड सुरु भएन" जस्तो
+                    // भ्रम नहोस् भनेर।
+                    Text(
+                      S.dualAcceptanceNote,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.75),
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    actionsChild!,
                   ],
                 ),
               ),

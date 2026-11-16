@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 
 import 'l10n/strings.dart';
 import 'location_util.dart';
+import 'screens/nearby_common.dart' show kCloudMapId;
 import 'theme/app_theme.dart';
 import 'widgets/glass_ui.dart';
 
@@ -160,6 +161,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
           GoogleMap(
             // Close-up — street/house-level, ठ्याक्कै ठाउँ छान्न सजिलो होस्।
             initialCameraPosition: CameraPosition(target: _center, zoom: 18.5),
+            mapId: kCloudMapId,
             onMapCreated: (c) => _map = c,
             onCameraMove: (p) => _center = p.target,
             onCameraIdle: _onIdle,
@@ -256,17 +258,14 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                           child: OutlinedButton.icon(
                             style: OutlinedButton.styleFrom(
                               foregroundColor: AppColors.kmText,
-                              side:
-                                  BorderSide(color: AppColors.kmGlassBorder),
-                              padding: const EdgeInsets.symmetric(
-                                  vertical: 14),
+                              side: BorderSide(color: AppColors.kmGlassBorder),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
-                                  borderRadius:
-                                      BorderRadius.circular(999)),
+                                  borderRadius: BorderRadius.circular(999)),
                             ),
                             onPressed: _useCurrentLocation,
-                            icon: const Icon(Icons.my_location_rounded,
-                                size: 18),
+                            icon:
+                                const Icon(Icons.my_location_rounded, size: 18),
                             label: Text(S.useMyLocation),
                           ),
                         ),

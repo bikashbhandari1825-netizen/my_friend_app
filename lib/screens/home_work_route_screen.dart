@@ -3,7 +3,6 @@
 // सडक मार्ग OSRM (नि:शुल्क, key नचाहिने) बाट; असफल भए सीधा रेखा + haversine।
 import 'dart:convert';
 import 'dart:math';
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -12,7 +11,7 @@ import 'package:http/http.dart' as http;
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_ui.dart';
-import 'nearby_common.dart' show haversineKm;
+import 'nearby_common.dart' show haversineKm, kCloudMapId;
 
 class HomeWorkRouteScreen extends StatefulWidget {
   final Map<String, dynamic> home;
@@ -122,9 +121,7 @@ class _HomeWorkRouteScreenState extends State<HomeWorkRouteScreen> {
         foregroundColor: AppColors.kmText,
         elevation: 0,
         flexibleSpace: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: DecoratedBox(
+          child: glassBackdrop(sigma: 18, child: DecoratedBox(
               decoration: BoxDecoration(
                 color: AppColors.kmVoid.withValues(alpha: 0.35),
               ),
@@ -136,6 +133,7 @@ class _HomeWorkRouteScreenState extends State<HomeWorkRouteScreen> {
         children: [
           GoogleMap(
             initialCameraPosition: CameraPosition(target: _from, zoom: 12),
+            mapId: kCloudMapId,
             onMapCreated: (c) {
               _map = c;
               _fitBounds();
@@ -179,15 +177,15 @@ class _HomeWorkRouteScreenState extends State<HomeWorkRouteScreen> {
             },
           ),
           if (_loading)
-            Positioned(
+            const Positioned(
               top: 14 + kToolbarHeight + 24,
               left: 0,
               right: 0,
               child: Center(
                 child: GlassPanel(
                   radius: 16,
-                  padding: const EdgeInsets.all(10),
-                  child: const SizedBox(
+                  padding: EdgeInsets.all(10),
+                  child: SizedBox(
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(

@@ -45,6 +45,9 @@ class S {
   static String get navProfile => _t('nav_profile');
   static String get navWatchlist => _t('nav_watchlist');
   static String get navJobFeed => _t('nav_job_feed');
+  // Bike/Car चलाउने driver का लागि मात्र — बाँकी trade (mechanic/plumber/
+  // आदि) मा अझै साधारण "Job feed" नै रहन्छ (उनीहरूको काम "राइड" होइन)।
+  static String get navRideFeed => _t('nav_ride_feed');
   static String get navBookings => _t('nav_bookings');
 
   // ── Active job bar (pinned above bottom nav) ────────────
@@ -52,6 +55,18 @@ class S {
       _t('active_job_bar_cancel_title');
   static String get activeJobBarCancelBody => _t('active_job_bar_cancel_body');
   static String get keepJob => _t('keep_job');
+  // Ride-अनुसार शब्दावली — Bike/Car राइडमा "Job" होइन "Ride" भनिनुपर्छ,
+  // Plumber/Electrician जस्ता सीपयुक्त कामदारमा भने "Job" नै यथावत्।
+  static String get activeRideBarCancelTitle =>
+      _t('active_ride_bar_cancel_title');
+  static String get activeRideBarCancelBody =>
+      _t('active_ride_bar_cancel_body');
+  static String get keepRide => _t('keep_ride');
+  static String activeJobBarCancelTitleFor(bool isRide) =>
+      isRide ? activeRideBarCancelTitle : activeJobBarCancelTitle;
+  static String activeJobBarCancelBodyFor(bool isRide) =>
+      isRide ? activeRideBarCancelBody : activeJobBarCancelBody;
+  static String keepJobFor(bool isRide) => isRide ? keepRide : keepJob;
 
   // ── Home ─────────────────────────────────────────────────
   static String get greeting => _t('greeting');
@@ -131,8 +146,7 @@ class S {
   static String get surnameLabel => _t('surname_label');
   static String get vehicleCategoryHint => _t('vehicle_category_hint');
   static String get agreeTermsLabel => _t('agree_terms_label');
-  static String get agreeTermsRequiredError =>
-      _t('agree_terms_required_error');
+  static String get agreeTermsRequiredError => _t('agree_terms_required_error');
   static String get reviewPersonalSection => _t('review_personal_section');
   static String get reviewVehicleSection => _t('review_vehicle_section');
   static String get reviewLicenseSection => _t('review_license_section');
@@ -153,8 +167,7 @@ class S {
   static String get thisWeekLabel => _t('this_week_label');
   static String get viewFullEarnings => _t('view_full_earnings');
   static String get documentStatusSection => _t('document_status_section');
-  static String get verificationStatusLabel =>
-      _t('verification_status_label');
+  static String get verificationStatusLabel => _t('verification_status_label');
   static String get statusPending => _t('status_pending');
   static String get statusApproved => _t('status_approved');
   static String get statusRejected => _t('status_rejected');
@@ -165,6 +178,16 @@ class S {
   static String get lastName => _t('last_name');
   static String get phone => _t('phone');
   static String get dob => _t('dob');
+  static String get profileRegistrationTitle =>
+      _t('profile_registration_title');
+  static String get addPhotoHint => _t('add_photo_hint');
+  static String get firstNameRequiredError => _t('first_name_required_error');
+  static String get lastNameRequiredError => _t('last_name_required_error');
+  static String get validEmailRequiredError => _t('valid_email_required_error');
+  static String cameraOpenFailed(Object e) => '${_t('camera_open_failed')}: $e';
+  static String filePickFailed(Object e) => '${_t('file_pick_failed')}: $e';
+  static String get keepProfilePhotoTitle => _t('keep_profile_photo_title');
+  static String get profilePhotoSaved => _t('profile_photo_saved');
   static String get pickDate => _t('pick_date');
   static String get locationSection => _t('location_section');
   static String get useMyLocation => _t('use_my_location');
@@ -175,6 +198,7 @@ class S {
   static String get selectVehicleType => _t('select_vehicle_type');
   static String get bikeWord => _t('bike_word');
   static String get carWord => _t('car_word');
+  static String get autoWord => _t('auto_word');
   static String get bikeRideHint => _t('bike_ride_hint');
   static String get carRideHint => _t('car_ride_hint');
   static String get selectVehicleTypeError => _t('select_vehicle_type_error');
@@ -187,6 +211,7 @@ class S {
   static String get licenseCategoryLabel => _t('license_category_label');
   static String get licenseCategoryBike => _t('license_category_bike');
   static String get licenseCategoryCar => _t('license_category_car');
+  static String get licenseCategoryAuto => _t('license_category_auto');
   static String get licenseIssueDateLabel => _t('license_issue_date_label');
   static String get licenseExpiryDateLabel => _t('license_expiry_date_label');
   static String get selectDateHint => _t('select_date_hint');
@@ -196,12 +221,71 @@ class S {
   static String get vehicleColorLabel => _t('vehicle_color_label');
   static String get vehiclePlateLabel => _t('vehicle_plate_label');
   static String get vehicleInsuranceLabel => _t('vehicle_insurance_label');
+  static String get seatingCapacityLabel => _t('seating_capacity_label');
+  static String get routePermitLabel => _t('route_permit_label');
+  // ── Dedicated Bike/Car/Auto registration screens ──────────
+  static String get bikeRegTitle => _t('bike_reg_title');
+  static String get carRegTitle => _t('car_reg_title');
+  static String get autoRegTitle => _t('auto_reg_title');
+  static String driverRegTitleFor(String? vehicleType) => switch (vehicleType) {
+        'Bike' => bikeRegTitle,
+        'Car' => carRegTitle,
+        'Auto' => autoRegTitle,
+        _ => driverRegTitle,
+      };
+  static String licenseNumberLabelFor(String? vehicleType) =>
+      switch (vehicleType) {
+        'Bike' => _t('bike_license_number_label'),
+        'Car' => _t('driver_license_number_label'),
+        'Auto' => _t('auto_license_number_label'),
+        _ => licenseNumberLabel,
+      };
+  static String vehiclePlateLabelFor(String? vehicleType) =>
+      switch (vehicleType) {
+        'Bike' => _t('bike_plate_label'),
+        'Car' => _t('car_plate_label'),
+        'Auto' => _t('auto_plate_label'),
+        _ => vehiclePlateLabel,
+      };
+  // Dedicated Bike/Car/Auto screen हरूको license/vehicle-docs step माथिको
+  // section heading — generic wizard (fixedVehicleType==null) मा भने
+  // पहिलेकै साझा heading (drivingLicenseLabel/vehicleRegistrationLabel) नै।
+  static String licenseSectionHeadingFor(String? vehicleType) =>
+      switch (vehicleType) {
+        'Bike' => _t('bike_license_section_heading'),
+        'Car' => _t('car_license_section_heading'),
+        'Auto' => _t('auto_license_section_heading'),
+        _ => drivingLicenseLabel,
+      };
+  static String vehicleDocsSectionHeadingFor(String? vehicleType) =>
+      switch (vehicleType) {
+        'Bike' => _t('bike_docs_section_heading'),
+        'Car' => _t('car_docs_section_heading'),
+        'Auto' => _t('auto_docs_section_heading'),
+        _ => vehicleRegistrationLabel,
+      };
+  static String bluebookNumberLabelFor(String? vehicleType) =>
+      switch (vehicleType) {
+        'Car' => _t('car_bluebook_number_label'),
+        'Auto' => _t('auto_bluebook_number_label'),
+        _ => _t('bike_bluebook_number_label'),
+      };
+  static String get bluebookNumberRequiredError =>
+      _t('bluebook_number_required_error');
+  static String get airConditioningLabel => _t('air_conditioning_label');
+  static String get routePermitNumberLabel => _t('route_permit_number_label');
+  static String get routePermitNumberRequiredError =>
+      _t('route_permit_number_required_error');
   static String get licenseDetailsRequiredError =>
       _t('license_details_required_error');
   static String get licenseExpiredError => _t('license_expired_error');
   static String get vehicleDetailsRequiredError =>
       _t('vehicle_details_required_error');
   static String get uploadInsuranceError => _t('upload_insurance_error');
+  static String get seatingCapacityRequiredError =>
+      _t('seating_capacity_required_error');
+  static String get routePermitRequiredError =>
+      _t('route_permit_required_error');
   static String get dobRequiredError => _t('dob_required_error');
   static String get stepVehicleDocs => _t('step_vehicle_docs');
   static String get whereToHint => _t('where_to_hint');
@@ -209,12 +293,42 @@ class S {
   static String get confirmDestinationCta => _t('confirm_destination_cta');
   static String get pickupLabel => _t('pickup_label');
   static String get destinationLabel => _t('destination_label');
+  static String get viewLocation => _t('view_location');
+  static String get pickupPointLabel => _t('pickup_point_label');
+  static String get dropPointLabel => _t('drop_point_label');
   static String get changeDestination => _t('change_destination');
   static String get requestRide => _t('request_ride');
   static String get findOffer => _t('find_offer');
   static String get rideHeroTitle => _t('ride_hero_title');
   static String get rideHeroSubtitle => _t('ride_hero_subtitle');
   static String get bookNowCta => _t('book_now_cta');
+  static String get serviceDirectoryTitle => _t('service_directory_title');
+  static String get handymanCategoriesTitle => _t('handyman_categories_title');
+  static String get homeServicePickerTitle => _t('home_service_picker_title');
+  static String get homeSuperAppHeader => _t('home_super_app_header');
+  static String get homeSuperAppSubtitle => _t('home_super_app_subtitle');
+  static String get homeComingSoon => _t('home_coming_soon');
+  static String get homeSearchHint => _t('home_search_hint');
+  static String get homeBannerBrandLabel => _t('home_banner_brand_label');
+  static String get homeBannerTitlePrefix => _t('home_banner_title_prefix');
+  static String get homeBannerTitleRest => _t('home_banner_title_rest');
+  static String get homeTagInstantRides => _t('home_tag_instant_rides');
+  static String get homeTagVerifiedHotels => _t('home_tag_verified_hotels');
+  static String get homeTagLocalHandymen => _t('home_tag_local_handymen');
+  static String get homeMore => _t('home_more');
+  static String get profileNameNotSet => _t('profile_name_not_set');
+  static String get profileEditHint => _t('profile_edit_hint');
+  static String get biometricLoginLabel => _t('biometric_login_label');
+  static String get biometricUnsupported => _t('biometric_unsupported');
+  static String get appLockTitle => _t('app_lock_title');
+  static String get appLockSubtitle => _t('app_lock_subtitle');
+  static String get appLockUnlockButton => _t('app_lock_unlock_button');
+  static String get appLockFailed => _t('app_lock_failed');
+  static String get driverHubTitle => _t('driver_hub_title');
+  static String get dashboardWord => _t('dashboard_word');
+  static String get workerDashboardSubtitle => _t('worker_dashboard_subtitle');
+  static String get homeHotelBookingComingSoon =>
+      _t('home_hotel_booking_coming_soon');
   static String get autoOffer => _t('auto_offer');
   static String get offerSentToPassenger => _t('offer_sent_to_passenger');
   static String get offerNoLongerAvailable => _t('offer_no_longer_available');
@@ -226,13 +340,15 @@ class S {
   static String get enterRouteTitle => _t('enter_route_title');
   static String get fromLabel => _t('from_label');
   static String get toLabel => _t('to_label');
-  static String get confirmRouteCta => _t('confirm_route_cta');
   static String get cancelReasonTitle => _t('cancel_reason_title');
   static String get cancelReasonChangedMind => _t('cancel_reason_changed_mind');
   static String get cancelReasonTooLong => _t('cancel_reason_too_long');
-  static String get cancelReasonFoundAnother => _t('cancel_reason_found_another');
+  static String get cancelReasonFoundAnother =>
+      _t('cancel_reason_found_another');
   static String get cancelReasonPriceHigh => _t('cancel_reason_price_high');
-  static String get cancelReasonWrongLocation => _t('cancel_reason_wrong_location');
+  static String get cancelReasonWrongLocation =>
+      _t('cancel_reason_wrong_location');
+  static String get cancelReasonLabel => _t('cancel_reason_label');
   static String get cancelReasonOther => _t('cancel_reason_other');
   static String get cancelReasonOtherHint => _t('cancel_reason_other_hint');
   static String get sosButtonLabel => _t('sos_button_label');
@@ -240,9 +356,12 @@ class S {
   static String get sosConfirmBody => _t('sos_confirm_body');
   static String get sosCallEmergency => _t('sos_call_emergency');
   static String get sosAlertSent => _t('sos_alert_sent');
-  static String get deviceIntegrityWarningTitle => _t('device_integrity_warning_title');
-  static String get deviceIntegrityWarningBody => _t('device_integrity_warning_body');
-  static String get deviceIntegrityContinueAnyway => _t('device_integrity_continue_anyway');
+  static String get deviceIntegrityWarningTitle =>
+      _t('device_integrity_warning_title');
+  static String get deviceIntegrityWarningBody =>
+      _t('device_integrity_warning_body');
+  static String get deviceIntegrityContinueAnyway =>
+      _t('device_integrity_continue_anyway');
   static String get useLiveLocationHint => _t('use_live_location_hint');
   static String get verifiedRidersBanner => _t('verified_riders_banner');
   static String get confirmRideTitle => _t('confirm_ride_title');
@@ -320,7 +439,9 @@ class S {
   static String get payQrSub => _t('pay_qr_sub');
   static String get payEsewa => _t('pay_esewa');
   static String get payKhalti => _t('pay_khalti');
+  static String get payBank => _t('pay_bank');
   static String get walletIdLabel => _t('wallet_id_label');
+  static String get copyIdThenOpenAppHint => _t('copy_id_then_open_app_hint');
   static String get scanToPay => _t('scan_to_pay');
   static String get openWallet => _t('open_wallet');
   // Employer Payment View — eSewa/Khalti click गर्दा आफ्नै QR देखिनुको सट्टा
@@ -409,10 +530,25 @@ class S {
       _t('task_cancelled_by_admin_title');
   static String get taskCancelledByAdminBody =>
       _t('task_cancelled_by_admin_body');
+  static String get taskCancelledByPassengerTitle =>
+      _t('task_cancelled_by_passenger_title');
+  static String get taskCancelledByPassengerBody =>
+      _t('task_cancelled_by_passenger_body');
+  // Handyman/general-job (non-ride) version — माथिको
+  // taskCancelledByPassenger* ले सधैं "Ride cancelled"/"passenger" भन्ने
+  // ride-सान्दर्भिक शब्द देखाउँथ्यो, Plumber/Electrician/Carpenter/
+  // Painter/Cleaner/Mechanic जस्ता handyman काम (जहाँ "ride" हुँदै होइन,
+  // अर्को पक्ष "employer" हो) मा पनि उस्तै भ्रमित शब्द देखिन्थ्यो।
+  static String get taskCancelledByEmployerTitle =>
+      _t('task_cancelled_by_employer_title');
+  static String get taskCancelledByEmployerBody =>
+      _t('task_cancelled_by_employer_body');
+  static String get dualAcceptanceNote => _t('dual_acceptance_note');
   static String get accept => _t('accept_word');
   static String get decline => _t('decline_word');
   static String get newJobNearby => _t('new_job_nearby');
   static String get jobRequests => _t('job_requests');
+  static String get rideRequests => _t('ride_requests');
   static String get onlineForJobs => _t('online_for_jobs');
   static String get callWord => _t('call_word');
   static String get messageWord => _t('message_word');
@@ -431,7 +567,15 @@ class S {
   // ── Worker approval / role ───────────────────────────────
   static String get applicationSafeHelper => _t('application_safe_helper');
   static String get workerRoleWord => _t('worker_role_word');
+  static String get riderRoleWord => _t('rider_role_word');
   static String get employerRoleWord => _t('employer_role_word');
+
+  // ── Role selection screen ────────────────────────────────
+  static String get roleSelectHeading => _t('role_select_heading');
+  static String get roleSelectPassengerEmployerTitle =>
+      _t('role_select_passenger_employer_title');
+  static String get roleSelectPassengerEmployerSubtitle =>
+      _t('role_select_passenger_employer_subtitle');
 
   // ── Live counter-offer alert (worker side) ───────────────
   static String get statusCounterOffer => _t('status_counter_offer');
@@ -441,6 +585,16 @@ class S {
   static String get theirOfferLabel => _t('their_offer_label');
   static String get declineOrCounter => _t('decline_or_counter');
   static String get counterBack => _t('counter_back');
+  static String get raiseFare => _t('raise_fare');
+  static String get requestTimeoutTitle => _t('request_timeout_title');
+  static String get requestTimeoutBody => _t('request_timeout_body');
+  static String get keepWaiting => _t('keep_waiting');
+  static String get waitingTimeLeft => _t('waiting_time_left');
+  static String get currentFare => _t('current_fare');
+  static String get raiseFareConfirm => _t('raise_fare_confirm');
+  static String get raiseFareInvalid => _t('raise_fare_invalid');
+  static String get fareRaised => _t('fare_raised');
+  static String get fareRaiseFailed => _t('fare_raise_failed');
   static String get workerCounteredTitle => _t('worker_countered_title');
   static String get workerCounteredBody => _t('worker_countered_body');
   static String get acceptCounterOffer => _t('accept_counter_offer');
@@ -490,6 +644,9 @@ class S {
   static String get jobsCompletedLabel => _t('jobs_completed_label');
   static String get markComplete => _t('mark_complete');
   static String get jobMarkedComplete => _t('job_marked_complete');
+  static String get rideMarkedComplete => _t('ride_marked_complete');
+  static String jobMarkedCompleteFor(bool isRide) =>
+      isRide ? rideMarkedComplete : jobMarkedComplete;
   static String get collectPayment => _t('collect_payment');
   static String get amountDue => _t('amount_due');
   static String get paymentMethodLabel => _t('payment_method_label');
@@ -499,11 +656,118 @@ class S {
   static String get onlinePaymentLabel => _t('online_payment_label');
   static String get cashPaymentLabel => _t('cash_payment_label');
   static String get sandboxModeNotice => _t('sandbox_mode_notice');
+  static String payFromOwnAccountNotice(
+          String methodLabel, String merchantId) =>
+      isNepali
+          ? 'तपाईं आफ्नै $methodLabel खाताबाट तिर्नुहुन्छ — यो रकम कम्पनीको '
+              'केन्द्रीय merchant खातामा जान्छ (Merchant ID: $merchantId)।'
+          : 'You pay from your own $methodLabel account — funds route '
+              'directly to the company\'s central merchant account '
+              '(Merchant ID: $merchantId).';
+  static String yourWalletMobileLabel(String methodLabel) => isNepali
+      ? 'तपाईंको $methodLabel मोबाइल नम्बर'
+      : 'Your $methodLabel mobile number';
+  static String merchantNotConfiguredNotice(String methodLabel) => isNepali
+      ? '$methodLabel को कम्पनी merchant खाता अझै सेट भएको छैन — Admin '
+          'Dashboard बाट "Payment & Commission" मा सेट गर्नुहोस्।'
+      : '$methodLabel company merchant account isn\'t configured yet — '
+          'set it up from Admin Dashboard → Payment & Commission.';
+  static String get settlementStatusLabel =>
+      isNepali ? 'Settlement अवस्था' : 'Settlement status';
+  static String get fullySettledLabel => isNepali
+      ? 'पूर्ण रूपमा settle भइसकेको — कुनै बाँकी छैन'
+      : 'Fully settled — no pending balance';
+  static String youOwePlatformLabel(int amount) => isNepali
+      ? 'तपाईंले प्रणालीलाई Rs. $amount तिर्न बाँकी छ (cash/QR कामको commission)'
+      : 'You owe the platform Rs. $amount (commission from cash/QR jobs)';
+  static String payoutPendingLabel(int amount) => isNepali
+      ? 'कम्पनीबाट Rs. $amount payout बाँकी छ'
+      : 'Rs. $amount payout pending from the company';
+  static String get recentLedgerEntries =>
+      isNepali ? 'हालैका ledger entry हरू' : 'Recent ledger entries';
+  static String get nightFareLabel =>
+      isNepali ? 'रातको भाडा लागू' : 'Night fare applied';
+  static String get walletLabel => isNepali ? 'वालेट' : 'Wallet';
+  static String get walletScreenTitle =>
+      isNepali ? 'मेरो वालेट' : 'My Wallet';
+  static String get topUpLabel => isNepali ? 'टप अप' : 'Top Up';
+  static String get walletBlockedWarning => isNepali
+      ? 'ब्लक — नयाँ काम लिन वालेट ब्यालेन्स settle गर्नुहोस्'
+      : 'Blocked — settle your wallet balance to accept new jobs';
+  static String get walletBlockedBanner => isNepali
+      ? 'तपाईंको unpaid commission धेरै भएकोले नयाँ काम देखिँदैन। तल दिइएको '
+          'विवरण अनुसार top up गरेपछि admin ले settle गरिदिनेबित्तिकै फेरि '
+          'काम लिन मिल्छ।'
+      : 'You\'re blocked from new jobs because your unpaid commission is '
+          'too high. Top up using the details below — once an admin marks '
+          'it settled, you can accept jobs again.';
+  static String get topUpInstructionsTitle => isNepali
+      ? 'Top-Up निर्देशन (म्यानुअल)'
+      : 'Top-Up Instructions (Manual)';
+  static String get topUpInstructionsBody => isNepali
+      ? 'तलको कम्पनी खातामा तिरेर admin लाई जानकारी गराउनुहोस् — admin ले '
+          'पुष्टि गरेपछि तपाईंको वालेट ब्यालेन्स settle हुन्छ। कुनै स्वचालित '
+          '(API) भुक्तानी अहिले उपलब्ध छैन।'
+      : 'Pay to the company account below and let an admin know — your '
+          'wallet balance is settled once they confirm. No automatic (API) '
+          'payment is available yet.';
+  static String get walletTransactionHistoryTitle =>
+      isNepali ? 'कारोबार इतिहास' : 'Transaction history';
+  static String get noWalletTransactionsYet => isNepali
+      ? 'अझै कुनै कारोबार छैन'
+      : 'No transactions yet';
+  static String get requestTimedOutMessage => isNepali
+      ? 'नेटवर्क कमजोर देखियो — अनुरोध पठाउन धेरै समय लाग्यो। आफ्नो इन्टरनेट '
+          'जाँच्नुहोस् र फेरि प्रयास गर्नुहोस्।'
+      : 'Your network looks slow — sending the request took too long. '
+          'Check your connection and try again.';
+  static String get requestSendFailedMessage => isNepali
+      ? 'अनुरोध पठाउन सकिएन। फेरि प्रयास गर्नुहोस्।'
+      : 'Couldn\'t send your request. Please try again.';
+  static String get sahayatriWalletTitle =>
+      isNepali ? 'Sahayatri वालेट' : 'Sahayatri Wallet';
+  static String get topUpWalletButton =>
+      isNepali ? 'Card / QR मार्फत Top-Up' : 'Top-Up via Card / QR';
+  static String get payCard => isNepali ? 'कार्ड' : 'Card';
+  static String get cardNumberLabel =>
+      isNepali ? 'कार्ड नम्बर' : 'Card number';
+  static String get cardExpiryLabel => 'MM/YY';
+  static String get cardCvvLabel => 'CVV';
+  static String get topUpAmountLabel =>
+      isNepali ? 'Top-up रकम' : 'Top-up amount';
+  static String get manualDepositLabel =>
+      isNepali ? 'म्यानुअल जम्मा' : 'Manual Deposit';
+  static String topUpSuccessLabel(int amount) => isNepali
+      ? 'Rs. $amount थपियो — वालेट ब्यालेन्स अपडेट भयो।'
+      : 'Rs. $amount added — wallet balance updated.';
+  static String get payDuesButton =>
+      isNepali ? 'भुक्तानी तिर्नुहोस्' : 'Pay Dues';
+  static String get walletMaintainBalanceSubtitle => isNepali
+      ? 'नयाँ राइड र ह्यान्डिम्यान अनुरोध निर्बाध रूपमा लिन धनात्मक '
+          'ब्यालेन्स राख्नुहोस्।'
+      : 'Maintain a positive balance to continue accepting new ride and '
+          'handyman requests without interruption.';
+  static String get payingToMerchantLabel => isNepali
+      ? 'यसमा तिर्दै (कम्पनीको Merchant खाता)'
+      : 'Paying to (Company Merchant Account)';
+  static String get enterMpinLabel => isNepali
+      ? 'आफ्नो ६-अंकको MPIN/code हाल्नुहोस्'
+      : 'Enter your 6-digit MPIN / code';
+  static String get confirmAndPayLabel =>
+      isNepali ? 'पुष्टि गरी तिर्नुहोस्' : 'Confirm & Pay';
   static String get simulatePayment => _t('simulate_payment');
   static String get paymentSuccessful => _t('payment_successful');
+  static String get paymentSuccessTitle => _t('payment_success_title');
+  static String get paymentSuccessJobBody => _t('payment_success_job_body');
+  static String get paymentSuccessRideBody => _t('payment_success_ride_body');
   static String get completeAndFinish => _t('complete_and_finish');
   static String get selectOnlineMethod => _t('select_online_method');
   static String get completeJobTitle => _t('complete_job_title');
+  static String get completeRideTitle => _t('complete_ride_title');
+  static String completeJobTitleFor(bool isRide) =>
+      isRide ? completeRideTitle : completeJobTitle;
+  static String get arriveAtDestinationFirst =>
+      _t('arrive_at_destination_first');
   static String get confirmCompleteJob => _t('confirm_complete_job');
   static String rateWorkerTitle(String name) =>
       isNepali ? '$name लाई रेटिङ दिनुहोस्' : 'Rate $name\'s service';
@@ -613,11 +877,23 @@ class S {
   static String get jobAddressLabel => _t('job_address_label');
   static String get postJob => _t('post_job');
   static String get openJobsNearby => _t('open_jobs_nearby');
+
+  /// Bike/Car/Auto चालक (राइडर) हो कि होइन — हो भने "काम/Jobs" को सट्टा
+  /// "राइड/Rides" शब्द देखाउन।
+  static bool isRideServiceName(String service) =>
+      const {'bike', 'car', 'auto'}.contains(service.trim().toLowerCase());
+  static String get openRidesNearby => _t('open_rides_nearby');
+  static String get newRideNotifTitle => _t('new_ride_notif_title');
+  static String get findNearbyRides => _t('find_nearby_rides');
+  static String get findNearbyJobs => _t('find_nearby_jobs');
   static String get noOpenJobs => _t('no_open_jobs');
   static String get customerBudget => _t('customer_budget');
   static String get viewJobLocation => _t('view_job_location');
   static String get jobLocationTitle => _t('job_location_title');
   static String get jobDetailsTitle => _t('job_details_title');
+  static String get rideDetailsTitle => _t('ride_details_title');
+  static String jobDetailsTitleFor(bool isRide) =>
+      isRide ? rideDetailsTitle : jobDetailsTitle;
   static String get describeJobFirst => _t('describe_job_first');
   static String get serviceAddressNote => _t('service_address_note');
   static String get pickDateFirst => _t('pick_date_first');
@@ -638,6 +914,31 @@ class S {
       S.isNepali
           ? '$employerName ले Rs. $amount मा तपाईंको प्रस्ताव स्वीकार गर्नुभयो'
           : '$employerName accepted your offer for Rs. $amount';
+  // Ride bidding — driver ले नयाँ प्रस्ताव पठाउँदा passenger लाई।
+  static String get newRideOfferNotifTitle =>
+      S.isNepali ? 'नयाँ राइड प्रस्ताव' : 'New ride offer';
+  static String newRideOfferNotifBody(String workerName, num price) =>
+      S.isNepali
+          ? '$workerName ले Rs. $price मा राइड लिन प्रस्ताव गर्नुभयो'
+          : '$workerName offered Rs. $price for your ride';
+  // Ride bidding — passenger↔driver दुवैतिरको counter-price (नयाँ मूल्य
+  // प्रस्ताव जुनसुकै दिशाबाट भए पनि) — माथिकै साझा `newCounterOfferNotifTitle`/
+  // `newCounterOfferNotifBody` नै (सामान्य job negotiation मा प्रयोग हुने
+  // उही) दोहोर्‍याइँदैन, त्यही पुनः प्रयोग हुन्छ।
+  // Ride bidding — driver ले passenger को counter accept/decline/फेरि-counter
+  // गर्दा passenger लाई।
+  static String get driverAcceptedCounterNotifTitle => S.isNepali
+      ? 'Driver ले मूल्य स्वीकार गर्नुभयो'
+      : 'Driver accepted your price';
+  static String get driverAcceptedCounterNotifBody => S.isNepali
+      ? 'अब तपाईं यो राइड Accept गर्न सक्नुहुन्छ'
+      : 'You can now accept this ride';
+  static String get driverDeclinedCounterNotifTitle => S.isNepali
+      ? 'Driver ले मूल्य अस्वीकार गर्नुभयो'
+      : 'Driver declined your price';
+  static String get driverDeclinedCounterNotifBody => S.isNepali
+      ? 'यो प्रस्ताव अब उपलब्ध छैन — अर्को driver कुर्नुहोस्'
+      : 'This offer is no longer available — waiting for other drivers';
   // Worker profile बाट सिधै एक जना worker लाई पठाइने price offer (broadcast
   // होइन) — `nearby_common.dart::OfferSheet._send()` ले सन्देश Firestore मा
   // लेखेपछि यही notification worker लाई पठाउँछ, ताकि app नखोलेको बेला पनि
@@ -653,9 +954,14 @@ class S {
   static String get routeFallbackWarning => _t('route_fallback_warning');
   static String get noPhoneOnFile => _t('no_phone_on_file');
   static String get activeJobTitle => _t('active_job_title');
+  static String get activeRideTitle => _t('active_ride_title');
   // Single Active Job Restriction — worker ले एकैचोटि एउटा मात्र सक्रिय काम
   // राख्न पाउँछ; अर्को accept गर्न खोज्दा यी देखिन्छन्।
   static String get workerBusyWithOtherJob => _t('worker_busy_with_other_job');
+  // Self-Ride Prevention — आफैंले पोस्ट गरेको अनुरोध आफैं worker/driver
+  // मोडमा स्वीकार गर्न खोज्दा (सुरक्षा-सीमा `firestore.rules`/transaction
+  // ले नै रोक्छ, यो त्यही अवस्थाको user-facing सन्देश मात्र हो)।
+  static String get cannotAcceptOwnRequest => _t('cannot_accept_own_request');
   static String get finishCurrentJobFirst => _t('finish_current_job_first');
   // Rating-Based Monthly Order Quota — worker ले यो महिनाको सीमा
   // पुर्‍याइसकेको बेला accept/confirm गर्न खोज्दा देखिने।
@@ -687,6 +993,7 @@ class S {
   static String get statusCompleted => _t('status_completed');
   static String get statusCancelled => _t('status_cancelled');
   static String get startWork => _t('start_work');
+  static String get startRideLabel => _t('start_ride_label');
   static String get workStarted => _t('work_started');
   static String get welcomeBack => _t('welcome_back');
   static String get loginToExisting => _t('login_to_existing');
@@ -775,7 +1082,12 @@ class S {
 
   // ── Job route (after accepting a job) ──────────────────
   static String get jobRouteTitle => _t('job_route_title');
+  static String get rideRouteTitle => _t('ride_route_title');
+  static String jobRouteTitleFor(bool isRide) =>
+      isRide ? rideRouteTitle : jobRouteTitle;
   static String get jobSiteWord => _t('job_site_word');
+  static String jobSiteWordFor(bool isRide) =>
+      isRide ? pickupPointLabel : jobSiteWord;
   static String get yourLocationWord => _t('your_location_word');
   static String get customerWord => _t('customer_word');
   static String get findingRoute => _t('finding_route');
@@ -791,16 +1103,35 @@ class S {
   // ── Strict arrival geofence flow ───────────────────────
   static String get onArrivalButton => _t('on_arrival_button');
   static String get getCloserToArrive => _t('get_closer_to_arrive');
+  // Ride (Bike/Car) मात्र — arrival-confirm step को बटनमा नै सुरुदेखि
+  // "Start Ride" शब्द स्पष्ट देखियोस् भनेर (मुख्य कार्डमा लुकाइएको नहोस्)।
+  static String get startRideConfirmArrival => _t('start_ride_confirm_arrival');
   static String get arrivedJobInProgress => _t('arrived_job_in_progress');
   static String get enterRideCodeTitle => _t('enter_ride_code_title');
   static String get enterRideCodeHint => _t('enter_ride_code_hint');
   static String get startRideCta => _t('start_ride_cta');
   static String get rideCodeTooShort => _t('ride_code_too_short');
   static String get rideCodeMismatch => _t('ride_code_mismatch');
+  static String get rideCodeVerifiedGoodToGo =>
+      _t('ride_code_verified_good_to_go');
   static String get rideStartedInProgress => _t('ride_started_in_progress');
+  // Dual-Confirmation Job Completion (Worker/Employer job-portal मात्र —
+  // Ride मा होइन) — दुवैले आ-आफ्नो "Job Completed" थिचेपछि मात्र भुक्तानी/
+  // rating चरण अघि बढ्छ, हेर्नुहोस् job_route_screen.dart/
+  // request_tracking_screen.dart।
+  static String get markJobCompletedCta => _t('mark_job_completed_cta');
+  static String get workerConfirmedWaitingPayment =>
+      _t('worker_confirmed_waiting_payment');
+  static String get waitingForWorkerToConfirmComplete =>
+      _t('waiting_for_worker_to_confirm_complete');
   static String get shareCodeWithDriver => _t('share_code_with_driver');
   static String get workerArrivedNotifTitle => _t('worker_arrived_notif_title');
   static String get workerArrivedNotifBody => _t('worker_arrived_notif_body');
+  // Ride (Bike/Car) मात्र — "Worker" होइन "Rider" भनेर देखिने, साझा
+  // job-portal (Mechanic/Plumber) तर्फको माथिकै शब्द नछोइकन।
+  static String get riderArrivedNotifTitle => _t('rider_arrived_notif_title');
+  static String get contactLockedAwaitingArrivalRide =>
+      _t('contact_locked_awaiting_arrival_ride');
 
   // ── In-chat calls ──────────────────────────────────────
   static String get voiceCall => _t('voice_call');
@@ -814,6 +1145,16 @@ class S {
   static String get callConnecting => _t('call_connecting');
   static String get incomingCallTitle => _t('incoming_call_title');
   static String get cameraMicNeeded => _t('camera_mic_needed');
+  static String get hangUp => isNepali ? 'कल काट्नुहोस्' : 'Hang Up';
+  static String get callConnectFailedTitle =>
+      isNepali ? 'कल जोडिन सकेन' : "Couldn't connect the call";
+  static String get callConnectFailedBody => isNepali
+      ? 'नेटवर्क कमजोर छ वा जडान अवरुद्ध छ। Wi-Fi/मोबाइल डाटा जाँचेर फेरि प्रयास गर्नुहोस्।'
+      : 'Your network may be weak or blocking the connection. Check '
+          'Wi-Fi/mobile data and try again.';
+  static String get alreadyOnACall => isNepali
+      ? 'तपाईं पहिल्यै अर्को कलमा हुनुहुन्छ'
+      : "You're already on a call";
   static String get seenWord => _t('seen_word');
   static String etaAway(int min) =>
       isNepali ? 'करिब $min मिनेट टाढा' : 'about $min min away';
@@ -842,6 +1183,10 @@ class S {
   static String get otpFailed => _t('otp_failed');
   static String get phoneAuthNotEnabled => _t('phone_auth_not_enabled');
   static String get anonNotEnabled => _t('anon_not_enabled');
+  static String get phoneTooManyRequests => _t('phone_too_many_requests');
+  static String get phoneInvalidNumber => _t('phone_invalid_number');
+  static String get phoneQuotaExceeded => _t('phone_quota_exceeded');
+  static String get phoneCaptchaFailed => _t('phone_captcha_failed');
 
   // ── Auth ─────────────────────────────────────────────────
   static String get emailLabel => _t('email_label');
@@ -864,11 +1209,20 @@ class S {
       'en': 'Cancel this job?',
       'ne': 'यो काम रद्द गर्ने?'
     },
+    'active_ride_bar_cancel_title': {
+      'en': 'Cancel this ride?',
+      'ne': 'यो राइड रद्द गर्ने?'
+    },
+    'active_ride_bar_cancel_body': {
+      'en': 'This will cancel the ride for both sides.',
+      'ne': 'यसले दुवैतर्फको राइड रद्द गर्नेछ।'
+    },
     'active_job_bar_cancel_body': {
       'en': 'This will cancel the job for both sides.',
       'ne': 'यसले दुवैतर्फको काम रद्द गर्नेछ।'
     },
     'keep_job': {'en': 'Keep job', 'ne': 'काम राख्ने'},
+    'keep_ride': {'en': 'Keep ride', 'ne': 'राइड राख्ने'},
     'ok': {'en': 'OK', 'ne': 'ठीक छ'},
     'save': {'en': 'Save', 'ne': 'सुरक्षित गर्नुहोस्'},
     'send': {'en': 'Send', 'ne': 'पठाउनुहोस्'},
@@ -881,6 +1235,7 @@ class S {
     'nav_profile': {'en': 'Profile', 'ne': 'प्रोफाइल'},
     'nav_watchlist': {'en': 'Watchlist', 'ne': 'सूची'},
     'nav_job_feed': {'en': 'Job feed', 'ne': 'कामको सूची'},
+    'nav_ride_feed': {'en': 'Ride feed', 'ne': 'राइड सूची'},
     'greeting': {'en': 'Hello 👋', 'ne': 'नमस्ते 👋'},
     'home_question': {
       'en': 'What service do you need?',
@@ -1060,7 +1415,10 @@ class S {
       'en': 'No completed rides yet',
       'ne': 'अझै कुनै राइड पूरा भएको छैन'
     },
-    'view_full_history': {'en': 'View Full History', 'ne': 'पूरा इतिहास हेर्नुहोस्'},
+    'view_full_history': {
+      'en': 'View Full History',
+      'ne': 'पूरा इतिहास हेर्नुहोस्'
+    },
     'earnings_summary_section': {
       'en': 'Earnings & Payouts',
       'ne': 'कमाइ र भुक्तानी'
@@ -1081,7 +1439,10 @@ class S {
     'status_pending': {'en': 'Pending', 'ne': 'पेन्डिङ'},
     'status_approved': {'en': 'Approved', 'ne': 'स्वीकृत'},
     'status_rejected': {'en': 'Rejected', 'ne': 'अस्वीकृत'},
-    'update_documents': {'en': 'Update Documents', 'ne': 'कागजात अपडेट गर्नुहोस्'},
+    'update_documents': {
+      'en': 'Update Documents',
+      'ne': 'कागजात अपडेट गर्नुहोस्'
+    },
     'license_expiring_soon': {
       'en': 'Your license expires soon — please renew it',
       'ne': 'तपाईंको लाइसेन्सको म्याद चाँडै सकिन्छ — नवीकरण गर्नुहोस्'
@@ -1094,6 +1455,22 @@ class S {
     'last_name': {'en': 'Last name', 'ne': 'थर'},
     'phone': {'en': 'Phone number', 'ne': 'फोन नम्बर'},
     'dob': {'en': 'Date of birth', 'ne': 'जन्म मिति'},
+    'camera_open_failed': {
+      'en': 'Could not open camera',
+      'ne': 'क्यामेरा खोल्न मिलेन',
+    },
+    'file_pick_failed': {
+      'en': 'Could not pick file',
+      'ne': 'फाइल छान्न मिलेन',
+    },
+    'keep_profile_photo_title': {
+      'en': 'Keep this profile photo?',
+      'ne': 'Profile Photo राख्ने?',
+    },
+    'profile_photo_saved': {
+      'en': 'Profile photo saved!',
+      'ne': 'Profile Photo राखियो!',
+    },
     'pick_date': {'en': 'Pick a date', 'ne': 'मिति छान्नुहोस्'},
     'location_section': {'en': 'Your location', 'ne': 'तपाईंको स्थान'},
     'use_my_location': {
@@ -1113,6 +1490,7 @@ class S {
     },
     'bike_word': {'en': 'Bike', 'ne': 'बाइक'},
     'car_word': {'en': 'Car', 'ne': 'कार'},
+    'auto_word': {'en': 'Auto', 'ne': 'अटो'},
     'bike_ride_hint': {'en': 'Two-wheeler ride', 'ne': 'दुई पांग्रे सवारी'},
     'car_ride_hint': {'en': 'Car / taxi ride', 'ne': 'कार / ट्याक्सी सवारी'},
     'select_vehicle_type_error': {
@@ -1210,10 +1588,7 @@ class S {
       'en': 'e.g. Bajaj Pulsar — Ba 12 Pa 3456',
       'ne': 'जस्तै: Bajaj Pulsar — बा १२ प ३४५६'
     },
-    'license_number_label': {
-      'en': 'License number',
-      'ne': 'लाइसेन्स नम्बर'
-    },
+    'license_number_label': {'en': 'License number', 'ne': 'लाइसेन्स नम्बर'},
     'license_category_label': {
       'en': 'License category',
       'ne': 'लाइसेन्स श्रेणी'
@@ -1225,6 +1600,10 @@ class S {
     'license_category_car': {
       'en': 'B — Car/Jeep/Van',
       'ne': 'B — कार/जिप/भ्यान'
+    },
+    'license_category_auto': {
+      'en': 'H — Three-Wheeler/Auto-Rickshaw',
+      'ne': 'H — तीन पांग्रे/अटो रिक्सा'
     },
     'license_issue_date_label': {
       'en': 'License issue date',
@@ -1244,6 +1623,84 @@ class S {
       'en': 'Vehicle insurance document',
       'ne': 'सवारी बिमा कागजात'
     },
+    'seating_capacity_label': {'en': 'Seating capacity', 'ne': 'सिट क्षमता'},
+    'route_permit_label': {
+      'en': 'Route permit document',
+      'ne': 'रुट परमिट कागजात'
+    },
+    'bike_reg_title': {'en': 'Bike Registration', 'ne': 'बाइक दर्ता'},
+    'car_reg_title': {'en': 'Car Registration', 'ne': 'कार दर्ता'},
+    'auto_reg_title': {
+      'en': 'Auto-Rickshaw Registration',
+      'ne': 'अटो-रिक्सा दर्ता'
+    },
+    'bike_license_number_label': {
+      'en': 'Bike License No.',
+      'ne': 'बाइक लाइसेन्स नं.'
+    },
+    'driver_license_number_label': {
+      'en': 'Driver License No.',
+      'ne': 'ड्राइभर लाइसेन्स नं.'
+    },
+    'auto_license_number_label': {
+      'en': 'Auto Driver License',
+      'ne': 'अटो चालक अनुमतिपत्र'
+    },
+    'bike_plate_label': {'en': 'Bike Plate No.', 'ne': 'बाइक नम्बर प्लेट'},
+    'car_plate_label': {'en': 'Car Plate No.', 'ne': 'कार नम्बर प्लेट'},
+    'auto_plate_label': {
+      'en': 'Vehicle Registration Plate No.',
+      'ne': 'सवारी दर्ता नम्बर प्लेट'
+    },
+    'bike_license_section_heading': {
+      'en': 'Bike License Details',
+      'ne': 'बाइक लाइसेन्स विवरण'
+    },
+    'car_license_section_heading': {
+      'en': 'Car License Details',
+      'ne': 'कार लाइसेन्स विवरण'
+    },
+    'auto_license_section_heading': {
+      'en': 'Auto-Rickshaw License Details',
+      'ne': 'अटो-रिक्सा लाइसेन्स विवरण'
+    },
+    'bike_docs_section_heading': {
+      'en': 'Bike Registration & Documents',
+      'ne': 'बाइक दर्ता र कागजातहरू'
+    },
+    'car_docs_section_heading': {
+      'en': 'Car Registration & Documents',
+      'ne': 'कार दर्ता र कागजातहरू'
+    },
+    'auto_docs_section_heading': {
+      'en': 'Auto-Rickshaw Registration & Documents',
+      'ne': 'अटो-रिक्सा दर्ता र कागजातहरू'
+    },
+    'bike_bluebook_number_label': {
+      'en': 'Bike Bluebook Number',
+      'ne': 'बाइक ब्लु बुक नम्बर'
+    },
+    'car_bluebook_number_label': {
+      'en': 'Car Bluebook Number',
+      'ne': 'कार ब्लु बुक नम्बर'
+    },
+    'auto_bluebook_number_label': {
+      'en': 'Auto Bluebook (Billbook) Number',
+      'ne': 'अटो ब्लु बुक (बिल बुक) नम्बर'
+    },
+    'bluebook_number_required_error': {
+      'en': 'Please enter the bluebook number',
+      'ne': 'कृपया ब्लु बुक नम्बर भर्नुहोस्'
+    },
+    'air_conditioning_label': {'en': 'Air Conditioning', 'ne': 'एयर कन्डिशन'},
+    'route_permit_number_label': {
+      'en': 'Route Permit Number',
+      'ne': 'रुट परमिट नम्बर'
+    },
+    'route_permit_number_required_error': {
+      'en': 'Please enter the route permit number',
+      'ne': 'कृपया रुट परमिट नम्बर भर्नुहोस्'
+    },
     'license_details_required_error': {
       'en': 'Please fill all license details',
       'ne': 'कृपया लाइसेन्सका सबै विवरण भर्नुहोस्'
@@ -1260,9 +1717,34 @@ class S {
       'en': 'Please upload the vehicle insurance document',
       'ne': 'कृपया सवारी बिमा कागजात अपलोड गर्नुहोस्'
     },
+    'seating_capacity_required_error': {
+      'en': 'Please enter the seating capacity',
+      'ne': 'कृपया सिट क्षमता भर्नुहोस्'
+    },
+    'route_permit_required_error': {
+      'en': 'Please upload the route permit document',
+      'ne': 'कृपया रुट परमिट कागजात अपलोड गर्नुहोस्'
+    },
     'dob_required_error': {
       'en': 'Please select date of birth',
       'ne': 'कृपया जन्म मिति छान्नुहोस्'
+    },
+    'profile_registration_title': {
+      'en': 'Welcome to KaamMitra',
+      'ne': 'काम मित्रमा स्वागत छ'
+    },
+    'add_photo_hint': {'en': 'Add photo', 'ne': 'फोटो थप्नुहोस्'},
+    'first_name_required_error': {
+      'en': 'Please enter your first name',
+      'ne': 'नाम लेख्नुहोस्'
+    },
+    'last_name_required_error': {
+      'en': 'Please enter your last name',
+      'ne': 'थर लेख्नुहोस्'
+    },
+    'valid_email_required_error': {
+      'en': 'Please enter a valid email',
+      'ne': 'सही इमेल लेख्नुहोस्'
     },
     'step_vehicle_docs': {'en': 'Vehicle & Docs', 'ne': 'सवारी र कागजात'},
     'where_to_hint': {
@@ -1279,6 +1761,9 @@ class S {
     },
     'pickup_label': {'en': 'Pickup', 'ne': 'Pickup'},
     'destination_label': {'en': 'Drop-off', 'ne': 'गन्तव्य'},
+    'view_location': {'en': 'View Location', 'ne': 'स्थान हेर्नुहोस्'},
+    'pickup_point_label': {'en': 'Pickup Point', 'ne': 'Pickup Point'},
+    'drop_point_label': {'en': 'Drop Point', 'ne': 'Drop Point'},
     'change_destination': {'en': 'Change', 'ne': 'बदलनुहोस्'},
     'request_ride': {'en': 'Request ride', 'ne': 'राइड माग्नुहोस्'},
     'find_offer': {'en': 'Find Offer', 'ne': 'Offer खोज्नुहोस्'},
@@ -1291,6 +1776,83 @@ class S {
       'ne': 'सुरक्षित र तुरुन्त बाइक तथा कार बुकिङ',
     },
     'book_now_cta': {'en': 'BOOK NOW', 'ne': 'अहिले बुक गर्नुहोस्'},
+    'service_directory_title': {
+      'en': 'Service Directory',
+      'ne': 'सेवा डाइरेक्टरी',
+    },
+    'handyman_categories_title': {
+      'en': 'Handyman Services',
+      'ne': 'ह्यान्डिम्यान सेवाहरू',
+    },
+    'home_service_picker_title': {
+      'en': 'What do you need today?',
+      'ne': 'आज तपाईंलाई के चाहियो?',
+    },
+    'home_super_app_header': {
+      'en': 'Your Everyday Super App',
+      'ne': 'तपाईंको दैनिक सुपर एप',
+    },
+    'home_super_app_subtitle': {
+      'en': 'Rides, Mechanics, Hotels & More — All in One Place.',
+      'ne': 'राइड, मेकानिक, होटल र थप धेरै — सबै एउटै ठाउँमा।',
+    },
+    'home_search_hint': {
+      'en': 'Search services, places...',
+      'ne': 'सेवा, ठाउँ खोज्नुहोस्...',
+    },
+    'home_banner_brand_label': {'en': 'Sahayatri', 'ne': 'सहयात्री'},
+    'home_banner_title_prefix': {'en': 'Sahayatri:', 'ne': 'सहयात्री:'},
+    'home_banner_title_rest': {
+      'en': 'Smart Rides, Stays & Daily Services At Your Fingertips.',
+      'ne': 'सहज यात्रा, सुरक्षित बास, भरपर्दो सेवा—सबै एकै ठाउँमा।',
+    },
+    'home_tag_instant_rides': {'en': 'Instant Rides', 'ne': 'तुरुन्त राइड'},
+    'home_tag_verified_hotels': {
+      'en': 'Verified Hotels',
+      'ne': 'प्रमाणित होटल',
+    },
+    'home_tag_local_handymen': {
+      'en': 'Local Handyman',
+      'ne': 'स्थानीय सेवा',
+    },
+    'home_more': {'en': 'More', 'ne': 'थप'},
+    'profile_name_not_set': {'en': 'Name not set', 'ne': 'नाम राखिएको छैन'},
+    'profile_edit_hint': {
+      'en': 'Tap here to update your name and details',
+      'ne': 'नाम र विवरणहरू भर्न यहाँ ट्याप गर्नुहोस्',
+    },
+    'biometric_login_label': {
+      'en': 'App Lock (Biometric / Passkey)',
+      'ne': 'एप लक (बायोमेट्रिक / पासकी)',
+    },
+    'biometric_unsupported': {
+      'en': 'This device does not support biometric login.',
+      'ne': 'यो डिभाइसले बायोमेट्रिक लगइन सपोर्ट गर्दैन।',
+    },
+    'app_lock_title': {'en': 'App Locked', 'ne': 'एप लक गरिएको छ'},
+    'app_lock_subtitle': {
+      'en':
+          'Unlock with your fingerprint, face, or device passcode to continue.',
+      'ne':
+          'जारी राख्न आफ्नो फिंगरप्रिन्ट, फेस वा डिभाइस पासकोडले अनलक गर्नुहोस्।',
+    },
+    'app_lock_unlock_button': {'en': 'Unlock', 'ne': 'अनलक गर्नुहोस्'},
+    'app_lock_failed': {
+      'en': 'Authentication required to continue.',
+      'ne': 'जारी राख्न प्रमाणीकरण आवश्यक छ।',
+    },
+    'driver_hub_title': {'en': 'Driver Hub', 'ne': 'ड्राइभर हब'},
+    'dashboard_word': {'en': 'Dashboard', 'ne': 'ड्यासबोर्ड'},
+    'worker_dashboard_subtitle': {
+      'en': 'Find nearby jobs & rides, manage your requests',
+      'ne':
+          'नजिकैका काम/राइड भेट्टाउनुहोस्, आफ्ना अनुरोध व्यवस्थापन गर्नुहोस्।',
+    },
+    'home_coming_soon': {'en': 'Coming Soon', 'ne': 'चाँडै आउँदैछ'},
+    'home_hotel_booking_coming_soon': {
+      'en': 'Hotel booking is coming soon!',
+      'ne': 'होटल बुकिङ चाँडै आउँदैछ!',
+    },
     'auto_offer': {'en': 'Auto-Offer', 'ne': 'Auto-Offer'},
     'offer_sent_to_passenger': {
       'en': 'Your offer has been sent to the passenger',
@@ -1317,10 +1879,12 @@ class S {
       'en': 'Search a destination…',
       'ne': 'गन्तव्य खोज्नुहोस्…'
     },
-    'enter_route_title': {'en': 'Enter your route', 'ne': 'आफ्नो यात्रा मार्ग हाल्नुहोस्'},
+    'enter_route_title': {
+      'en': 'Enter your route',
+      'ne': 'आफ्नो यात्रा मार्ग हाल्नुहोस्'
+    },
     'from_label': {'en': 'From', 'ne': 'कहाँबाट'},
     'to_label': {'en': 'To', 'ne': 'कहाँ'},
-    'confirm_route_cta': {'en': 'Confirm route', 'ne': 'मार्ग पुष्टि गर्नुहोस्'},
     'cancel_reason_title': {
       'en': 'Why are you cancelling?',
       'ne': 'किन रद्द गर्दै हुनुहुन्छ?'
@@ -1345,6 +1909,7 @@ class S {
       'en': 'Wrong pickup/drop location',
       'ne': 'गलत पिकअप/ड्रप स्थान'
     },
+    'cancel_reason_label': {'en': 'Reason', 'ne': 'कारण'},
     'cancel_reason_other': {'en': 'Other reason', 'ne': 'अन्य कारण'},
     'cancel_reason_other_hint': {
       'en': 'Tell us a bit more…',
@@ -1358,7 +1923,10 @@ class S {
       'ne':
           'यसले आपतकालीन सेवामा कल गर्नेछ र तपाईंको लाइभ स्थानसहित Sahyatri सहयोग टोलीलाई सचेत गराउनेछ। साँच्चैको आपतकालीन अवस्थामा मात्र प्रयोग गर्नुहोस्।'
     },
-    'sos_call_emergency': {'en': 'Call emergency now', 'ne': 'अहिल्यै आपतकालीन कल गर्नुहोस्'},
+    'sos_call_emergency': {
+      'en': 'Call emergency now',
+      'ne': 'अहिल्यै आपतकालीन कल गर्नुहोस्'
+    },
     'sos_alert_sent': {
       'en': 'SOS alert sent with your location',
       'ne': 'तपाईंको स्थानसहित SOS अलर्ट पठाइयो'
@@ -1459,6 +2027,7 @@ class S {
     },
     'pay_esewa': {'en': 'eSewa', 'ne': 'ई-सेवा'},
     'pay_khalti': {'en': 'Khalti', 'ne': 'खल्ती'},
+    'pay_bank': {'en': 'Bank / ConnectIPS', 'ne': 'बैंक / ConnectIPS'},
     'wallet_id_label': {'en': 'Wallet ID / mobile', 'ne': 'Wallet ID / मोबाइल'},
     'scan_to_pay': {'en': 'Scan to pay', 'ne': 'तिर्न scan गर्नुहोस्'},
     'open_wallet': {'en': 'Open wallet', 'ne': 'Wallet खोल्नुहोस्'},
@@ -1469,6 +2038,12 @@ class S {
     'scanned_wallet_id': {
       'en': 'Scanned wallet ID',
       'ne': 'स्क्यान गरिएको Wallet ID'
+    },
+    'copy_id_then_open_app_hint': {
+      'en': 'Copy this ID, then open your own eSewa/Khalti app and send '
+          'payment to it.',
+      'ne': 'यो ID copy गर्नुहोस्, अनि आफ्नै eSewa/Khalti app खोलेर यसमा '
+          'भुक्तानी पठाउनुहोस्।'
     },
     'copy_id': {'en': 'Copy ID', 'ne': 'ID कपी गर्नुहोस्'},
     'id_copied': {'en': 'Copied', 'ne': 'कपी भयो'},
@@ -1537,9 +2112,16 @@ class S {
       'ne': 'तपाईंको अनुरोध स्वीकार भएपछि मात्र कल र म्यासेज उपलब्ध हुन्छ'
     },
     'contact_locked_awaiting_arrival': {
-      'en': 'Call, video & message unlock once the worker arrives at the job location',
+      'en':
+          'Call, video & message unlock once the worker arrives at the job location',
       'ne':
           'कामदार काम गर्ने ठाउँमा आइपुगेपछि मात्र कल, भिडियो र म्यासेज उपलब्ध हुन्छ'
+    },
+    'contact_locked_awaiting_arrival_ride': {
+      'en':
+          'Call, video & message unlock once the rider arrives at the pickup point',
+      'ne':
+          'ड्राइभर पिकअप स्थानमा आइपुगेपछि मात्र कल, भिडियो र म्यासेज उपलब्ध हुन्छ'
     },
     'open_chat_label': {
       'en': 'Tap to chat',
@@ -1617,13 +2199,40 @@ class S {
       'ne': 'काम रद्द गरियो',
     },
     'task_cancelled_by_admin_body': {
-      'en': 'This task was cancelled by an admin. You\'re free to accept new jobs.',
-      'ne': 'यो काम एडमिनले रद्द गरेको छ। तपाईं अब नयाँ काम स्वीकार गर्न स्वतन्त्र हुनुहुन्छ।',
+      'en':
+          'This task was cancelled by an admin. You\'re free to accept new jobs.',
+      'ne':
+          'यो काम एडमिनले रद्द गरेको छ। तपाईं अब नयाँ काम स्वीकार गर्न स्वतन्त्र हुनुहुन्छ।',
+    },
+    'task_cancelled_by_passenger_title': {
+      'en': 'Ride cancelled',
+      'ne': 'राइड रद्द भयो',
+    },
+    'task_cancelled_by_passenger_body': {
+      'en':
+          'The passenger has cancelled this ride. You\'re free to accept new rides.',
+      'ne':
+          'यात्रुले यो राइड रद्द गर्नुभएको छ। तपाईं अब नयाँ राइड स्वीकार गर्न स्वतन्त्र हुनुहुन्छ।',
+    },
+    'task_cancelled_by_employer_title': {
+      'en': 'Request cancelled',
+      'ne': 'अनुरोध रद्द भयो',
+    },
+    'task_cancelled_by_employer_body': {
+      'en':
+          'Request was cancelled by the employer. You\'re free to accept new jobs.',
+      'ne':
+          'यो अनुरोध नियोक्ताले रद्द गर्नुभएको छ। तपाईं अब नयाँ काम स्वीकार गर्न स्वतन्त्र हुनुहुन्छ।',
+    },
+    'dual_acceptance_note': {
+      'en': 'Rule: both sides must tap Accept for the ride to start',
+      'ne': 'नियम: राइड सुरु हुन दुवै पक्षले Accept थिच्नुपर्छ',
     },
     'accept_word': {'en': 'Accept', 'ne': 'स्वीकार गर्नुहोस्'},
     'decline_word': {'en': 'Decline', 'ne': 'अस्वीकार गर्नुहोस्'},
     'new_job_nearby': {'en': 'New job nearby', 'ne': 'नजिकै नयाँ काम'},
     'job_requests': {'en': 'Job requests', 'ne': 'कामका अनुरोध'},
+    'ride_requests': {'en': 'Ride requests', 'ne': 'राइड अनुरोधहरू'},
     'online_for_jobs': {
       'en': 'You are online — nearby job requests will appear here',
       'ne': 'तपाईं अनलाइन हुनुहुन्छ — नजिकका कामका अनुरोध यहाँ देखिनेछन्'
@@ -1750,6 +2359,18 @@ class S {
       'ne': 'भुक्तानी सफल भएको सिमुलेट गर्नुहोस्',
     },
     'payment_successful': {'en': 'Payment successful', 'ne': 'भुक्तानी सफल'},
+    'payment_success_title': {
+      'en': 'Payment received!',
+      'ne': 'भुक्तानी प्राप्त भयो!',
+    },
+    'payment_success_job_body': {
+      'en': 'Job complete — funds received.',
+      'ne': 'काम सम्पन्न — रकम प्राप्त भयो।',
+    },
+    'payment_success_ride_body': {
+      'en': 'Ride complete — funds received.',
+      'ne': 'राइड सम्पन्न — रकम प्राप्त भयो।',
+    },
     'complete_and_finish': {
       'en': 'Complete & Finish',
       'ne': 'पूरा गर्नुहोस् र सक्नुहोस्',
@@ -1766,9 +2387,21 @@ class S {
       'en': 'Job marked complete',
       'ne': 'काम पूरा भएको चिन्ह लगाइयो'
     },
+    'ride_marked_complete': {
+      'en': 'Ride marked complete',
+      'ne': 'राइड पूरा भएको चिन्ह लगाइयो'
+    },
     'complete_job_title': {
       'en': 'Complete Job & Pay',
       'ne': 'काम सम्पन्न र भुक्तानी',
+    },
+    'complete_ride_title': {
+      'en': 'Complete Ride & Pay',
+      'ne': 'राइड सम्पन्न र भुक्तानी',
+    },
+    'arrive_at_destination_first': {
+      'en': 'Arrive at destination to complete',
+      'ne': 'गन्तव्यमा नपुगेसम्म सम्पन्न गर्न मिल्दैन',
     },
     'confirm_complete_job': {
       'en': 'Confirm & Complete',
@@ -1929,8 +2562,10 @@ class S {
       'ne': 'तपाईं अफलाइन हुनुहुन्छ — रोजगारदाताको खोजमा देखिनुहुन्न'
     },
     'no_internet_banner': {
-      'en': 'No internet connection — showing saved data. Will update automatically once back online.',
-      'ne': 'इन्टरनेट जडान छैन — बचत गरिएको डाटा देखाइँदैछ। फेरि जडान भएपछि स्वतः अपडेट हुनेछ।',
+      'en':
+          'No internet connection — showing saved data. Will update automatically once back online.',
+      'ne':
+          'इन्टरनेट जडान छैन — बचत गरिएको डाटा देखाइँदैछ। फेरि जडान भएपछि स्वतः अपडेट हुनेछ।',
     },
     'post_job_title': {'en': 'Post a job', 'ne': 'काम राख्नुहोस्'},
     'job_description': {
@@ -1952,6 +2587,13 @@ class S {
       'ne': 'कामको ठाउँ / ठेगाना'
     },
     'post_job': {'en': 'Post job', 'ne': 'काम पोस्ट गर्नुहोस्'},
+    'open_rides_nearby': {
+      'en': 'Open rides near you',
+      'ne': 'तपाईं नजिकका खुला राइडहरू'
+    },
+    'new_ride_notif_title': {'en': 'New ride nearby', 'ne': 'नजिकै नयाँ राइड'},
+    'find_nearby_rides': {'en': 'Find Nearby Rides', 'ne': 'नजिकका राइड खोज्नुहोस्'},
+    'find_nearby_jobs': {'en': 'Find Nearby Jobs', 'ne': 'नजिकका काम खोज्नुहोस्'},
     'open_jobs_nearby': {
       'en': 'Open jobs near you',
       'ne': 'तपाईं नजिकका खुला कामहरू'
@@ -1964,6 +2606,7 @@ class S {
     'view_job_location': {'en': 'View location', 'ne': 'स्थान हेर्नुहोस्'},
     'job_location_title': {'en': 'Job location', 'ne': 'कामको स्थान'},
     'job_details_title': {'en': 'Job details', 'ne': 'कामको विवरण'},
+    'ride_details_title': {'en': 'Ride details', 'ne': 'राइडको विवरण'},
     'describe_job_first': {
       'en': 'Please describe the job',
       'ne': 'कृपया काम के हो बताउनुहोस्'
@@ -2026,11 +2669,16 @@ class S {
       'ne': 'फोन नम्बर उपलब्ध छैन'
     },
     'active_job_title': {'en': 'Active job', 'ne': 'सक्रिय काम'},
+    'active_ride_title': {'en': 'Active ride', 'ne': 'सक्रिय राइड'},
     'worker_busy_with_other_job': {
       'en':
           'You already have an active job. Finish or cancel it before accepting a new one.',
       'ne':
           'तपाईंसँग पहिल्यै एउटा सक्रिय काम छ। नयाँ काम स्वीकार गर्नुअघि त्यो सक्नुहोस् वा रद्द गर्नुहोस्।',
+    },
+    'cannot_accept_own_request': {
+      'en': "You can't accept your own request.",
+      'ne': 'तपाईं आफैंले पोस्ट गरेको अनुरोध आफैं स्वीकार गर्न मिल्दैन।',
     },
     'worker_quota_exceeded': {
       'en':
@@ -2069,7 +2717,22 @@ class S {
       'ne': 'तपाईंको आवेदन सुरक्षित छ र सफलतापूर्वक पेश भयो'
     },
     'worker_role_word': {'en': 'Worker', 'ne': 'कामदार'},
+    'rider_role_word': {'en': 'Rider', 'ne': 'राइडर'},
     'employer_role_word': {'en': 'Employer', 'ne': 'रोजगारदाता'},
+    'role_select_heading': {
+      'en':
+          'Looking for a ride or a worker?\nFind services or travel seamlessly.',
+      'ne':
+          'सवारी चाहियो कि कामदार?\nसेवा खोज्नुहोस् वा सहज तरिकाले यात्रा गर्नुहोस्।'
+    },
+    'role_select_passenger_employer_title': {
+      'en': 'Passenger & Employer',
+      'ne': 'यात्री र रोजगारदाता'
+    },
+    'role_select_passenger_employer_subtitle': {
+      'en': 'Book rides & hire workers',
+      'ne': 'सवारी बुक गर्नुहोस् र कामदार भाडामा लिनुहोस्'
+    },
     'customer_countered_title': {
       'en': 'Customer sent a counter-offer',
       'ne': 'ग्राहकले नयाँ मूल्य प्रस्ताव पठाउनुभयो'
@@ -2087,6 +2750,31 @@ class S {
       'ne': 'अस्वीकार / पुनः मोलमोलाइ'
     },
     'counter_back': {'en': 'Counter back', 'ne': 'पुनः प्रस्ताव'},
+    'raise_fare': {'en': 'Raise fare', 'ne': 'भाडा बढाउनुहोस्'},
+    'request_timeout_title': {
+      'en': 'No driver has accepted yet',
+      'ne': 'अहिलेसम्म कुनै driver ले स्वीकार गरेन'
+    },
+    'request_timeout_body': {
+      'en': 'Raise the fare to get offers faster, keep waiting, or cancel.',
+      'ne': 'छिटो प्रस्ताव आओस् भने भाडा बढाउनुहोस्, पर्खिरहनुहोस्, वा रद्द गर्नुहोस्।'
+    },
+    'keep_waiting': {'en': 'Keep waiting', 'ne': 'पर्खिरहनुहोस्'},
+    'waiting_time_left': {'en': 'Time left', 'ne': 'बाँकी समय'},
+    'current_fare': {'en': 'Current fare', 'ne': 'हालको भाडा'},
+    'raise_fare_confirm': {'en': 'Raise', 'ne': 'बढाउनुहोस्'},
+    'raise_fare_invalid': {
+      'en': 'Enter a higher amount (up to Rs 100,000).',
+      'ne': 'हालको भन्दा बढी रकम राख्नुहोस् (अधिकतम रु. १,००,०००)।'
+    },
+    'fare_raised': {
+      'en': 'Fare raised — nearby drivers can see the new price.',
+      'ne': 'भाडा बढाइयो — नजिकका driver ले नयाँ मूल्य देख्छन्।'
+    },
+    'fare_raise_failed': {
+      'en': 'Could not raise the fare. A driver may have just accepted.',
+      'ne': 'भाडा बढाउन सकिएन। कुनै driver ले अहिल्यै स्वीकार गरिसक्यो होला।'
+    },
     'worker_countered_title': {
       'en': 'Worker sent a counter-offer',
       'ne': 'कामदारले नयाँ मूल्य प्रस्ताव पठाउनुभयो'
@@ -2122,6 +2810,7 @@ class S {
     'status_completed': {'en': 'Completed', 'ne': 'पूरा भयो'},
     'status_cancelled': {'en': 'Cancelled', 'ne': 'रद्द भयो'},
     'start_work': {'en': 'Start work', 'ne': 'काम सुरु गर्नुहोस्'},
+    'start_ride_label': {'en': 'Start Ride', 'ne': 'राइड सुरु गर्नुहोस्'},
     'work_started': {'en': 'Work started', 'ne': 'काम सुरु भयो'},
     'welcome_back': {'en': 'Welcome back', 'ne': 'फिर्ता स्वागत छ'},
     'login_to_existing': {
@@ -2263,7 +2952,8 @@ class S {
     'video_word': {'en': 'Video', 'ne': 'भिडियो'},
     'video_too_large': {
       'en': 'Video is too large (max 25 MB / 60 sec) — try a shorter clip',
-      'ne': 'भिडियो धेरै ठूलो छ (बढीमा 25 MB / 60 सेकेन्ड) — छोटो क्लिप प्रयास गर्नुहोस्'
+      'ne':
+          'भिडियो धेरै ठूलो छ (बढीमा 25 MB / 60 सेकेन्ड) — छोटो क्लिप प्रयास गर्नुहोस्'
     },
     'upload_error_permission': {
       'en': "Couldn't send — reopen this chat and try again.",
@@ -2275,15 +2965,18 @@ class S {
     },
     'upload_error_storage_not_setup': {
       'en': 'Media upload is temporarily unavailable — try again shortly.',
-      'ne': 'फोटो/भिडियो अपलोड अहिले उपलब्ध छैन — केही बेरमा फेरि प्रयास गर्नुहोस्।',
+      'ne':
+          'फोटो/भिडियो अपलोड अहिले उपलब्ध छैन — केही बेरमा फेरि प्रयास गर्नुहोस्।',
     },
     'upload_error_generic': {
       'en': "Couldn't send — please try again.",
       'ne': 'पठाउन सकिएन — फेरि प्रयास गर्नुहोस्।',
     },
     'media_permission_needed': {
-      'en': 'Camera/Photos permission is required — please allow it in Settings.',
-      'ne': 'क्यामेरा/फोटो अनुमति चाहिन्छ — कृपया Settings मा गएर अनुमति दिनुहोस्।',
+      'en':
+          'Camera/Photos permission is required — please allow it in Settings.',
+      'ne':
+          'क्यामेरा/फोटो अनुमति चाहिन्छ — कृपया Settings मा गएर अनुमति दिनुहोस्।',
     },
     'record_video': {'en': 'Record video', 'ne': 'भिडियो रेकर्ड गर्नुहोस्'},
     'choose_from_gallery': {
@@ -2337,6 +3030,7 @@ class S {
     'home_label_short': {'en': 'Home', 'ne': 'घर'},
     'workplace_label_short': {'en': 'Workplace', 'ne': 'कार्यस्थल'},
     'job_route_title': {'en': 'Heading to job', 'ne': 'काममा जाँदै'},
+    'ride_route_title': {'en': 'Heading to ride', 'ne': 'राइडमा जाँदै'},
     'job_site_word': {'en': 'Job site', 'ne': 'काम स्थल'},
     'your_location_word': {'en': 'You', 'ne': 'तपाईं'},
     'customer_word': {'en': 'Customer', 'ne': 'ग्राहक'},
@@ -2377,6 +3071,10 @@ class S {
       'en': 'Get closer to the pin to mark arrival',
       'ne': 'आगमन मार्क गर्न पिन नजिक पुग्नुहोस्',
     },
+    'start_ride_confirm_arrival': {
+      'en': 'Start Ride — confirm arrival',
+      'ne': 'राइड सुरु — आगमन पुष्टि गर्नुहोस्',
+    },
     'arrived_job_in_progress': {
       'en': 'Arrived — job in progress',
       'ne': 'पुग्नुभयो — काम अगाडि बढ्दैछ',
@@ -2395,9 +3093,27 @@ class S {
       'en': 'Code doesn\'t match — ask the passenger again',
       'ne': 'कोड मिलेन — यात्रीसँग फेरि सोध्नुहोस्',
     },
+    'ride_code_verified_good_to_go': {
+      'en': 'Code verified — good to go',
+      'ne': 'कोड पुष्टि भयो — अगाडि बढ्न सकिन्छ',
+    },
     'ride_started_in_progress': {
       'en': 'Ride started — in progress',
       'ne': 'राइड सुरु भयो — अगाडि बढ्दैछ',
+    },
+    'mark_job_completed_cta': {
+      'en': 'Job Completed',
+      'ne': 'काम सकियो',
+    },
+    'worker_confirmed_waiting_payment': {
+      'en':
+          'You marked this job complete — waiting for the employer to confirm and pay.',
+      'ne':
+          'तपाईंले काम सकिएको भन्नुभयो — अब employer ले पुष्टि गरी भुक्तानी गर्ने पालो।',
+    },
+    'waiting_for_worker_to_confirm_complete': {
+      'en': 'Waiting for the worker to mark the job complete',
+      'ne': 'कामदारले काम सकिएको भन्ने पर्खँदै',
     },
     'share_code_with_driver': {
       'en': 'Share this code with your driver to start the ride',
@@ -2406,6 +3122,10 @@ class S {
     'worker_arrived_notif_title': {
       'en': 'Worker has arrived',
       'ne': 'कामदार पुग्नुभयो',
+    },
+    'rider_arrived_notif_title': {
+      'en': 'Rider has arrived',
+      'ne': 'ड्राइभर पुग्नुभयो',
     },
     'worker_arrived_notif_body': {
       'en':
@@ -2495,6 +3215,27 @@ class S {
       'ne':
           'नि:शुल्क test login लाई Anonymous sign-in चाहिन्छ। Firebase Console → Authentication → Sign-in method मा Anonymous enable गर्नुहोस्।'
     },
+    'phone_too_many_requests': {
+      'en':
+          'Too many attempts for this number — please wait a few minutes and try again.',
+      'ne':
+          'यो नम्बरमा धेरैपटक प्रयास भयो — केही मिनेट पर्खेर फेरि प्रयास गर्नुहोस्।'
+    },
+    'phone_invalid_number': {
+      'en':
+          "That doesn't look like a valid phone number for the selected country.",
+      'ne': 'छानिएको देशको लागि यो नम्बर मान्य देखिँदैन।'
+    },
+    'phone_quota_exceeded': {
+      'en':
+          'SMS quota for this project has been used up for now — please try again later.',
+      'ne':
+          'यो project को SMS क्वोटा अहिलेलाई सकियो — पछि फेरि प्रयास गर्नुहोस्।'
+    },
+    'phone_captcha_failed': {
+      'en': 'Verification check failed — please try again.',
+      'ne': 'Verification जाँच असफल भयो — फेरि प्रयास गर्नुहोस्।'
+    },
     'email_label': {'en': 'Email', 'ne': 'इमेल'},
     'password_label': {'en': 'Password', 'ne': 'पासवर्ड'},
     'login_action': {'en': 'Log in', 'ne': 'लगइन गर्नुहोस्'},
@@ -2531,5 +3272,11 @@ class S {
     'Tutor': 'ट्युटर',
     'Bike': 'बाइक',
     'Car': 'कार',
+    'Handyman': 'ह्यान्डिम्यान',
+    'Auto': 'अटो',
+    'Hotel Booking': 'होटल बुकिङ',
+    'Rental': 'भाडा',
+    'City to City': 'सहर-सहर',
+    'Parcel': 'पार्सल',
   };
 }

@@ -6,7 +6,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'main.dart';
 import 'document_verification_page.dart';
+import 'l10n/strings.dart';
 import 'theme/app_theme.dart';
+import 'widgets/glass_ui.dart';
 
 class ProfileRegistrationPage extends StatefulWidget {
   const ProfileRegistrationPage({super.key});
@@ -70,7 +72,7 @@ class _ProfileRegistrationPageState extends State<ProfileRegistrationPage> {
       initialDate: DateTime(now.year - 20),
       firstDate: DateTime(1940),
       lastDate: now,
-      helpText: 'जन्ममिति छान्नुहोस्',
+      helpText: S.dob,
     );
     if (picked != null) {
       setState(() => _selectedDate = picked);
@@ -82,7 +84,7 @@ class _ProfileRegistrationPageState extends State<ProfileRegistrationPage> {
 
     if (_selectedDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('कृपया जन्ममिति छान्नुहोस्')),
+        SnackBar(content: Text(S.dobRequiredError)),
       );
       return;
     }
@@ -131,138 +133,132 @@ class _ProfileRegistrationPageState extends State<ProfileRegistrationPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.igViolet,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              children: [
-                const Text(
-                  'Welcome to काम मित्र',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 30),
+    // 2027-स्तरको Glassmorphism Redesign — पहिले यहाँ सपाट solid violet
+    // background + सेतो Material card थियो (बाँकी एपको glass भाषासँग
+    // मेल नखाने)। अब `AuroraBackground` (ambient glow) + `GlassPanel`
+    // (frosted card) + `kmInputDecoration` (अरू auth/registration स्क्रिन
+    // सबैले प्रयोग गर्ने उही glass input style) + `KmCtaButton` — केवल
+    // visual/structural मात्र बदलिएको, Firestore write/validation/routing
+    // लजिक जस्ताको-त्यस्तै अपरिवर्तित।
+    return AuroraBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(S.profileRegistrationTitle,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: AppColors.kmText,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 24),
 
-                // Profile Picture placeholder
-                GestureDetector(
-                  onTap: _pickPhoto,
-                  child: CircleAvatar(
-                    radius: 55,
-                    backgroundColor: Colors.white,
-                    backgroundImage:
-                        _photoBytes != null ? MemoryImage(_photoBytes!) : null,
-                    child: _photoBytes == null
-                        ? const Icon(Icons.camera_alt,
-                            size: 40, color: AppColors.igViolet)
-                        : null,
+                  // Glass Profile-Photo Picker — frosted ring + भित्र
+                  // camera icon/तस्बिर, बाँकी एपकै glass भाषामा।
+                  Center(
+                    child: GestureDetector(
+                      onTap: _pickPhoto,
+                      child: Container(
+                        width: 110,
+                        height: 110,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: AppColors.kmGlass2Fill,
+                          border: Border.all(
+                              color: AppColors.kmGlass2Border, width: 1.4),
+                          image: _photoBytes != null
+                              ? DecorationImage(
+                                  image: MemoryImage(_photoBytes!),
+                                  fit: BoxFit.cover)
+                              : null,
+                        ),
+                        child: _photoBytes == null
+                            ? const Icon(Icons.camera_alt_rounded,
+                                size: 34, color: AppColors.kmText)
+                            : null,
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Add photo',
-                  style: TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-                const SizedBox(height: 30),
+                  const SizedBox(height: 8),
+                  Text(S.addPhotoHint,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: AppColors.kmMuted, fontSize: 12.5)),
+                  const SizedBox(height: 24),
 
-                // सेतो कार्ड भित्र फर्म
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    children: [
-                      TextFormField(
-                        controller: _firstNameController,
-                        decoration: const InputDecoration(
-                          labelText: 'First Name',
-                          border: OutlineInputBorder(),
+                  GlassPanel(
+                    radius: AppRadius.lg,
+                    padding: const EdgeInsets.all(18),
+                    child: Column(
+                      children: [
+                        TextFormField(
+                          controller: _firstNameController,
+                          style: const TextStyle(color: AppColors.kmText),
+                          decoration: kmInputDecoration(S.firstName),
+                          validator: (v) => (v == null || v.trim().isEmpty)
+                              ? S.firstNameRequiredError
+                              : null,
                         ),
-                        validator: (v) => (v == null || v.trim().isEmpty)
-                            ? 'नाम लेख्नुहोस्'
-                            : null,
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: _lastNameController,
-                        decoration: const InputDecoration(
-                          labelText: 'Last Name',
-                          border: OutlineInputBorder(),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _lastNameController,
+                          style: const TextStyle(color: AppColors.kmText),
+                          decoration: kmInputDecoration(S.lastName),
+                          validator: (v) => (v == null || v.trim().isEmpty)
+                              ? S.lastNameRequiredError
+                              : null,
                         ),
-                        validator: (v) => (v == null || v.trim().isEmpty)
-                            ? 'थर लेख्नुहोस्'
-                            : null,
-                      ),
-                      const SizedBox(height: 16),
+                        const SizedBox(height: 14),
 
-                      // Date of Birth
-                      InkWell(
-                        onTap: _pickDate,
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'Date of Birth',
-                            border: OutlineInputBorder(),
-                            suffixIcon: Icon(Icons.calendar_today),
-                          ),
-                          child: Text(
-                            _selectedDate == null
-                                ? 'छान्नुहोस्'
-                                : '${_selectedDate!.day}/${_selectedDate!.month}/${_selectedDate!.year}',
+                        // Date of Birth
+                        InkWell(
+                          borderRadius: BorderRadius.circular(16),
+                          onTap: _pickDate,
+                          child: InputDecorator(
+                            decoration: kmInputDecoration(S.dob,
+                                suffixIcon: const Icon(
+                                    Icons.calendar_today_rounded,
+                                    color: AppColors.kmMuted,
+                                    size: 18)),
+                            child: Text(
+                              _selectedDate == null
+                                  ? S.pickDate
+                                  : '${_selectedDate!.day}/${_selectedDate!.month}/${_selectedDate!.year}',
+                              style:
+                                  const TextStyle(color: AppColors.kmText),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 16),
+                        const SizedBox(height: 14),
 
-                      TextFormField(
-                        controller: _emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        decoration: const InputDecoration(
-                          labelText: 'Email',
-                          border: OutlineInputBorder(),
+                        TextFormField(
+                          controller: _emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          style: const TextStyle(color: AppColors.kmText),
+                          decoration: kmInputDecoration(S.emailLabel),
+                          validator: (v) => (v == null || !v.contains('@'))
+                              ? S.validEmailRequiredError
+                              : null,
                         ),
-                        validator: (v) => (v == null || !v.contains('@'))
-                            ? 'सही इमेल लेख्नुहोस्'
-                            : null,
-                      ),
-                      const SizedBox(height: 24),
+                        const SizedBox(height: 22),
 
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
+                        KmCtaButton(
+                          label: S.next,
+                          icon: Icons.arrow_forward_rounded,
+                          loading: _isSaving,
                           onPressed: _isSaving ? null : _submit,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.igViolet,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: _isSaving
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2, color: Colors.white),
-                                )
-                              : const Text(
-                                  'Next',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold),
-                                ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

@@ -9,6 +9,8 @@ import '../l10n/strings.dart';
 import '../report_page.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_ui.dart';
+import '../widgets/futuristic_ui.dart';
+import '../widgets/skeleton.dart';
 
 enum _Sort { recent, highest, lowest }
 
@@ -32,7 +34,7 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
-    return AuroraBackground(
+    return OledBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
@@ -79,9 +81,7 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
                   .snapshots(),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                      child: CircularProgressIndicator(
-                          color: AppColors.kmOrange));
+                  return const SkeletonList();
                 }
                 final docs = snap.data?.docs ?? [];
                 if (docs.isEmpty) {
@@ -120,37 +120,61 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
                   }
                 });
 
-                return ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
-                  children: [
-                    _SummaryCard(avg: avg, total: total, counts: counts),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Text(S.sortBy,
-                            style:
-                                const TextStyle(color: AppColors.kmMuted)),
-                        const SizedBox(width: 8),
-                        DropdownButton<_Sort>(
-                          value: _sort,
-                          underline: const SizedBox(),
-                          dropdownColor: AppColors.kmSurface,
-                          iconEnabledColor: AppColors.kmMuted,
-                          style: const TextStyle(color: AppColors.kmText),
-                          items: _Sort.values
-                              .map((s) => DropdownMenuItem(
-                                  value: s, child: Text(_sortLabel(s))))
-                              .toList(),
-                          onChanged: (s) =>
-                              setState(() => _sort = s ?? _Sort.recent),
+                // धेरै (सयौँ हुनसक्ने) review हुँदा पनि एकैचोटि सबै eagerly
+                // नबनाई — `SliverList` ले स्क्रोलमा देखिने भागमात्र lazily
+                // build गर्छ (ठ्याक्कै `ListView.builder` कै behaviour,
+                // तर माथिको स्थिर header (summary card + sort row) सँगै
+                // एउटै scroll view मा राख्न `CustomScrollView` चाहिन्छ)।
+                return CustomScrollView(
+                  slivers: [
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                      sliver: SliverToBoxAdapter(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _SummaryCard(
+                                avg: avg, total: total, counts: counts),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Text(S.sortBy,
+                                    style: const TextStyle(
+                                        color: AppColors.kmMuted)),
+                                const SizedBox(width: 8),
+                                DropdownButton<_Sort>(
+                                  value: _sort,
+                                  underline: const SizedBox(),
+                                  dropdownColor: AppColors.kmSurface,
+                                  iconEnabledColor: AppColors.kmMuted,
+                                  style:
+                                      const TextStyle(color: AppColors.kmText),
+                                  items: _Sort.values
+                                      .map((s) => DropdownMenuItem(
+                                          value: s, child: Text(_sortLabel(s))))
+                                      .toList(),
+                                  onChanged: (s) => setState(
+                                      () => _sort = s ?? _Sort.recent),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 6),
-                    for (final r in sorted) ...[
-                      _ReviewCard(r),
-                      const SizedBox(height: 10),
-                    ],
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, i) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _ReviewCard(sorted[i]),
+                          ),
+                          childCount: sorted.length,
+                        ),
+                      ),
+                    ),
                   ],
                 );
               },
@@ -186,7 +210,7 @@ class _SummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassPanel(
+    return NeonCard(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -266,7 +290,7 @@ class _ReviewCard extends StatelessWidget {
       date = '${d.day}/${d.month}/${d.year}';
     }
 
-    return GlassPanel(
+    return NeonCard(
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

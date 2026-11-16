@@ -6,20 +6,18 @@ import 'package:flutter/material.dart';
 
 import 'l10n/strings.dart';
 import 'theme/app_theme.dart';
+import 'widgets/futuristic_ui.dart';
 import 'widgets/glass_ui.dart';
 import 'widgets/worker_avatar.dart';
 import 'screens/worker_profile_screen.dart';
+import 'widgets/skeleton.dart';
 
 class WatchlistScreen extends StatelessWidget {
   const WatchlistScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return AuroraBackground(
-      orbs: const [
-        KmOrb(Alignment.topLeft, AppColors.kmPink),
-        KmOrb(Alignment.bottomRight, AppColors.kmPurple),
-      ],
+    return OledBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
@@ -33,12 +31,11 @@ class WatchlistScreen extends StatelessWidget {
                 child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: FirebaseFirestore.instance
                       .collection('registeredWorkers')
+                      .limit(200)
                       .snapshots(),
                   builder: (context, snap) {
                     if (snap.connectionState == ConnectionState.waiting) {
-                      return const Center(
-                          child: CircularProgressIndicator(
-                              color: AppColors.kmTeal));
+                      return const SkeletonList();
                     }
                     final docs = snap.data?.docs ?? [];
                     if (docs.isEmpty) {
@@ -140,26 +137,26 @@ class _WorkerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassPanel(
-      radius: 26,
+    return NeonCard(
       padding: const EdgeInsets.all(14),
       onTap: onTap,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 60,
-            height: 60,
-            decoration: BoxDecoration(
-              gradient: bg,
-              borderRadius: BorderRadius.circular(20),
+            width: 64,
+            height: 64,
+            padding: const EdgeInsets.all(2.5),
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: SweepGradient(
+                  colors: [kNeonTeal, kNeonViolet, kNeonPink, kNeonTeal]),
             ),
-            clipBehavior: Clip.antiAlias,
-            child: WorkerAvatar(
-              uid: uid,
-              size: 60,
-              backgroundColor: Colors.transparent,
-              iconColor: AppColors.kmInk,
+            child: Container(
+              decoration: const BoxDecoration(
+                  shape: BoxShape.circle, color: Color(0xFF05070A)),
+              padding: const EdgeInsets.all(2),
+              child: WorkerAvatar(uid: uid, size: 56),
             ),
           ),
           const SizedBox(width: 13),
@@ -173,7 +170,7 @@ class _WorkerCard extends StatelessWidget {
                     style: const TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 16,
-                        color: AppColors.kmText)),
+                        color: Colors.white)),
                 const SizedBox(height: 3),
                 Text(
                   experience.isEmpty
@@ -207,20 +204,20 @@ class _WorkerCard extends StatelessWidget {
               Row(
                 children: [
                   const Icon(Icons.star_rounded,
-                      size: 15, color: AppColors.kmOrange),
+                      size: 15, color: Color(0xFFFFC145)),
                   const SizedBox(width: 4),
                   Text(rating,
                       style: const TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 13,
-                          color: AppColors.kmOrange)),
+                          color: Color(0xFFFFC145))),
                 ],
               ),
               Text(S.fromPrice(price),
                   style: const TextStyle(
                       fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.kmOrange)),
+                      fontWeight: FontWeight.w800,
+                      color: kNeonTeal)),
             ],
           ),
         ],

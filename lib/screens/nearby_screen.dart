@@ -9,9 +9,11 @@ import 'package:geolocator/geolocator.dart';
 
 import '../l10n/strings.dart';
 import '../theme/app_theme.dart';
+import '../widgets/futuristic_ui.dart';
 import '../widgets/glass_ui.dart';
 import '../widgets/worker_avatar.dart';
 import 'nearby_common.dart';
+import '../widgets/skeleton.dart';
 
 class NearbyScreen extends StatefulWidget {
   // होम स्क्रिनको कुनै एक category chip (जस्तै Plumber) थिचेर सिधै यहाँ
@@ -102,13 +104,13 @@ class _NearbyScreenState extends State<NearbyScreen> {
 
   Query<Map<String, dynamic>> get _query {
     final base = FirebaseFirestore.instance.collection('registeredWorkers');
-    if (_filter == 'all') return base;
-    return base.where('service', isEqualTo: _filter);
+    if (_filter == 'all') return base.limit(200);
+    return base.where('service', isEqualTo: _filter).limit(200);
   }
 
   @override
   Widget build(BuildContext context) {
-    return AuroraBackground(
+    return OledBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
@@ -137,10 +139,18 @@ class _NearbyScreenState extends State<NearbyScreen> {
                     : Column(
                         children: [
                           if (_approx) _ApproxBanner(onEnable: _initLocation),
-                          _FilterBar(
-                            selected: _filter,
-                            onSelect: (f) => setState(() => _filter = f),
-                          ),
+                          // Category tile (जस्तै "Mechanic") बाट सिधै
+                          // आएको भए (`initialFilter` दिइएको) — strict
+                          // single-category isolation: "All"/अरू trade
+                          // chip नै नदेखाउने, switch गर्ने उपाय नै नदिने।
+                          // Side-menu "Providers" बाट (initialFilter
+                          // नदिई) आएको साधारण "सबै" directory मा मात्र
+                          // chip बार देखिने।
+                          if (widget.initialFilter == null)
+                            _FilterBar(
+                              selected: _filter,
+                              onSelect: (f) => setState(() => _filter = f),
+                            ),
                           Expanded(
                             child: RefreshIndicator(
                               onRefresh: _initLocation,
@@ -152,9 +162,7 @@ class _NearbyScreenState extends State<NearbyScreen> {
                                 builder: (context, snap) {
                                   if (snap.connectionState ==
                                       ConnectionState.waiting) {
-                                    return const Center(
-                                        child: CircularProgressIndicator(
-                                            color: AppColors.kmOrange));
+                                    return const SkeletonList();
                                   }
                                   final docs = snap.data?.docs ?? [];
                                   if (docs.isEmpty) {
@@ -187,6 +195,7 @@ class _NearbyScreenState extends State<NearbyScreen> {
                                         distanceKm: w.km,
                                         employerLat: _lat,
                                         employerLng: _lng,
+                                        nearest: i == 0,
                                       );
                                     },
                                   );
@@ -327,6 +336,7 @@ class _WorkerCard extends StatelessWidget {
   final double distanceKm;
   final double employerLat;
   final double employerLng;
+  final bool nearest;
 
   const _WorkerCard({
     required this.data,
@@ -334,7 +344,37 @@ class _WorkerCard extends StatelessWidget {
     required this.distanceKm,
     required this.employerLat,
     required this.employerLng,
+    this.nearest = false,
   });
+
+  Widget _stat(IconData icon, String value, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 8),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 15, color: color),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12.5)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -345,71 +385,143 @@ class _WorkerCard extends StatelessWidget {
     final rating = (data['rating'] ?? '0.0').toString();
     final reviews = (data['reviews'] ?? '0').toString();
     final price = (data['price'] ?? 'Rs. 500').toString();
+    final accent = nearest ? kNeonTeal : kNeonViolet;
 
-    return GlassPanel(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              WorkerAvatar(uid: workerId, size: 48),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(name.isEmpty ? '—' : name,
-                        style: const TextStyle(
-                            color: AppColors.kmText,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15.5)),
-                    const SizedBox(height: 2),
-                    Text(S.serviceName(service),
-                        style: const TextStyle(color: AppColors.kmMuted)),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const Icon(Icons.star_rounded,
-                            size: 15, color: AppColors.kmOrange),
-                        const SizedBox(width: 3),
-                        Text('$rating  ($reviews)',
-                            style:
-                                const TextStyle(color: AppColors.kmMuted)),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              KmTag(S.distanceLabel(distanceKm),
-                  color: AppColors.kmTealBlue, icon: Icons.near_me_rounded),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              S.fromPrice(price),
-              style: const TextStyle(
-                  color: AppColors.kmText,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14),
-            ),
-          ),
-          const SizedBox(height: 12),
-          KmCtaButton(
-            label: S.offerYourPrice,
-            icon: Icons.gavel_rounded,
-            onPressed: () => showOfferSheet(
-              context,
-              data: data,
-              workerId: workerId,
-              distanceKm: distanceKm,
-              employerLat: employerLat,
-              employerLng: employerLng,
-            ),
-          ),
+    return Container(
+      padding: const EdgeInsets.all(1.3),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            accent.withValues(alpha: 0.85),
+            kNeonBlue.withValues(alpha: 0.18),
+            kNeonPink.withValues(alpha: 0.55),
+          ],
+        ),
+        boxShadow: [
+          BoxShadow(
+              color: accent.withValues(alpha: 0.22),
+              blurRadius: 18,
+              spreadRadius: -2),
         ],
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(21),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF0C1118), Color(0xFF070A0F)],
+          ),
+        ),
+        child: Column(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(2.5),
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: SweepGradient(
+                        colors: [kNeonTeal, kNeonViolet, kNeonPink, kNeonTeal]),
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: const BoxDecoration(
+                        shape: BoxShape.circle, color: Color(0xFF05070A)),
+                    child: WorkerAvatar(
+                        uid: (data['uid'] ?? workerId).toString(), size: 50),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name.isEmpty ? '—' : name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 16)),
+                      const SizedBox(height: 5),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          NeonChip(
+                              label: S.serviceName(service), color: kNeonBlue),
+                          if (nearest)
+                            const NeonChip(label: 'NEAREST', color: kNeonTeal),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                _stat(Icons.star_rounded, '$rating ($reviews)',
+                    const Color(0xFFFFC145)),
+                const SizedBox(width: 8),
+                _stat(Icons.near_me_rounded, S.distanceLabel(distanceKm),
+                    kNeonBlue),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                gradient: LinearGradient(colors: [
+                  kNeonTeal.withValues(alpha: 0.14),
+                  kNeonViolet.withValues(alpha: 0.10),
+                ]),
+                border: Border.all(color: kNeonTeal.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.sell_rounded, size: 17, color: kNeonTeal),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(S.fromPrice(price),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: kNeonTeal,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 16,
+                            letterSpacing: 0.3)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            NeonActionButton(
+              label: S.offerYourPrice,
+              icon: Icons.gavel_rounded,
+              color: kNeonTeal,
+              color2: kNeonViolet,
+              filled: true,
+              onTap: () => showOfferSheet(
+                context,
+                data: data,
+                workerId: workerId,
+                distanceKm: distanceKm,
+                employerLat: employerLat,
+                employerLng: employerLng,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

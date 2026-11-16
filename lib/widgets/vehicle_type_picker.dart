@@ -23,7 +23,8 @@ Future<String?> showVehicleTypePicker(BuildContext context) {
           children: [
             Expanded(
               child: _VehicleOption(
-                icon: Icons.two_wheeler_rounded,
+                imagePath: 'assets/images/home_bike.png',
+                glow: const Color(0xFF00BCD4),
                 label: S.bikeWord,
                 hint: S.bikeRideHint,
                 onTap: () => Navigator.pop(context, 'Bike'),
@@ -32,7 +33,8 @@ Future<String?> showVehicleTypePicker(BuildContext context) {
             const SizedBox(width: 12),
             Expanded(
               child: _VehicleOption(
-                icon: Icons.local_taxi_rounded,
+                imagePath: 'assets/images/home_car.png',
+                glow: const Color(0xFF3B82F6),
                 label: S.carWord,
                 hint: S.carRideHint,
                 onTap: () => Navigator.pop(context, 'Car'),
@@ -46,12 +48,14 @@ Future<String?> showVehicleTypePicker(BuildContext context) {
 }
 
 class _VehicleOption extends StatelessWidget {
-  final IconData icon;
+  final String imagePath;
+  final Color glow;
   final String label;
   final String hint;
   final VoidCallback onTap;
   const _VehicleOption({
-    required this.icon,
+    required this.imagePath,
+    required this.glow,
     required this.label,
     required this.hint,
     required this.onTap,
@@ -61,19 +65,30 @@ class _VehicleOption extends StatelessWidget {
   Widget build(BuildContext context) {
     return GlassPanel(
       radius: AppRadius.lg,
-      padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 10),
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
       onTap: onTap,
       child: Column(
         children: [
+          // Home screen कै उस्तै neon illustration (home_screen.dart::
+          // _NeonServiceTile::_buildImageTile) — ती तस्बिरको आफ्नै गाढा/
+          // कालो backdrop छ, पुरानो सेतो स्टुडियो-फोटो (bike_ride.png/
+          // car_ride.png) सँग मिल्ने हल्का खरानी (kmVehiclePhotoBg) अब
+          // बेमेल हुन्थ्यो — त्यसैले त्यो ठोस भरण हटाएर home tile कै
+          // brand-रङको glow shadow मात्र, पृष्ठभूमि transparent।
           Container(
-            width: 58,
-            height: 58,
-            alignment: Alignment.center,
-            decoration: const BoxDecoration(
-              gradient: AppColors.kmCtaGradient,
-              shape: BoxShape.circle,
+            height: 84,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppRadius.lg - 6),
+              boxShadow: [
+                BoxShadow(
+                    color: glow.withValues(alpha: 0.45),
+                    blurRadius: 16,
+                    spreadRadius: 0.5),
+              ],
             ),
-            child: Icon(icon, color: AppColors.kmInk, size: 30),
+            clipBehavior: Clip.antiAlias,
+            child: Image.asset(imagePath, fit: BoxFit.contain),
           ),
           const SizedBox(height: 10),
           Text(label,

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mapbox Maps SDK — सार्वजनिक (client-exposed, डिजाइन अनुसार नै
+         सुरक्षित) access token। यो NativeVehicleMapView.kt भित्रैको
+         vehicle-tracking native view ले मात्र प्रयोग गर्छ — बाँकी app कै
+         map screen हरू (google_maps_flutter) अझै Google Maps मै छन्,
+         यसले ती छुँदैन। -->
+    <!-- mapbox_access_token अब android/local.properties को MAPBOX_ACCESS_TOKEN बाट
+         build.gradle ले resValue मार्फत थप्छ (GitHub मा token नजाओस् भनेर)। -->
+</resources>

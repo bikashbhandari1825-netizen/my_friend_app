@@ -3,6 +3,24 @@ allprojects {
         google()
         mavenCentral()
     }
+    // Kotlin-Stdlib Network-Fetch Avoidance — `sensors_plus` ले आफ्नै
+    // transitive dependency को रूपमा `kotlin-stdlib(-common):2.2.0` माग्छ
+    // — जुन यो मेसिनमा कहिल्यै download भएको छैन, र यहाँको JVM (Android
+    // Studio बाटैको bundled JBR) को SSL/certificate-chain validation ले
+    // त्यो नयाँ fetch लाई "PKIX path building failed" भनेर रोक्छ (Windows
+    // आफैंले/curl ले उही URL ठीकै पुग्छ, तर Java कै bundled cacerts फरक)।
+    // project कै आफ्नै Kotlin plugin version (settings.gradle, 2.4.0) कै
+    // stdlib भने पहिल्यै यो मेसिनमा cache भइसकेको छ (कुनै थप नेटवर्क
+    // नचाहिने)। यहाँ सबै module लाई त्यही एउटै, पहिल्यै-cache भएको संस्करण
+    // (2.4.0) मा नै align गराउँदा (version force) — sensors_plus कै
+    // पुरानो/फरक pin लाई बेवास्ता गरेर कहिल्यै नयाँ network-fetch नै
+    // नचाहिने।
+    configurations.all {
+        resolutionStrategy {
+            force 'org.jetbrains.kotlin:kotlin-stdlib:2.4.0'
+            force 'org.jetbrains.kotlin:kotlin-stdlib-common:2.4.0'
+        }
+    }
 }
 
 rootProject.buildDir = '../build'
@@ -11,6 +29,33 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(':app')
+}
+
+// KYC Face Liveness/OCR — `camera` package को Android backend
+// (`camera_android_camerax` plugin subproject, pub-cache बाटै आउने, यो
+// repo ले सिधै edit गर्न नमिल्ने) आफैं `androidx.camera:camera-core:1.5.3`
+// माथि `implementation` निर्भर छ — तर त्यो artifact को POM मा
+// `androidx.concurrent:concurrent-futures` लाई `runtime` scope मात्र
+// तोकिएको रहेछ, `compile` होइन। जबकि camera-core:1.5.3 भित्रैको
+// (`SurfaceRequest.class`) कम्पाइल-गरिएको type-annotation ले नै त्यही
+// class compile-time मा चाहिन्छ — नतिजा ":camera_android_camerax:
+// compileDebugJavaWithJavac" ले "class file for ...CallbackToFutureAdapter
+// not found" भनेर असफल हुन्थ्यो। plugin आफैंको (pub-cache भित्रैको)
+// build.gradle कहिल्यै सिधै नछोइकन — यहाँ ठ्याक्कै माथिकै namespace/
+// jvmTarget-fix कै उस्तै pattern (plugin-विशेष subproject पहिचान गरेर
+// Gradle API बाटै थप्ने) प्रयोग गरेर compile classpath मै explicit थपिन्छ।
+subprojects { proj ->
+    if (proj.name == 'camera_android_camerax') {
+        def addConcurrentFuturesDep = {
+            proj.dependencies.add('implementation',
+                    'androidx.concurrent:concurrent-futures:1.3.0')
+        }
+        if (proj.state.executed) {
+            addConcurrentFuturesDep()
+        } else {
+            proj.afterEvaluate { addConcurrentFuturesDep() }
+        }
+    }
 }
 
 // कतिपय पुराना/unmaintained pub package (जस्तै flutter_jailbreak_detection

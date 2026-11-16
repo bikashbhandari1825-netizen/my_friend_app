@@ -5,6 +5,12 @@
 // auth/business logic छैन — केवल visual intro हो; "सुरु गर्नुहोस्" थिचेपछि
 // वा सबै स्लाइड स्वाइप गरेपछि [onFinish] कल हुन्छ, जसले caller लाई (OnboardingGate)
 // अघि बढ्न (phone-OTP landing page देखाउन) संकेत गर्छ।
+//
+// हरेक स्लाइडको illustration `assets/images/slide{1,2,3}.png` (साँचो
+// 3D-render PNG, `pubspec.yaml`'s `assets/images/` बाट) — `_IllustrationRing`
+// ले घुमिरहेको cyan-नियन rim-light ring (`_GlowRingPainter`) भित्र circle
+// मा crop गरेर देखाउँछ। कुनै image नदिई CustomPainter vector fallback पनि
+// अझै सम्भव छ (`_OnboardSlide.paint`) — हाल कुनै स्लाइडले प्रयोग गर्दैन।
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -14,28 +20,19 @@ import '../theme/app_theme.dart';
 import '../widgets/glass_ui.dart';
 
 class _OnboardSlide {
-  final IconData icon;
-  final Gradient iconBg;
-  // Glow ring/particle को रङ — `iconBg` कै मुख्य टोनसँग मिल्ने, छुट्टै दिइएको
-  // (gradient बाट runtime मै रङ निकाल्नु भन्दा सजिलो/सुरक्षित)।
-  final Color accentColor;
-  // सानो "badge" icon — मुख्य icon कै तल्लो-दायाँ कुनामा छुट्टै गोलो
-  // ब्याजको रूपमा देखिने (जस्तै handshake + price-tag, phone + verified
-  // checkmark) — एउटै सादा icon भन्दा बढी "composed illustration" जस्तो
-  // देखियोस् भनेर।
-  final IconData badgeIcon;
-  final Color badgeColor;
   final String title;
   final String subtitle;
+  // दुईमध्ये एउटा मात्र दिइन्छ — `imageAsset` (साँचो PNG, `Image.asset`)
+  // भए त्यही देखाउने, नभए `paint` (CustomPainter vector illustration)
+  // fallback को रूपमा।
+  final String? imageAsset;
+  final CustomPainter Function(double t)? paint;
   const _OnboardSlide({
-    required this.icon,
-    required this.iconBg,
-    required this.accentColor,
-    required this.badgeIcon,
-    required this.badgeColor,
     required this.title,
     required this.subtitle,
-  });
+    this.imageAsset,
+    this.paint,
+  }) : assert(imageAsset != null || paint != null);
 }
 
 class OnboardingScreen extends StatefulWidget {
@@ -52,39 +49,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   List<_OnboardSlide> get _slides => [
         _OnboardSlide(
-          icon: Icons.directions_car_filled_rounded,
-          iconBg: const LinearGradient(
-              colors: [AppColors.kmPurple, AppColors.kmPink]),
-          accentColor: AppColors.kmPurple,
-          badgeIcon: Icons.handyman_rounded,
-          badgeColor: AppColors.kmOrange,
           title: S.isNepali ? 'एकै ठाउँमा सबै सेवा' : 'All-in-one services',
           subtitle: S.isNepali
               ? 'राइड बुक गर्नुहोस् वा भरपर्दो स्थानीय कामदार भाडामा लिनुहोस् — सबै एउटै एपबाट।'
               : 'Book a ride or hire a trusted local worker — all from one app.',
+          imageAsset: 'assets/images/slide1.png',
         ),
         _OnboardSlide(
-          icon: Icons.handshake_rounded,
-          iconBg: const LinearGradient(
-              colors: [AppColors.kmOrange, AppColors.kmOrangeDeep]),
-          accentColor: AppColors.kmOrange,
-          badgeIcon: Icons.sell_rounded,
-          badgeColor: AppColors.kmTealBlue,
           title: S.isNepali ? 'आफ्नै मूल्यमा प्रस्ताव राख्नुहोस्' : 'Offer your own price',
           subtitle: S.isNepali
               ? 'स्थानीय कामदारसँग सिधै मूल्य कुराकानी गर्नुहोस् — बीचमा कुनै कमिसन दलाल छैन।'
               : 'Negotiate directly with local workers — no middleman commission.',
+          imageAsset: 'assets/images/slide2.png',
         ),
         _OnboardSlide(
-          icon: Icons.phone_iphone_rounded,
-          iconBg: const LinearGradient(colors: [AppColors.kmTeal, AppColors.kmTealBlue]),
-          accentColor: AppColors.kmTealBlue,
-          badgeIcon: Icons.verified_rounded,
-          badgeColor: AppColors.kmTeal,
           title: S.isNepali ? 'फोन नम्बरबाट छिटो लगइन' : 'Fast login by phone number',
           subtitle: S.isNepali
               ? 'कुनै पासवर्ड झन्झट छैन — फोन नम्बर हालेर सजिलै खाता बनाउनुहोस् वा लगइन गर्नुहोस्।'
               : 'No password hassle — just your phone number to sign up or log in.',
+          imageAsset: 'assets/images/slide3.png',
         ),
       ];
 
@@ -183,26 +166,16 @@ class _SlideView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // पहिले यहाँ सिधै (scroll बिनाको) `Column(mainAxisAlignment: center)`
-    // मात्र थियो — सानो/कम उचाइको फोन (landscape, वा ठूलो font-scale जस्तै
-    // घटेको उचाइ) मा `_GlowIcon` (156px, नयाँ glow ring सहित, पहिलेको
-    // सादा 96px भन्दा ठूलो) + title + subtitle जोड्दा उपलब्ध उचाइभन्दा
-    // बढी भई RenderFlex overflow (पहेँलो/कालो धर्का) आउँथ्यो। पहिलो try
-    // (`LayoutBuilder` + `ConstrainedBox(minHeight)`) ले औंल्याइएको ठाउँमा
-    // नै title/subtitle पूर्ण रूपमा (कुनै error/overflow warning बिनै)
-    // बेपत्ता भइदियो — त्यो जटिल pattern भरपर्दो सावित भएन। अब सिधा,
-    // जोखिम-रहित bulletproof तरिका: `SingleChildScrollView` + Column
-    // (`mainAxisSize: min`, content-अनुसार मात्र अग्लो) — ठाउँ पुगे सुरुतिर
-    // (top-anchored) देखिन्छ (ठूलो स्क्रिनमा बीचमा नहुन सक्छ, तर त्यो
-    // कमजोरी सजावटी मात्र हो), नपुगे scroll हुन्छ — content कहिल्यै
-    // बेपत्ता/काटिने वा overflow-धर्का देखिने छैन।
+    // SingleChildScrollView + Column (`mainAxisSize: min`) — ठाउँ पुगे
+    // सुरुतिर (top-anchored) देखिन्छ, नपुगे (सानो/कम उचाइको फोन) scroll
+    // हुन्छ — content कहिल्यै बेपत्ता/काटिने वा overflow-धर्का देखिने छैन।
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(32, 12, 32, 12),
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _GlowIcon(slide: slide),
+            _IllustrationRing(slide: slide),
             const SizedBox(height: 34),
             Text(
               slide.title,
@@ -231,192 +204,123 @@ class _SlideView extends StatelessWidget {
   }
 }
 
-/// Onboarding icon — "neon glow orb" शैली (reference डिजाइन फोटो जस्तै):
-/// घुमिरहने बहु-रङी (cyan→purple→pink→orange) neon ring, gradient-रंगिएको
-/// icon glyph (एउटै ठोस रङ होइन), बाहिरी नरम ambient glow, अनि वरिपरि
-/// तैरिरहेका सानो accent particle dot — दुवै icon-slide (price-offer र
-/// phone-login) मा उही एउटै आधुनिक/एडभान्स ring treatment (पहिले यहाँ
-/// खाली एउटा सादा भरिएको circle + पातलो सेतो-मात्र ring थियो)। सेतो
-/// पृष्ठभूमि/box कतै थपिएको छैन — गाढा theme सँगै मिलिरहन्छ।
-class _GlowIcon extends StatefulWidget {
-  final _OnboardSlide slide;
-  const _GlowIcon({required this.slide});
-
-  @override
-  State<_GlowIcon> createState() => _GlowIconState();
+/// नियन rim-light accent — यो फाइलभरि प्रयोग हुने दुई cyan/blue टोन (settings_page.dart
+/// जस्ता अन्य screen मा पहिल्यै प्रयोग भइसकेको उही signature accent)।
+class _Neon {
+  static const a = Color(0xFF5CFFD1);
+  static const b = Color(0xFF22B8FF);
 }
 
-class _GlowIconState extends State<_GlowIcon>
-    with SingleTickerProviderStateMixin {
-  // Ring बिस्तारै घुमिरहोस् — value मात्र ०..१ बीच loop हुने, कुनै
-  // jank/setState-heavy काम छैन (CustomPainter ले सिधै repaint गर्छ)।
-  late final AnimationController _ringCtrl = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 10),
-  )..repeat();
+/// घुम्ने radar-style neon ring + भित्र slide-विशेष illustration — दुवैलाई
+/// एउटै घुम्ने `t` (0..1 loop) ले animate गर्छ।
+class _IllustrationRing extends StatefulWidget {
+  final _OnboardSlide slide;
+  const _IllustrationRing({required this.slide});
 
-  // एपभरिकै brand accent — दुवै icon-slide मा उही एउटा neon sweep, ताकि
-  // "यही फोटो जस्तै डिजाइन दुवैतिर" भन्ने माग अनुसार एउटै signature ring।
-  static const _ringColors = [
-    AppColors.kmTealBlue,
-    AppColors.kmPurple,
-    AppColors.kmPink,
-    AppColors.kmOrange,
-    AppColors.kmTealBlue,
-  ];
+  @override
+  State<_IllustrationRing> createState() => _IllustrationRingState();
+}
+
+class _IllustrationRingState extends State<_IllustrationRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ringController = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 9),
+  )..repeat();
 
   @override
   void dispose() {
-    _ringCtrl.dispose();
+    _ringController.dispose();
     super.dispose();
   }
 
-  Widget _dot(Color color, double size) => Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color,
-          boxShadow: [
-            BoxShadow(color: color.withValues(alpha: 0.7), blurRadius: 8),
-          ],
-        ),
-      );
-
   @override
   Widget build(BuildContext context) {
-    final accent = widget.slide.accentColor;
+    final imageAsset = widget.slide.imageAsset;
     return RepaintBoundary(
-      child: SizedBox(
-        width: 156,
-        height: 156,
-        child: Stack(
-          alignment: Alignment.center,
-          clipBehavior: Clip.none,
-          children: [
-            // बाहिरी नरम ambient glow — बीचबाट बाहिर हराउँदै।
-            Container(
-              width: 156,
-              height: 156,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [accent.withValues(alpha: 0.30), Colors.transparent],
-                ),
+      child: AnimatedBuilder(
+        animation: _ringController,
+        builder: (context, _) {
+          final t = _ringController.value;
+          return SizedBox(
+            width: 200,
+            height: 200,
+            child: CustomPaint(
+              painter: _GlowRingPainter(t),
+              child: Padding(
+                padding: EdgeInsets.all(imageAsset != null ? 14 : 32),
+                child: imageAsset != null
+                    ? ClipOval(
+                        child: Image.asset(imageAsset, fit: BoxFit.cover),
+                      )
+                    : CustomPaint(
+                        painter: widget.slide.paint!(t),
+                        child: const SizedBox.expand(),
+                      ),
               ),
             ),
-            // घुमिरहने बहु-रङी neon ring (glow + crisp दुवै तह)।
-            AnimatedBuilder(
-              animation: _ringCtrl,
-              builder: (context, _) => CustomPaint(
-                size: const Size(132, 132),
-                painter: _NeonRingPainter(
-                  turns: _ringCtrl.value,
-                  colors: _ringColors,
-                ),
-              ),
-            ),
-            // मुख्य gradient circle + gradient-रंगिएको icon glyph।
-            Container(
-              width: 96,
-              height: 96,
-              decoration: BoxDecoration(
-                gradient: widget.slide.iconBg,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: accent.withValues(alpha: 0.4),
-                    blurRadius: 30,
-                    spreadRadius: 2,
-                  ),
-                ],
-              ),
-              child: ShaderMask(
-                blendMode: BlendMode.srcIn,
-                shaderCallback: (bounds) => const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [AppColors.kmInk, Colors.white70],
-                ).createShader(bounds),
-                child: Icon(widget.slide.icon, size: 42),
-              ),
-            ),
-            // तैरिरहेका सजावटी particle dot।
-            Positioned(top: 6, right: 14, child: _dot(AppColors.kmTeal, 10)),
-            Positioned(bottom: 20, left: 2, child: _dot(AppColors.kmPink, 8)),
-            Positioned(top: 44, left: -6, child: _dot(accent, 7)),
-            // सानो "badge" circle — मुख्य icon लाई एउटा सादा glyph नभई दुई
-            // अवधारणा (जस्तै handshake + price-tag) जोडिएको composed
-            // illustration जस्तो देखाउनको लागि, मुख्य circle कै तल्लो-दायाँ
-            // किनारमा अलिक ओभरल्याप गरेर।
-            Positioned(
-              bottom: -2,
-              right: -2,
-              child: Container(
-                width: 40,
-                height: 40,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: widget.slide.badgeColor,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                      color: AppColors.kmSurface.withValues(alpha: 0.9),
-                      width: 3),
-                  boxShadow: [
-                    BoxShadow(
-                      color: widget.slide.badgeColor.withValues(alpha: 0.6),
-                      blurRadius: 14,
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
-                child: Icon(widget.slide.badgeIcon,
-                    size: 19, color: AppColors.kmInk),
-              ),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 }
 
-/// Neon sweep-gradient ring — built-in `Border`/`BoxDecoration` ले circular
-/// stroke मा gradient दिन नमिल्ने भएकोले CustomPainter चाहियो। [turns]
-/// (०..१, लुप हुने) ले पूरै ring बिस्तारै घुमाउँछ; बाहिरी blurred तह (नरम
-/// glow) + भित्री crisp पातलो line दुवै उही SweepGradient बाट, ताकि
-/// जोर्नी (सुरु/अन्त्य) कहीं टुटेको नदेखियोस्।
-class _NeonRingPainter extends CustomPainter {
-  final double turns;
-  final List<Color> colors;
-  const _NeonRingPainter({required this.turns, required this.colors});
+/// घुम्ने radar-style neon ring — icon वरिपरि rim-light।
+class _GlowRingPainter extends CustomPainter {
+  final double t;
+  _GlowRingPainter(this.t);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final center = size.center(Offset.zero);
-    final radius = size.width / 2 - 5;
-    final rect = Rect.fromCircle(center: center, radius: radius);
-    final gradient = SweepGradient(
-      colors: colors,
-      transform: GradientRotation(turns * 2 * math.pi),
+    final c = size.center(Offset.zero);
+    final r = size.width / 2 - 6;
+
+    final halo = Paint()
+      ..shader = RadialGradient(colors: [
+        _Neon.b.withValues(alpha: 0.32),
+        _Neon.b.withValues(alpha: 0),
+      ]).createShader(Rect.fromCircle(center: c, radius: r + 28));
+    canvas.drawCircle(c, r + 28, halo);
+
+    canvas.drawCircle(
+      c,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = Colors.white.withValues(alpha: 0.14),
     );
-    final shader = gradient.createShader(rect);
 
-    final glow = Paint()
-      ..shader = shader
+    final sweep = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 10
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
-    canvas.drawCircle(center, radius, glow);
+      ..strokeWidth = 3.2
+      ..strokeCap = StrokeCap.round
+      ..shader = const SweepGradient(colors: [
+        Color(0x005CFFD1),
+        _Neon.a,
+        _Neon.b,
+        Color(0x0022B8FF),
+      ]).createShader(Rect.fromCircle(center: c, radius: r));
+    canvas.save();
+    canvas.translate(c.dx, c.dy);
+    canvas.rotate(t * 2 * math.pi);
+    canvas.translate(-c.dx, -c.dy);
+    canvas.drawArc(
+        Rect.fromCircle(center: c, radius: r), 0, math.pi * 0.6, false, sweep);
+    canvas.restore();
 
-    final line = Paint()
-      ..shader = shader
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.6;
-    canvas.drawCircle(center, radius, line);
+    canvas.drawCircle(c, r - 16, Paint()..color = Colors.white.withValues(alpha: 0.065));
+    canvas.drawCircle(
+      c,
+      r - 16,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = Colors.white.withValues(alpha: 0.12),
+    );
   }
 
   @override
-  bool shouldRepaint(covariant _NeonRingPainter oldDelegate) =>
-      oldDelegate.turns != turns;
+  bool shouldRepaint(covariant _GlowRingPainter old) => old.t != t;
 }

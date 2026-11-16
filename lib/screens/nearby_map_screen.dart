@@ -27,8 +27,6 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
   StreamSubscription<Position>? _posSub;
 
   // origin: scatter गर्ने fixed centre (एकपटक मात्र सेट); live: distance को लागि।
-  double _originLat = fallbackLat;
-  double _originLng = fallbackLng;
   double _lat = fallbackLat;
   double _lng = fallbackLng;
   bool _ready = false;
@@ -69,8 +67,6 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
       ).timeout(const Duration(seconds: 12));
       if (!mounted) return;
       setState(() {
-        _originLat = p.latitude;
-        _originLng = p.longitude;
         _lat = p.latitude;
         _lng = p.longitude;
         _approx = false;
@@ -86,8 +82,6 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
   void _useFallback() {
     if (!mounted) return;
     setState(() {
-      _originLat = fallbackLat;
-      _originLng = fallbackLng;
       _lat = fallbackLat;
       _lng = fallbackLng;
       _approx = true;
@@ -126,7 +120,9 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
     final markers = <Marker>{};
     for (final d in docs) {
       final data = d.data();
-      final wp = workerPos(data, d.id, _originLat, _originLng);
+      // नक्कली स्थान होइन — असली र ताजा मात्र (`realWorkerPos`)।
+      final wp = realWorkerPos(data);
+      if (wp == null) continue;
       final km = haversineKm(_lat, _lng, wp.lat, wp.lng);
       final name = (data['name'] ?? '—').toString();
       final service = (data['service'] ?? '').toString();
@@ -178,6 +174,7 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
           : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
                   .collection('registeredWorkers')
+                  .limit(300)
                   .snapshots(),
               builder: (context, snap) {
                 final docs = snap.data?.docs ?? [];
@@ -188,6 +185,7 @@ class _NearbyMapScreenState extends State<NearbyMapScreen> {
                         target: LatLng(_lat, _lng),
                         zoom: 13.5,
                       ),
+                      mapId: kCloudMapId,
                       onMapCreated: (c) {
                         _map = c;
                         if (!_centeredOnce) _recentre();
@@ -351,7 +349,8 @@ class _WorkerSheet extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              WorkerAvatar(uid: workerId, size: 44),
+              WorkerAvatar(
+                  uid: (data['uid'] ?? workerId).toString(), size: 44),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

@@ -5,7 +5,6 @@
 // एकैचोटि अनुरोध पठाउँछ (broadcast), अनि tracking स्क्रिन खुल्छ।
 import 'dart:async';
 import 'dart:typed_data' show Uint8List;
-import 'dart:ui' show ImageFilter;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -20,6 +19,7 @@ import '../location_util.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_ui.dart';
 import '../widgets/worker_avatar.dart';
+import 'job_actions.dart' show setDocWithRetry, shouldShowJobToWorker;
 import 'nearby_common.dart';
 import 'request_tracking_screen.dart';
 import 'worker_profile_screen.dart';
@@ -51,8 +51,6 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
   // `initState()` मा तुरुन्तै (होमपेजबाट आएको सिड वा fallback) भरिन्छ —
   // State को field initializer चल्ने बेला `widget` अझै जोडिएको हुँदैन,
   // त्यसैले यहाँ होइन initState() भित्रै सेट गर्नुपर्छ।
-  double _originLat = fallbackLat;
-  double _originLng = fallbackLng;
   double _lat = fallbackLat;
   double _lng = fallbackLng;
   bool _centeredOnce = false;
@@ -104,7 +102,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
 
   // InDrive-style: ग्राहकको प्रस्तावित मूल्य (अनुमानित भाडाबाट सुरु)।
   int? _offer;
-  static const int _priceStep = 50;
+  static const int _priceStep = 5;
   void _setOffer(int v) =>
       setState(() => _offer = v.clamp(_priceStep, 1000000));
 
@@ -112,14 +110,18 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
   // default (10km) कायम रहन्छ (worker list यही अनुसार फिल्टर हुन्छ)।
   final int _radiusKm = 10;
 
-  // Ride-Hailing (Bike/Car मात्र) — सामान्य सेवा (plumber/electrician) मा
+  // Ride-Hailing (Bike/Car/Auto) — सामान्य सेवा (plumber/electrician) मा
   // एउटै स्थान (काम हुने ठाउँ) भए पुग्छ, तर सवारी सेवामा pickup पछि गन्तव्य
   // (destination) पनि छान्नुपर्छ। यही पुरानै drag-pin मेकानिजम दुई पासमा
   // प्रयोग हुन्छ — पहिलो पास pickup (आजैकै जस्तै व्यवहार), दोस्रो पास
   // destination; अरू सेवाहरूको व्यवहार यसले कहिल्यै छोड्दैन (`_isRide`
-  // सधैँ false रहन्छ तिनका लागि)।
+  // सधैँ false रहन्छ तिनका लागि)। Auto (अटो रिक्सा) लाई पनि Bike/Car सरह
+  // पूरै ride-sharing flow दिन यहीँ थपिएको — यो single source-of-truth
+  // flag बाहेक अरू कतै Bike/Car/Auto सीधै हार्डकोड गरिएको छैन।
   bool get _isRide =>
-      widget.serviceType == 'Bike' || widget.serviceType == 'Car';
+      widget.serviceType == 'Bike' ||
+      widget.serviceType == 'Car' ||
+      widget.serviceType == 'Auto';
   bool _pickingDestination = false;
   double? _pickupLat;
   double? _pickupLng;
@@ -195,24 +197,31 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
   // ठ्याक्कै माथि) — छानेपछि फेरि बटन आकारमा फर्किन्छ।
   bool _bottomSearchOpen = false;
 
-  /// झन्डाको भिजुअल टुप्पो (pole/flag को टुप्पो, GPS-anchor थोप्लो होइन)
-  /// स्क्रिनको तल्लो किनाराबाट कति माथि पर्छ — [_PinAddressCard] लाई
-  /// त्यही बिन्दुको ठ्याक्कै माथि टाँस्न। नक्सा/झन्डा कै उही
-  /// `top: 118, bottom: 260` padding प्रयोग गर्छ (माथि `_buildPickupPinOverlay`
-  /// हेर्नुहोस्)।
+  // Pickup-pin preview (Sahayatri pin) को देखिने उचाइ — `_buildPickupPinOverlay`
+  // (साँचो रेन्डर) र `_pinTipBottomOffset` (त्यही माथि address-card टाँस्ने
+  // गणना) दुवैले यही एउटै स्थिरांक साझा गर्छन्, छुट्टाछुट्टै magic-number
+  // नराखी — नत्र दुवै कहिल्यै sync बाहिर जान सक्थे (पुरानो झन्डाको बेला यस्तै
+  // दुई ठाउँमा दोहोरिएको 60.0 थियो)। पहिले 60 थियो — धेरै सानो देखिने
+  // गुनासो आएपछि ठूलो पारिएको।
+  static const double _pickupPinDisplayHeight = 100.0;
+
+  /// पिनको भिजुअल टुप्पो स्क्रिनको तल्लो किनाराबाट कति माथि पर्छ —
+  /// [_PinAddressCard] लाई त्यही बिन्दुको ठ्याक्कै माथि टाँस्न। नक्सा/पिन
+  /// कै उही `top: 118, bottom: 260` padding प्रयोग गर्छ (माथि
+  /// `_buildPickupPinOverlay` हेर्नुहोस्)।
   double _pinTipBottomOffset(BuildContext context) {
     const topPad = 118.0;
     const bottomPad = 260.0;
-    const displayHeight = 60.0;
-    const scale = displayHeight / FlagPinGeometry.displayH;
-    final tipAboveCenter = FlagPinGeometry.anchor.dy * scale;
+    final tipAboveCenter =
+        SahayatriPinGeometry.anchorFraction.dy * _pickupPinDisplayHeight;
     final h = MediaQuery.of(context).size.height;
     return (h - topPad + bottomPad) / 2 + tipAboveCenter;
   }
 
   void _scheduleReverseGeocode() {
     _addrDebounce?.cancel();
-    _addrDebounce = Timer(const Duration(milliseconds: 400), _reverseGeocodePin);
+    _addrDebounce =
+        Timer(const Duration(milliseconds: 400), _reverseGeocodePin);
   }
 
   Future<void> _reverseGeocodePin() async {
@@ -228,13 +237,17 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
       // पहिल्यै देखेको ठेगाना अचानक खाली नदेखियोस्।
       if (addr.isNotEmpty) _pinAddress = addr;
       _loadingPinAddress = false;
-      // Pin ↔ Input Sync — "Enter your route" कार्ड खुला र "From"/"To"
-      // सक्रिय (search-चालित होइन, नक्सा तानेरै) हुँदा पिन ड्रप भयो भने
-      // पनि त्यही फिल्डको pending मान (input text + "Confirm route" बटनको
-      // enablement दुवैले प्रयोग गर्ने) उत्तिकै ताजा हुनुपर्छ — नत्र search
-      // बाहेक drag ले कहिल्यै "Confirm route" सक्रिय गर्दैनथ्यो, र "To"
-      // बक्सले तानिएको ठाउँ कहिल्यै नदेखाउँथ्यो।
-      if (_isRide && _routeCardOpen) {
+      // Pin ↔ Input Sync — pickup/destination छान्दै गर्दा (`_pickingDestination`),
+      // "From"/"To" मध्ये जुन सक्रिय छ (`_activeRouteField`, search-चालित
+      // होइन, नक्सा तानेरै) त्यही फिल्डको pending मान (input text +
+      // "Confirm route" बटनको enablement दुवैले प्रयोग गर्ने) उत्तिकै ताजा
+      // हुनुपर्छ — चाहे "Enter your route" कार्ड पूरै खुला होस् वा
+      // प्रयोगकर्ताले त्यसको 'X' थिचेर संक्षिप्त/बन्द गरिसकेको होस्
+      // (`_routeCardOpen` मा गणना गर्दा कार्ड बन्द गरेपछि pin drag ले अपडेट
+      // गर्न छोड्ने बग आउँथ्यो — कार्ड लुकेको भए पनि छनोट प्रक्रिया
+      // (`_pickingDestination`) अझै चलिरहेकै हुन्छ, त्यसैले त्यही flag मा
+      // गणना गर्ने)।
+      if (_isRide && _pickingDestination) {
         if (_activeRouteField == 'to') {
           _pendingDestLat = lat;
           _pendingDestLng = lng;
@@ -331,14 +344,25 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
         _routeLoading = false;
       });
 
+  // नजिकका Online driver को आइकन (Bike/Car/Auto) — एकपटक मात्र load।
+  BitmapDescriptor? _driverIcon;
+
   @override
   void initState() {
     super.initState();
+    if (_isRide) {
+      travelModeMarker(
+        travelModeForVehicle(widget.serviceType),
+        iconOverride: widget.serviceType == 'Auto'
+            ? 'assets/images/auto_top.png'
+            : null,
+      ).then((b) {
+        if (mounted) setState(() => _driverIcon = b);
+      });
+    }
     final seedLat = widget.initialLat;
     final seedLng = widget.initialLng;
     if (seedLat != null && seedLng != null) {
-      _originLat = seedLat;
-      _originLng = seedLng;
       _lat = seedLat;
       _lng = seedLng;
     }
@@ -346,14 +370,20 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
     // सुरुमा जुनसुकै भए पनि (seed/fallback/GPS) — कम्तिमा एकपटक ठेगाना
     // अवश्य देखियोस्, GPS सफल भए पछि मात्र होइन।
     _reverseGeocodePin();
-    destinationFlagPinBytes().then((b) {
+    sahayatriPinBytes().then((b) {
       if (mounted) setState(() => _pickupPinBytes = b);
     });
     if (_isRide) {
+      // `_flagMarkerIcon` pickup/destination दुवै marker ले साझा गर्ने,
+      // लेबल-सहितको असली icon अझै load हुँदै गर्दाको छोटो/अस्थायी fallback
+      // मात्र हो (भूमिका-तटस्थ) — त्यसैले पुरानै तटस्थ झन्डा नै राखिएको,
+      // pickup/dropoff-विशिष्ट रङको पिन होइन (नत्र destination मा एक
+      // क्षणभरलाई गलत नीलो पिन देखिने थियो)।
       destinationFlagPin().then((bd) {
         if (mounted) setState(() => _flagMarkerIcon = bd);
       });
-      labeledFlagPin(S.pickupLabel, AppColors.kmTeal).then((r) {
+      labeledFlagPin(S.pickupLabel, AppColors.kmTealBlue, MapPinKind.pickup)
+          .then((r) {
         if (mounted) {
           setState(() {
             _pickupLabeledIcon = r.icon;
@@ -361,7 +391,8 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
           });
         }
       });
-      labeledFlagPin(S.destinationLabel, AppColors.kmOrange).then((r) {
+      labeledFlagPin(S.destinationLabel, AppColors.kmOrange, MapPinKind.dropoff)
+          .then((r) {
         if (mounted) {
           setState(() {
             _destLabeledIcon = r.icon;
@@ -399,8 +430,6 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
       ).timeout(const Duration(seconds: 12));
       if (!mounted) return;
       setState(() {
-        _originLat = p.latitude;
-        _originLng = p.longitude;
         _lat = p.latitude;
         _lng = p.longitude;
         _myGpsLat = p.latitude;
@@ -420,8 +449,6 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
   void _useFallback() {
     if (!mounted || widget.initialLat != null) return;
     setState(() {
-      _originLat = fallbackLat;
-      _originLng = fallbackLng;
       _lat = fallbackLat;
       _lng = fallbackLng;
     });
@@ -452,8 +479,11 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
   Future<void> _recentre() async {
     if (_map == null) return;
     _programmaticCameraMove = true;
+    // Booking/vehicle-selection flow — सहरभरिको सामान्य overview होइन,
+    // pickup को ठ्याक्कै वरपरका सडक/चोक स्पष्ट देखिने गरी सुरुदेखि नै
+    // कडा zoom (पहिले 13.5 थियो, सहरको ठूलो भाग देखिने)।
     await _map!
-        .animateCamera(CameraUpdate.newLatLngZoom(LatLng(_lat, _lng), 13.5));
+        .animateCamera(CameraUpdate.newLatLngZoom(LatLng(_lat, _lng), 17));
     _programmaticCameraMove = false;
     _centeredOnce = true;
   }
@@ -484,7 +514,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
     }
     if (_map == null) return;
     _programmaticCameraMove = true;
-    await _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 15));
+    await _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 17));
     _programmaticCameraMove = false;
     if (mounted) {
       setState(() {
@@ -531,30 +561,6 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
       _routeCardOpen = true;
       _activeRouteField = field;
     });
-  }
-
-  /// कार्डभित्रको "Confirm"/"Done" बटन — pickup + pending destination दुवै
-  /// भइसकेपछि मात्र देखिने, अनि यहीँबाट साँचो route टक्राउने।
-  Future<void> _confirmPendingRoute() async {
-    if (_pickupLat == null || _pendingDestLat == null) return;
-    // Pickup र Destination कहिल्यै एउटै बिन्दु हुन नहुने।
-    final gapKm = haversineKm(
-        _pickupLat!, _pickupLng!, _pendingDestLat!, _pendingDestLng!);
-    if (gapKm < 0.05) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(S.destinationTooCloseError)),
-      );
-      return;
-    }
-    await _finalizeRoute(
-      pLat: _pickupLat!,
-      pLng: _pickupLng!,
-      pAddr: _pickupAddress,
-      dLat: _pendingDestLat!,
-      dLng: _pendingDestLng!,
-      dAddr: _pendingDestAddress,
-    );
-    if (mounted) setState(() => _routeCardOpen = false);
   }
 
   /// "Enter your route" कार्डभित्रको खुम्चिएको (inactive) From/To पंक्ति —
@@ -631,19 +637,20 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
     });
     if (_map != null) {
       _programmaticCameraMove = true;
-      final south = pLat < dLat ? pLat : dLat;
-      final west = pLng < dLng ? pLng : dLng;
-      final north = pLat > dLat ? pLat : dLat;
-      final east = pLng > dLng ? pLng : dLng;
-      await _map!.animateCamera(CameraUpdate.newLatLngBounds(
-        LatLngBounds(
-            southwest: LatLng(south, west), northeast: LatLng(north, east)),
-        72,
+      // पहिले यहाँ pickup+destination दुवै एकैचोटि देखिने गरी
+      // `newLatLngBounds` ले fit गर्थ्यो — दुई बिन्दु टाढा-टाढा भएमा
+      // त्यसले zoom धेरै बाहिर तान्थ्यो, ठ्याक्कै वाहन/राइड छान्ने-पुष्टि
+      // गर्ने बेला (यही तल्लो panel देखिनेबित्तिकै) नक्सा जुम आउट भएको
+      // देखिने गुनासोको जड। अब गन्तव्य जतिसुकै टाढा भए पनि — pickup
+      // बिन्दुमै कडा zoom (17) मा स्थिर रहन्छ, "vehicle selection" देखि
+      // "confirm" सम्म कहिल्यै जुम आउट नहोस् भनेर।
+      await _map!.animateCamera(CameraUpdate.newLatLngZoom(
+        LatLng(pLat, pLng),
+        17,
       ));
       _programmaticCameraMove = false;
     }
-    final route =
-        await fetchRoadRoute(LatLng(pLat, pLng), LatLng(dLat, dLng));
+    final route = await fetchRoadRoute(LatLng(pLat, pLng), LatLng(dLat, dLng));
     if (!mounted) return;
     setState(() {
       _rideRoute = route;
@@ -651,10 +658,19 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
     });
   }
 
-  /// "Confirm destination" थिच्दा (drag-pin बाटो) — हालको pin गन्तव्यको
-  /// रूपमा — `_finalizeRoute` कै साझा tail।
+  /// "Confirm destination" थिच्दा — single source of truth: "Enter your
+  /// route" कार्डबाट खोजेर छानिएको pending destination (`_pendingDestLat`)
+  /// भए त्यही प्रयोग हुन्छ, नत्र हालको drag-pin स्थान (`_lat`/`_lng`)।
+  /// पहिले यी दुई बाटो (कार्डभित्रको छुट्टै "Confirm route" बटन र यो तल्लो
+  /// बटन) फरक-फरक थिए — एकैचोटि दुवै देखिँदा कुन ले कुन गन्तव्य टक्राउँछ
+  /// भन्ने अस्पष्ट हुन्थ्यो। अब यही एउटै बटनले दुवै इनपुट-बाटो (search वा
+  /// drag) बाट आएको गन्तव्य समान रूपमा handle गर्छ — `_finalizeRoute` कै
+  /// साझा tail।
   Future<void> _confirmDestination() async {
-    final dLat = _lat, dLng = _lng;
+    final usingSearchedDest = _pendingDestLat != null;
+    final dLat = usingSearchedDest ? _pendingDestLat! : _lat;
+    final dLng = usingSearchedDest ? _pendingDestLng! : _lng;
+    final dAddr = usingSearchedDest ? _pendingDestAddress : _pinAddress;
     // Pickup र Destination कहिल्यै एउटै बिन्दु हुन नहुने (गन्तव्य खोज्दा
     // नतिजा नभेटिए वा नक्सा नै नचलाई सिधै confirm थिचे, दुवै चुपचाप उही
     // ठाउँमा अड्किरहन्थ्यो — त्यसले route/भाडा अर्थहीन बनाउँथ्यो)।
@@ -671,8 +687,9 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
       pAddr: _pickupAddress,
       dLat: dLat,
       dLng: dLng,
-      dAddr: _pinAddress,
+      dAddr: dAddr,
     );
+    if (mounted) setState(() => _routeCardOpen = false);
   }
 
   /// InDrive-शैली — माथिको "From" बक्समा सिधै खोजेर pickup छान्दा। गन्तव्य
@@ -717,7 +734,8 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
     });
     if (_map != null) {
       _programmaticCameraMove = true;
-      await _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 16));
+      await _map!
+          .animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 17));
       _programmaticCameraMove = false;
     }
   }
@@ -726,7 +744,8 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
   /// `_pinAddress` अपडेट गर्ने (Confirm destination बटन अझै थिच्नुपर्छ,
   /// यसले pin मात्र त्यहाँ सार्छ)। Ride-Hailing बाहेक (सामान्य सेवाको
   /// "Where & for how much?" search) अझै यही प्रयोग हुन्छ।
-  Future<void> _pickSearchedDestination(String label, double lat, double lng) async {
+  Future<void> _pickSearchedDestination(
+      String label, double lat, double lng) async {
     // पहिले (drag बाट) उठिरहेको/settle हुँदै गरेको पिन भए पनि सफा 0 मा
     // ल्याइदिने — नत्र `onCameraIdle` ले "प्रयोगकर्ताले आफैं pan गर्‍यो"
     // भन्ने ठान्दै यो प्रोग्रामेटिक (search-चालित) move पछि पनि फेरि
@@ -748,7 +767,8 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
       // दोहोरो call) दुवै एकपछि अर्को गरिँदा भिजुअल हल्का "twitch"/jerk
       // जस्तो देखिन सक्थ्यो। एउटै smooth animation ले नै ठ्याक्कै खोजिएकै
       // बिन्दुमा पुर्‍याउँछ।
-      await _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 16));
+      await _map!
+          .animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 17));
       _programmaticCameraMove = false;
     }
   }
@@ -790,7 +810,10 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
     for (final d in docs) {
       final data = d.data();
       if (data['isOnline'] == false) continue; // offline लाई हटाउने
-      final wp = workerPos(data, d.id, _originLat, _originLng);
+      // नक्कली (id-hash बाट बनेको) स्थान होइन — असली र ताजा (५ मिनेटभित्र)
+      // मात्र; नत्र यो driver "नजिकै" गनिँदैन (`realWorkerPos`)।
+      final wp = realWorkerPos(data);
+      if (wp == null) continue;
       final km = haversineKm(_lat, _lng, wp.lat, wp.lng);
       if (km > _radiusKm) continue;
       rows.add((id: d.id, data: data, km: km, pos: LatLng(wp.lat, wp.lng)));
@@ -859,6 +882,21 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
         zIndexInt: 91,
       ));
     }
+    // नजिकका Online driver — असली र ताजा (५ मिनेटभित्र) स्थानमा मात्र
+    // (`_nearbyOnline` ले नक्कली/पुरानो पहिल्यै हटाइसकेको)। सबैभन्दा नजिकका
+    // २० वटासम्म, नक्सा भारी नहोस् भनेर।
+    final icon = _driverIcon;
+    if (icon != null) {
+      for (final r in rows.take(20)) {
+        markers.add(Marker(
+          markerId: MarkerId('drv_${r.id}'),
+          position: r.pos,
+          icon: icon,
+          anchor: const Offset(0.5, 0.5),
+          zIndexInt: 50,
+        ));
+      }
+    }
     return markers;
   }
 
@@ -880,12 +918,13 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
   // बीचमा पर्ने गरी `Transform.translate` ले सार्छ — नत्र थोप्लो (साँचो
   // "यहीं हो" बिन्दु) केन्द्रबाट पुगेर देखिन्थ्यो।
   Widget _buildPickupPinOverlay() {
-    const displayHeight = 60.0;
-    const scale = displayHeight / FlagPinGeometry.displayH;
-    const renderedWidth = FlagPinGeometry.displayW * scale;
+    const displayHeight = _pickupPinDisplayHeight;
+    const renderedWidth = displayHeight *
+        SahayatriPinGeometry.naturalW /
+        SahayatriPinGeometry.naturalH;
     final anchorPx = Offset(
-      FlagPinGeometry.anchor.dx * scale,
-      FlagPinGeometry.anchor.dy * scale,
+      SahayatriPinGeometry.anchorFraction.dx * renderedWidth,
+      SahayatriPinGeometry.anchorFraction.dy * displayHeight,
     );
     final offset = Offset(
       renderedWidth / 2 - anchorPx.dx,
@@ -942,27 +981,112 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
     );
     if (mounted) setState(() => _postSheetOpen = false);
     if (result == null || !mounted) return;
-    await _submitJob(result, nearby);
+    _submitJob(result, nearby);
   }
 
-  Future<void> _submitJob(
+  /// Optimistic Navigation — पहिले यहाँ पूरै Firestore लेखाइ + notification
+  /// fan-out सकिएपछि मात्र `Navigator.push` हुन्थ्यो (बीचको notification loop
+  /// `unawaited` पारिसकेपछि पनि, मुख्य लेखाइ आफैं नेटवर्क कमजोर भएमा ~86s
+  /// सम्म यात्रीलाई यही fare-sheet मा नै "अडिएको" देखाउँथ्यो)। अब tap
+  /// भएकै क्षण (कुनै await भन्दा पहिल्यै) RequestTrackingScreen मा पुग्छ,
+  /// वास्तविक लेखाइ (`_dispatchRideRequest`) त्यो स्क्रिनलाई `pendingDispatch`
+  /// Future को रूपमा दिएर background मा चल्छ — doc अझै नभए पनि त्यो स्क्रिनले
+  /// seed data बाट सिधै "खोज्दै…" UI देखाउँछ (हेर्नुहोस्
+  /// request_tracking_screen.dart::RequestTrackingScreen class-doc), र
+  /// लेखाइ असफल भए मात्र (raw होइन) स्पष्ट त्रुटि UI।
+  void _submitJob(
       _PostedJob job,
       List<({String id, Map<String, dynamic> data, double km, LatLng pos})>
-          nearby) async {
+          nearby) {
     if (_sending) return;
     setState(() => _sending = true);
+
+    final ref = FirebaseFirestore.instance.collection('serviceRequests').doc();
+    final dispatch = _dispatchRideRequest(ref: ref, job: job, nearby: nearby);
+
+    if (mounted) setState(() => _sending = false);
+    if (!mounted) return;
+
+    final seedCenter = LatLng(job.lat, job.lng);
+    // Ride-Hailing (Bike/Car/Auto) मात्र — `pushReplacement` ले यो स्क्रिन
+    // (pickup/destination setup) stack बाटै हटाइदिन्थ्यो, त्यसैले bidding/
+    // searching स्क्रिनबाट पछाडि थिच्दा सिधै Home मा पुगिन्थ्यो (destination
+    // फेरि छान्ने/भाडा सच्याउने ठाउँ नै हराउँथ्यो)। यहाँ भने साधारण `push`
+    // — stack मा यही स्क्रिन कायमै रहन्छ, back ले फेरि यहीं फर्काउँछ।
+    // अरू सेवा (plumber/electrician) को व्यवहार यथावत।
+    if (_isRide) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => RequestTrackingScreen(
+            requestId: ref.id,
+            pendingDispatch: dispatch,
+            seedService: widget.serviceType,
+            seedPickup: seedCenter,
+            seedIsRide: true,
+          ),
+        ),
+      );
+    } else {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => RequestTrackingScreen(
+            requestId: ref.id,
+            pendingDispatch: dispatch,
+            seedService: widget.serviceType,
+            seedPickup: seedCenter,
+            seedIsRide: false,
+          ),
+        ),
+      );
+    }
+  }
+
+  /// वास्तविक Firestore लेखाइ + notification fan-out — अब `_submitJob` ले
+  /// यो Future लाई await नगरी सिधै `RequestTrackingScreen.pendingDispatch`
+  /// मा पठाउँछ (माथि हेर्नुहोस्)। असफल भए यहाँबाटै `rethrow` हुन्छ —
+  /// caller स्क्रिन (अब RequestTrackingScreen) ले आफैं उचित UI देखाउँछ,
+  /// यहाँ कुनै context/SnackBar चाहिँदैन (tap हुनेबित्तिकै यो screen
+  /// पहिल्यै पछाडि परिसकेको हुन सक्छ)।
+  Future<void> _dispatchRideRequest({
+    required DocumentReference<Map<String, dynamic>> ref,
+    required _PostedJob job,
+    required List<({String id, Map<String, dynamic> data, double km, LatLng pos})>
+        nearby,
+  }) async {
     try {
       final user = FirebaseAuth.instance.currentUser;
-      String employerName = user?.displayName ?? user?.email ?? 'Customer';
+      // CUSTOMER-NAME-EMPTY FIX — `??` मात्र null लाई समात्छ, खाली string
+      // (phone-auth-only प्रयोगकर्ताको `user.displayName` प्रायः `null`
+      // भए पनि कहिलेकाहीं `''` हुन सक्छ) लाई होइन — त्यही बेला card मा
+      // ग्राहकको नाम पूर्ण रूपमा खाली देखिने गुनासोको जड। अब स्पष्ट
+      // trim().isNotEmpty जाँचेर मात्र प्रयोग गर्ने।
+      String employerName = 'Customer';
+      if ((user?.displayName ?? '').trim().isNotEmpty) {
+        employerName = user!.displayName!.trim();
+      } else if ((user?.email ?? '').trim().isNotEmpty) {
+        employerName = user!.email!.trim();
+      }
       // users/{uid}.phone बाट — Auth कै user.phoneNumber होइन, त्यो इमेलबाट
       // दर्ता भएकाको हकमा सधैँ खाली हुन्छ (Call बटनले फोन नम्बर नभेट्ने
       // गुनासोको मूल कारण यही थियो)।
       String employerPhone = user?.phoneNumber ?? '';
       try {
+        // Unbounded-Await Fix — यो profile lookup (Auth कै displayName/
+        // phoneNumber भन्दा ताजा नाम/फोन चाहिएर मात्र हो, सफल नभए पनि
+        // माथिकै fallback प्रयोग हुन्छ) मा पहिले कुनै `.timeout()` नै
+        // थिएन — नेटवर्क साँच्चै अड्किए यो एउटै `await` ले पूरै dispatch
+        // (अब RequestTrackingScreen कै `pendingDispatch`) लाई अनन्तकालसम्म
+        // रोक्थ्यो, न त doc बन्थ्यो न त कुनै त्रुटि देखिन्थ्यो — यात्री
+        // सधैंभरि "खोज्दै…" मै अडिरहने गुनासोको साँचो जड। अब बढीमा 8s
+        // मात्र पर्खिने, त्यसपछि चुपचाप (तल्लो catch ले) Auth कै fallback
+        // नाम/फोन प्रयोग गरेर अगाडि बढ्ने।
         final u = await FirebaseFirestore.instance
             .collection('users')
             .doc(user?.uid)
-            .get();
+            .get()
+            .timeout(const Duration(seconds: 8));
         final n = (u.data()?['name'] ?? '').toString().trim();
         if (n.isNotEmpty) employerName = n;
         final p = (u.data()?['phone'] ?? '').toString().trim();
@@ -970,90 +1094,115 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
       } catch (_) {}
 
       final db = FirebaseFirestore.instance;
-      // नेटवर्क साँच्चै खराब भएमा पनि प्रयोगकर्ता अनिश्चित कालसम्म spinner
-      // हेरेर नअड्कियोस् — बरु छिट्टै स्पष्ट त्रुटि (तलको outer catch) देखेर
-      // फेरि प्रयास गर्न सकून्।
-      final ref = await db.collection('serviceRequests').add({
-        'service': widget.serviceType,
-        'broadcast': true,
-        'employerUid': user?.uid ?? '',
-        'employerName': employerName,
-        'employerPhone': employerPhone,
-        'workerUid': '',
-        'workerName': '',
-        'status': 'broadcasting',
-        'rejectedBy': <String>[],
-        // fixed service address (जहाँ काम हुन्छ) — movement tracking होइन
-        'employerLat': job.lat,
-        'employerLng': job.lng,
-        'address': job.address,
-        // job details
-        'title': job.title,
-        'details': job.description,
-        'preferredDate': Timestamp.fromDate(job.date),
-        'timeSlot': job.slot,
-        'proposedPrice': job.budget,
-        // Ride-Hailing (Bike/Car) मात्र — गन्तव्य, driver ले कहाँ पुर्‍याउने
-        // हो थाहा पाओस् (job_feed_screen.dart/job_route_screen.dart ले पढ्छन्)।
-        if (job.destLat != null && job.destLng != null) ...{
-          'isRide': true,
-          'destinationLat': job.destLat,
-          'destinationLng': job.destLng,
-          'destinationAddress': job.destAddress ?? '',
-          'autoOffer': job.autoOffer,
-        },
-        'nearbyCount': nearby.length,
-        'createdAt': FieldValue.serverTimestamp(),
-      }).timeout(const Duration(seconds: 20));
-
-      // ── real-time radar alert: नजिकका online matching worker लाई notification ──
-      final label = job.title.isNotEmpty ? job.title : job.description;
-      for (final r in nearby) {
-        final wuid = (r.data['uid'] ?? '').toString();
-        if (wuid.isEmpty) continue;
-        try {
-          await db.collection('notifications').add({
-            'uid': wuid,
-            'title': S.newJobNotifTitle,
-            'body':
-                '${S.serviceName(widget.serviceType)} · $label · Rs. ${job.budget}',
-            'requestId': ref.id,
-            'read': false,
+      // Request Dispatch Reliability — पहिले यहाँ `.add()` (auto-ID, लेखेपछि
+      // मात्र ref फर्काउने) लाई एकपटक मात्र `.timeout(20s)` सहित कल गरिन्थ्यो
+      // — नेटवर्क क्षणिक रूपमा अवरोध भए (timeout/unavailable) त्यो एउटै
+      // प्रयास असफल भएपछि प्रयोगकर्ताले फेरि पूरै सुरुदेखि (sheet फेरि
+      // खोलेर) नयाँ प्रयास गर्नुपर्थ्यो। अब caller (`_submitJob`) ले
+      // पहिले नै एउटा स्थिर doc ID (`.doc()`, कुनै लेखाइ अझै हुँदैन)
+      // दिएको — त्यही एउटै doc मा `.set()` (add होइन) गरिन्छ, यसैले मात्र
+      // धेरैपटक सुरक्षित रूपमा दोहोर्‍याउन (retry) मिल्छ: पहिलो प्रयासको
+      // लेखाइ साँच्चै सर्भरमा पुगिसकेको तर acknowledgment मात्र client
+      // सम्म नपुगेको (timeout) अवस्थामा पनि दोहोरिँदा त्यही उस्तै doc
+      // फेरि लेखिन्छ, नयाँ (duplicate) ride अनुरोध कहिल्यै बन्दैन।
+      await setDocWithRetry(
+          ref,
+          // False-Timeout Bug (Find Offer / ride dispatch) — 12s प्रति-प्रयास
+          // सीमा कमजोर/ग्रामीण मोबाइल नेटवर्कमा साँच्चै पुग्दैनथ्यो: पहिलो
+          // Firestore round-trip (cold connection) प्रायः 15-20s सम्मै
+          // लिन्थ्यो, तर लेखाइ आफैं साँच्चै सफल हुने बाटोमै हुँदाहुँदै 12s मै
+          // "TimeoutException" भई — पहिलो प्रयास नै गलत रूपमा "transient
+          // failure" ठहरिई retry हुन्थ्यो, र नेटवर्क साँच्चै राम्रो भए पनि
+          // (केवल ढिलो) प्रयोगकर्ताले झूटो "Network looks slow" त्रुटि
+          // देख्थे। अब 28s (माग गरिएको 25-30s दायराभित्र) — साधारण ढिलो तर
+          // चलेकै कनेक्सनले पहिलो प्रयासमै सफल हुन पुग्छ, कुनै गुम्खान्की/
+          // false-positive बिना। साँच्चै अफलाइन/टुटेको कनेक्सनमा मात्र
+          // `retryTransient` (डिफल्ट maxAttempts=3) ले background मै silently
+          // दोहोर्‍याउँछ — `_Searching` UI ("Finding nearby drivers…") यही
+          // बेलासम्म अपरिवर्तित देखिइरहन्छ, सबै प्रयास साँच्चै असफल भएपछि
+          // मात्र स्पष्ट त्रुटि UI (हेर्नुहोस् request_tracking_screen.dart)।
+          timeout: const Duration(seconds: 28),
+          onAttemptFailed: (attempt, maxAttempts, e, transient) => debugPrint(
+              '[RideRequest] dispatch attempt $attempt/$maxAttempts failed '
+              '(transient=$transient): $e'),
+          {
+            'service': widget.serviceType,
+            'broadcast': true,
+            'employerUid': user?.uid ?? '',
+            'employerName': employerName,
+            'employerPhone': employerPhone,
+            'workerUid': '',
+            'workerName': '',
+            'status': 'broadcasting',
+            'rejectedBy': <String>[],
+            // fixed service address (जहाँ काम हुन्छ) — movement tracking होइन
+            'employerLat': job.lat,
+            'employerLng': job.lng,
+            'address': job.address,
+            // job details
+            'title': job.title,
+            'details': job.description,
+            'preferredDate': Timestamp.fromDate(job.date),
+            'timeSlot': job.slot,
+            'proposedPrice': job.budget,
+            // Ride-Hailing (Bike/Car) मात्र — गन्तव्य, driver ले कहाँ पुर्‍याउने
+            // हो थाहा पाओस् (job_feed_screen.dart/job_route_screen.dart ले पढ्छन्)।
+            if (job.destLat != null && job.destLng != null) ...{
+              'isRide': true,
+              'destinationLat': job.destLat,
+              'destinationLng': job.destLng,
+              'destinationAddress': job.destAddress ?? '',
+              'autoOffer': job.autoOffer,
+            },
+            'nearbyCount': nearby.length,
             'createdAt': FieldValue.serverTimestamp(),
           });
-        } catch (_) {}
-      }
 
-      if (!mounted) return;
-      setState(() => _sending = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(S.requestSent)));
-      // Ride-Hailing (Bike/Car) मात्र — `pushReplacement` ले यो स्क्रिन
-      // (pickup/destination setup) stack बाटै हटाइदिन्थ्यो, त्यसैले bidding/
-      // searching स्क्रिनबाट पछाडि थिच्दा सिधै Home मा पुगिन्थ्यो (destination
-      // फेरि छान्ने/भाडा सच्याउने ठाउँ नै हराउँथ्यो)। यहाँ भने साधारण `push`
-      // — stack मा यही स्क्रिन कायमै रहन्छ, back ले फेरि यहीं फर्काउँछ।
-      // अरू सेवा (plumber/electrician) को व्यवहार यथावत।
-      if (_isRide) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => RequestTrackingScreen(requestId: ref.id),
-          ),
-        );
-      } else {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => RequestTrackingScreen(requestId: ref.id),
-          ),
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _sending = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('${S.errorWord}: $e')));
+      // ── real-time radar alert: नजिकका online matching worker लाई notification ──
+      // नोट: job_feed_screen.dart कै dashboard overlay/card ले हरेक worker
+      // कै आफ्नै `workerCancelCount` अनुसार (Worker Cancellation Penalty —
+      // `shouldShowJobToWorker`) केही नयाँ job कहिलेकाहीं नदेखाउन सक्छ। यो
+      // notification loop पहिले त्यही जाँच बिना नै सबैलाई पठाउँथ्यो —
+      // नतिजा: card कहिल्यै नदेखिने worker ले पनि notification भने पाउँथ्यो
+      // ("notification आउँछ तर dashboard कार्ड कहिल्यै देखिँदैन" गुनासोको
+      // साँचो जड)। अब card जहाँ नदेखिने उतै notification पनि नपठाइयोस्
+      // भनेर उही जाँच यहाँ पनि लागू। यो `pendingDispatch` Future
+      // (RequestTrackingScreen ले हेरिरहेको) सफल भएको गन्छ भन्दा पहिल्यै
+      // नै notification दोहोरिनुपर्दैन, त्यसैले यहाँ पनि `unawaited` —
+      // मुख्य doc लेखिनेबित्तिकै (driver feed ले live listen गरिरहेकै)
+      // RequestTrackingScreen ले seed-data बाट वास्तविक stream मा सर्छ,
+      // notification पठाउन अझै बाँकी भए पनि।
+      unawaited(() async {
+        final label = job.title.isNotEmpty ? job.title : job.description;
+        for (final r in nearby) {
+          final wuid = (r.data['uid'] ?? '').toString();
+          if (wuid.isEmpty) continue;
+          try {
+            final userSnap = await db.collection('users').doc(wuid).get();
+            final cancelCount =
+                (userSnap.data()?['workerCancelCount'] as num?)?.toInt() ?? 0;
+            if (!shouldShowJobToWorker(ref.id, cancelCount)) continue;
+            await db.collection('notifications').add({
+              'uid': wuid,
+              'title': S.newJobNotifTitle,
+              'body':
+                  '${S.serviceName(widget.serviceType)} · $label · Rs. ${job.budget}',
+              'requestId': ref.id,
+              'read': false,
+              'createdAt': FieldValue.serverTimestamp(),
+            });
+          } catch (_) {}
+        }
+      }());
+    } catch (e, stack) {
+      // Error Logging — पहिले यहाँ असफल भएको कुरा केवल SnackBar (प्रयोगकर्ता
+      // ले देख्ने, तर टर्मिनल/लगमा कुनै ट्रेस नरहने) मात्र थियो। Production
+      // मा crash-reporting/log पाइपलाइनले समेत थाहा नपाउने गरी चुपचाप हराउने
+      // असफलता — अब `debugPrint` ले सधैँ टर्मिनलमा स्पष्ट देखिन्छ। User-facing
+      // त्रुटि अब यहाँ होइन, RequestTrackingScreen (caller) ले नै
+      // `pendingDispatch` को यही rethrow भएको error हेरेर देखाउँछ।
+      debugPrint('[RideRequest] dispatch failed: $e\n$stack');
+      rethrow;
     }
   }
 
@@ -1071,76 +1220,96 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
         _rideBackStep();
       },
       child: Scaffold(
-      // किबोर्ड खुल्दा तल्लो panel/content हरूले माथिको महत्वपूर्ण
-      // कन्टेन्ट (search bar/route card) नछोपोस् भनेर — Flutter को default
-      // नै true हो, तर यहाँ स्पष्ट राखिएको ताकि भविष्यमा कसैले नियतवश/
-      // अनजानमा false नराखोस्।
-      resizeToAvoidBottomInset: true,
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        foregroundColor: AppColors.kmText,
-        elevation: 0,
-        flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(gradient: AppColors.kmCtaGradient),
+        // किबोर्ड खुल्दा तल्लो panel/content हरूले माथिको महत्वपूर्ण
+        // कन्टेन्ट (search bar/route card) नछोपोस् भनेर — Flutter को default
+        // नै true हो, तर यहाँ स्पष्ट राखिएको ताकि भविष्यमा कसैले नियतवश/
+        // अनजानमा false नराखोस्।
+        resizeToAvoidBottomInset: true,
+        extendBodyBehindAppBar: true,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          foregroundColor: AppColors.kmText,
+          elevation: 0,
+          flexibleSpace: const DecoratedBox(
+            decoration: BoxDecoration(gradient: AppColors.kmCtaGradient),
+          ),
+          title: Text(
+            '${S.serviceName(widget.serviceType)} — ${S.nearbyTitle}',
+            style: const TextStyle(
+                color: AppColors.kmText,
+                fontWeight: FontWeight.w800,
+                fontSize: 16),
+          ),
         ),
-        title: Text(
-          '${S.serviceName(widget.serviceType)} — ${S.nearbyTitle}',
-          style: const TextStyle(
-              color: AppColors.kmText, fontWeight: FontWeight.w800, fontSize: 16),
+        // "Home"/मेरो-स्थान बटन — अब pin drag गरेर टाढा पुगे पनि साँचो हालको
+        // GPS स्थानमा फर्काउँछ (पहिले जस्तो स्थिर `_lat`/`_lng` मा मात्र
+        // होइन — त्यो त अब म्यानुअली छानिएको बिन्दु नै हो)।
+        floatingActionButton: FloatingActionButton.small(
+          onPressed: _recenterToMyLocation,
+          child: const Icon(Icons.my_location_rounded),
         ),
-      ),
-      // "Home"/मेरो-स्थान बटन — अब pin drag गरेर टाढा पुगे पनि साँचो हालको
-      // GPS स्थानमा फर्काउँछ (पहिले जस्तो स्थिर `_lat`/`_lng` मा मात्र
-      // होइन — त्यो त अब म्यानुअली छानिएको बिन्दु नै हो)।
-      floatingActionButton: FloatingActionButton.small(
-        onPressed: _recenterToMyLocation,
-        child: const Icon(Icons.my_location_rounded),
-      ),
-      // नक्सा/worker list सधैँ तुरुन्तै देखिन्छ (seed भएको वा fallback
-      // स्थानबाट) — GPS पर्खेर पूरै पेज खाली spinner देखाइने अघिको ढाँचा
-      // हटाइयो; ताजा GPS आएपछि _initLocation() ले चुपचाप स्थान/camera सच्याउँछ।
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('registeredWorkers')
-            .where('service', isEqualTo: widget.serviceType)
-            .snapshots(),
-        builder: (context, snap) {
-          final rows = _nearbyOnline(snap.data?.docs ?? []);
-          final nearestKm = rows.isEmpty ? null : rows.first.km;
-          // Ride-Hailing — भाडा अनुमान pickup→destination दूरीबाट (यात्रा
-          // साँच्चै जति टाढा जाने हो त्यसैबाट), अरू सेवाहरूमा जस्तो
-          // नजिकैको worker-सम्मको दूरीबाट होइन।
-          final rideKm = _rideRoute?.km ??
-              (_pickupLat != null && _destLat != null
-                  ? haversineKm(_pickupLat!, _pickupLng!, _destLat!, _destLng!)
-                  : null);
-          final estFare = estimateFare(
-              widget.serviceType, (_isRide ? rideKm : null) ?? nearestKm ?? 2.0);
-          _offer ??= estFare;
+        // नक्सा/worker list सधैँ तुरुन्तै देखिन्छ (seed भएको वा fallback
+        // स्थानबाट) — GPS पर्खेर पूरै पेज खाली spinner देखाइने अघिको ढाँचा
+        // हटाइयो; ताजा GPS आएपछि _initLocation() ले चुपचाप स्थान/camera सच्याउँछ।
+        body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('registeredWorkers')
+              .where('service', isEqualTo: widget.serviceType)
+              .limit(300)
+              .snapshots(),
+          builder: (context, snap) {
+            final rows = _nearbyOnline(snap.data?.docs ?? []);
+            final nearestKm = rows.isEmpty ? null : rows.first.km;
+            // Ride-Hailing — भाडा अनुमान pickup→destination दूरीबाट (यात्रा
+            // साँच्चै जति टाढा जाने हो त्यसैबाट), अरू सेवाहरूमा जस्तो
+            // नजिकैको worker-सम्मको दूरीबाट होइन।
+            final rideKm = _rideRoute?.km ??
+                (_pickupLat != null && _destLat != null
+                    ? haversineKm(
+                        _pickupLat!, _pickupLng!, _destLat!, _destLng!)
+                    : null);
+            final estFare = estimateFare(widget.serviceType,
+                (_isRide ? rideKm : null) ?? nearestKm ?? 2.0,
+                // साँचो OSRM/Directions यात्रा-समय (route confirm भइसकेपछि
+                // मात्र उपलब्ध) — भाडामा per-minute दर पनि जोड्न।
+                minutes: _isRide ? _rideRoute?.minutes : null);
+            _offer ??= estFare;
 
-          // प्यानल drag/spring जुनसुकै बेला (`_panelCtrl` कै हरेक tick मा)
-          // तल्लो प्यानल आफैं र माथिको `_RideSummaryCard`/`_ProviderCard`/
-          // "Where & for how much?" बार — तीनैवटा — एउटै frame मा, एउटै
-          // स्रोतबाट फेरि rebuild होऊन् भनेर। यसैले "प्यानल तान्दा माथिको
-          // ठेगाना बक्स एक फ्रेम ढिलो गएर ओभरल्याप हुने" समस्या जरैदेखि
-          // हट्छ — दुवैको स्थिति गणना गर्ने सूत्र (तल हेर्नुहोस्) कहिल्यै
-          // फरक-फरक frame मा मूल्याङ्कन हुँदैन।
-          return AnimatedBuilder(
-            animation: _panelCtrl,
-            builder: (context, _) => Stack(
-            children: [
-              GoogleMap(
+            // प्यानल drag/spring जुनसुकै बेला (`_panelCtrl` कै हरेक tick मा)
+            // तल्लो प्यानल आफैं र माथिको `_RideSummaryCard`/`_ProviderCard`/
+            // "Where & for how much?" बार — तीनैवटा — एउटै frame मा, एउटै
+            // स्रोतबाट फेरि rebuild होऊन् भनेर। यसैले "प्यानल तान्दा माथिको
+            // ठेगाना बक्स एक फ्रेम ढिलो गएर ओभरल्याप हुने" समस्या जरैदेखि
+            // हट्छ — दुवैको स्थिति गणना गर्ने सूत्र (तल हेर्नुहोस्) कहिल्यै
+            // फरक-फरक frame मा मूल्याङ्कन हुँदैन।
+            return AnimatedBuilder(
+              animation: _panelCtrl,
+              // GoogleMap आफैं कुनै `_panelCtrl.value` मा निर्भर छैन (यसको
+              // कुनै पनि param ले `_panelCtrl` पढ्दैन) — त्यसैले `child:`
+              // मार्फत एकपटक मात्र बनाइन्छ, प्यानल तान्दा/spring चल्दा
+              // (हरेक tick, सेकेन्डको दर्जनौँ पटक) markers/polylines Set
+              // सहित पूरै नक्सा पुनः-निर्माण हुनु पर्दैन — counter_offer_
+              // card.dart मा भेटिएकै उस्तै "AnimatedBuilder ले महँगो subtree
+              // दोहोर्‍याउने" performance bug। माथिको "एउटै frame मा sync"
+              // आवश्यकता (ठेगाना बक्स/प्यानल कहिल्यै एक-फ्रेम ढिलो नहोस्)
+              // यथावत् रहन्छ — यो `child` पनि parent (StreamBuilder) रिबिल्ड
+              // हुँदा (ticks भन्दा बाहिर) सँगै नै फेरि बन्छ, अरू Positioned
+              // card हरूसँग कहिल्यै desync हुँदैन।
+              child: GoogleMap(
+                // `_recentre()` (onMapCreated) ले पनि उही zoom मै एनिमेट
+                // गर्ने भएकोले यहाँ पहिलो फ्रेमदेखि नै (animation-पूर्व
+                // छिनभरको जम्प नदेखियोस् भनेर) सुरुदेखि नै एउटै मान।
                 initialCameraPosition: CameraPosition(
                   target: LatLng(_lat, _lng),
-                  zoom: 13.5,
+                  zoom: 17,
                 ),
                 // Uber/inDrive-style सफा नक्सा — Google का आफ्नै default
                 // POI/business marker (नामको सेतो लेबल + रातो थोप्लो, जुन
-                // हाम्रो कुनै widget होइन) लुकाउने। home_screen.dart/
-                // route_map_view.dart मा पहिल्यै प्रयोग हुने उही साझा style
-                // — यहाँ छुटेको रहेछ।
-                style: kCleanMapStyle,
+                // हाम्रो कुनै widget होइन) लुकाउने। Cloud Console Map ID
+                // (home_screen.dart/route_map_view.dart कै उही साझा
+                // kCloudMapId) प्रयोग गर्दा local JSON `style:` लाई native
+                // SDK ले बेवास्ता गर्छ, त्यसैले यहाँ नराखिएको।
+                mapId: kCloudMapId,
                 onMapCreated: (c) {
                   _map = c;
                   if (!_centeredOnce) _recentre();
@@ -1166,7 +1335,8 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                 // चलाएको (`_programmaticCameraMove`) क्षणमा भने कहिल्यै
                 // नबजोस्।
                 onCameraMoveStarted: () {
-                  final locked = _isRide && _destLat != null && !_pickingDestination;
+                  final locked =
+                      _isRide && _destLat != null && !_pickingDestination;
                   if (!_programmaticCameraMove && !locked) {
                     HapticFeedback.selectionClick();
                     _pinLiftCtrl.forward();
@@ -1239,608 +1409,706 @@ class _ServiceMapScreenState extends State<ServiceMapScreen>
                   if (_pinLiftCtrl.value > 0) {
                     _pinLiftCtrl
                         .animateWith(SpringSimulation(
-                          const SpringDescription(
-                              mass: 1, stiffness: 500, damping: 14),
-                          _pinLiftCtrl.value,
-                          0,
-                          0,
-                        ))
+                      const SpringDescription(
+                          mass: 1, stiffness: 500, damping: 14),
+                      _pinLiftCtrl.value,
+                      0,
+                      0,
+                    ))
                         .whenComplete(() {
                       if (mounted) HapticFeedback.heavyImpact();
                     });
                   }
                 },
               ),
+              builder: (context, mapChild) => Stack(
+                children: [
+                  mapChild!,
 
-              // ── Pin Drop — झन्डा स्क्रिनकै ठ्याक्कै बीचमा स्थिर (नक्सा
-              // कै त्यही padding प्रयोग गरेर, camera target सँग ठ्याक्कै
-              // मिल्ने गरी) — नक्सा नै pan भएर मुनि सर्छ, यो कहिल्यै हल्दैन।
-              // InDrive-शैली — झन्डामा tap गरेर होइन, नक्सा नै touch/drag
-              // गर्न थालेकै बित्तिकै (`onCameraMoveStarted`) माथिको ठेगाना
-              // बक्स लुक्छ, पिन "ड्रप" भएपछि (`onCameraIdle`) फेरि देखिन्छ
-              // — त्यसैले झन्डा आफैं फेरि पास-थ्रु (IgnorePointer) मात्र।
-              if (_pickupPinBytes != null &&
-                  !(_isRide && _destLat != null && !_pickingDestination))
-                IgnorePointer(
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 260, top: 118),
-                    child: Center(child: _buildPickupPinOverlay()),
-                  ),
-                ),
-
-              // ── पिनको ठेगाना कार्ड — झन्डाको भिजुअल टुप्पो (tip) को
-              // ठ्याक्कै माथि, `bottom:` लाई pixel-सटीक गणना गरेर (Column
-              // भित्र राखेर होइन — त्यसो गरे झन्डा आफैं साँचो GPS/camera
-              // target बिन्दुबाट तलतिर सर्ने बग आउँथ्यो, किनभने Column ले
-              // दुवै (बक्स + झन्डा) लाई सँगै केन्द्रित गर्थ्यो)।
-              if (_selData == null &&
-                  !_addrCardHidden &&
-                  !(_isRide && _destLat != null && !_pickingDestination))
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: _pinTipBottomOffset(context) + 8,
-                  child: Center(
-                    child: _PinAddressCard(
-                      address: _pinAddress,
-                      loading: _loadingPinAddress,
-                      hint: _isRide && _pickingDestination
-                          ? S.whereToHint
-                          : S.moveMapHint,
-                      onOpenProviders: () => _animatePanelTo(1),
+                  // ── Pin Drop — झन्डा स्क्रिनकै ठ्याक्कै बीचमा स्थिर (नक्सा
+                  // कै त्यही padding प्रयोग गरेर, camera target सँग ठ्याक्कै
+                  // मिल्ने गरी) — नक्सा नै pan भएर मुनि सर्छ, यो कहिल्यै हल्दैन।
+                  // InDrive-शैली — झन्डामा tap गरेर होइन, नक्सा नै touch/drag
+                  // गर्न थालेकै बित्तिकै (`onCameraMoveStarted`) माथिको ठेगाना
+                  // बक्स लुक्छ, पिन "ड्रप" भएपछि (`onCameraIdle`) फेरि देखिन्छ
+                  // — त्यसैले झन्डा आफैं फेरि पास-थ्रु (IgnorePointer) मात्र।
+                  if (_pickupPinBytes != null &&
+                      !(_isRide && _destLat != null && !_pickingDestination))
+                    IgnorePointer(
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 260, top: 118),
+                        child: Center(child: _buildPickupPinOverlay()),
+                      ),
                     ),
-                  ),
-                ),
 
-              // ── "Where & for how much?" — तल्लो "N providers nearby"
-              // प्यानलको ठ्याक्कै माथि, खोजेर छिटो अर्को ठाउँमा जाने बटन
-              // (Ride-Hailing बाहेक — त्यहाँ आफ्नै destination search
-              // बटन/पट्टी पहिल्यै छ)।
-              if (!_isRide && _selData == null)
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: _panelHeight + _panelExpandedHeight * _panelCtrl.value + 12,
-                  child: _bottomSearchOpen
-                      ? _DestinationSearchBar(
-                          key: const ValueKey('browseSearchBar'),
-                          biasLat: _lat,
-                          biasLng: _lng,
-                          onPicked: (label, lat, lng) {
-                            _pickSearchedDestination(label, lat, lng);
-                            setState(() => _bottomSearchOpen = false);
-                          },
-                        )
-                      : _WhereAndHowMuchButton(
-                          onTap: () =>
-                              setState(() => _bottomSearchOpen = true),
+                  // ── पिनको ठेगाना कार्ड — झन्डाको भिजुअल टुप्पो (tip) को
+                  // ठ्याक्कै माथि, `bottom:` लाई pixel-सटीक गणना गरेर (Column
+                  // भित्र राखेर होइन — त्यसो गरे झन्डा आफैं साँचो GPS/camera
+                  // target बिन्दुबाट तलतिर सर्ने बग आउँथ्यो, किनभने Column ले
+                  // दुवै (बक्स + झन्डा) लाई सँगै केन्द्रित गर्थ्यो)।
+                  if (_selData == null &&
+                      !_addrCardHidden &&
+                      !(_isRide && _destLat != null && !_pickingDestination))
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: _pinTipBottomOffset(context) + 8,
+                      child: Center(
+                        child: _PinAddressCard(
+                          address: _pinAddress,
+                          loading: _loadingPinAddress,
+                          hint: _isRide && _pickingDestination
+                              ? S.whereToHint
+                              : S.moveMapHint,
+                          onOpenProviders: () => _animatePanelTo(1),
                         ),
-                ),
-
-              // ── Ride-Hailing — गन्तव्य confirm भइसकेपछि pickup→destination
-              // सारांश (दुई कार्डको सट्टा एउटै सानो पट्टी, माथिको live pin
-              // कार्ड यहाँ hidden भइसकेको हुन्छ) — फेरि छान्ने ("Change")
-              // लिंक सहित।
-              if (_isRide && _destLat != null && !_pickingDestination && _selData == null)
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: _panelHeight + _panelExpandedHeight * _panelCtrl.value + 12,
-                  child: _RideSummaryCard(
-                    pickupAddress: _pickupAddress,
-                    destAddress: _destAddress,
-                    routeLoading: _rideRouteLoading,
-                    onEditPickup: _editPickup,
-                    onChangeDestination: _changeDestination,
-                  ),
-                ),
-
-              // ── छानिएको worker को details card — सूचीबाट छानेपछि देखिने ──
-              if (_selData != null)
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: _panelHeight + _panelExpandedHeight * _panelCtrl.value + 12,
-                  child: _ProviderCard(
-                    data: _selData!,
-                    workerId: _selId!,
-                    distanceKm: _selKm,
-                    serviceType: widget.serviceType,
-                    route: _route,
-                    routeLoading: _routeLoading,
-                    employerLat: _lat,
-                    employerLng: _lng,
-                    onClose: _clearSelection,
-                  ),
-                ),
-
-              // ── bottom request panel ──
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: ClipRRect(
-                  key: _panelKey,
-                  borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(AppRadius.lg)),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                    child: Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.kmSurface.withValues(alpha: 0.9),
-                    borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(AppRadius.lg)),
-                    border: Border(
-                      top: BorderSide(color: AppColors.kmGlassBorder),
+                      ),
                     ),
-                    boxShadow: const [
-                      BoxShadow(
-                          color: Colors.black38,
-                          blurRadius: 20,
-                          offset: Offset(0, -4)),
-                    ],
-                  ),
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-                  child: SafeArea(
-                    top: false,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // ── drag handle + header — tap वा माथि/तल स्वाइप
-                        // गरेर प्यानल पूरा खोल्ने/बन्द गर्ने। बन्द छँदा यही
-                        // एउटा row मात्र देखिन्छ (peek), माथि स्वाइप गरेपछि
-                        // मात्र भाडा/Post job/worker list पूरा देखिने।
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () =>
-                              _animatePanelTo(_panelCtrl.value > 0.5 ? 0 : 1),
-                          // तान्दा हरेक फ्रेम औंलासँगै सिधै (कुनै setState/
-                          // measurement-lag बिना, `AnimationController.value`
-                          // सेट गर्दा आफैं listener हरूलाई notify गर्छ) —
-                          // पहिले यहाँ `onVerticalDragUpdate` नै थिएन (केवल
-                          // `onVerticalDragEnd` को velocity हेरेर खुला/बन्द
-                          // दुई अवस्थामध्ये एक छान्ने मात्र), त्यसैले प्यानल
-                          // औंलासँगै "तानिँदै" कहिल्यै देखिँदैनथ्यो — छोड्नेबित्तिकै
-                          // मात्र एकैचोटि (220ms) जम्प हुन्थ्यो।
-                          onVerticalDragStart: (_) => _panelCtrl.stop(),
-                          onVerticalDragUpdate: (details) {
-                            final range =
-                                _panelExpandedHeight <= 0 ? 300.0 : _panelExpandedHeight;
-                            _panelCtrl.value =
-                                (_panelCtrl.value - details.delta.dy / range)
-                                    .clamp(0.0, 1.0);
-                          },
-                          onVerticalDragEnd: (details) {
-                            final range =
-                                _panelExpandedHeight <= 0 ? 300.0 : _panelExpandedHeight;
-                            // px/s लाई हाम्रै 0..1 scale मा — SpringSimulation
-                            // लाई सुरुवाती वेगको रूपमा चाहिन्छ।
-                            final velocity = -(details.primaryVelocity ?? 0) / range;
-                            // छोटो/ढिलो drag भए — अहिले कति पुगिसक्यो सोही
-                            // अनुसार नजिकैको छेउ; तर छिटो (निर्णायक) फ्लिक
-                            // भए — त्यही बेलाको स्थिति जे भए पनि फ्लिकको
-                            // दिशा नै जित्छ (सामान्य bottom-sheet UX)।
-                            final target = velocity.abs() > 1.2
-                                ? (velocity > 0 ? 1.0 : 0.0)
-                                : (_panelCtrl.value > 0.5 ? 1.0 : 0.0);
-                            _animatePanelTo(target, velocity: velocity);
-                          },
-                          child: Column(
-                            children: [
-                              Container(
-                                width: 36,
-                                height: 4,
-                                margin: const EdgeInsets.only(bottom: 8),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.5),
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                              ),
-                              Row(
-                                children: [
-                                  Icon(serviceIconFor(widget.serviceType),
-                                      color: Colors.white, size: 20),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      '${rows.length} ${S.serviceName(widget.serviceType)} ${S.providersNearby}',
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700),
-                                    ),
-                                  ),
-                                  Icon(
-                                    _panelCtrl.value > 0.5
-                                        ? Icons.keyboard_arrow_down_rounded
-                                        : Icons.keyboard_arrow_up_rounded,
-                                    color: Colors.white70,
-                                  ),
-                                ],
-                              ),
-                              // ── InDrive-style — सवारी छान्ने chip पट्टी +
-                              // भरपर्दो ड्राइभर banner, प्यानल खुला/बन्द
-                              // जुनसुकै अवस्थामा पनि सधैँ देखिने (collapsible
-                              // AnimatedSize भन्दा बाहिर) — गन्तव्य confirm
-                              // नभएसम्म मात्र।
-                              if (_isRide && _destLat == null) ...[
-                                const SizedBox(height: 10),
-                                _VehicleChipRow(
-                                  current: widget.serviceType,
-                                  initialLat: _originLat,
-                                  initialLng: _originLng,
-                                ),
-                                const SizedBox(height: 8),
-                                // दायाँतिर थप margin — screen को तल्लो-दायाँ
-                                // कुनामा सधैँ तैरिरहने Scaffold FAB (मेरो
-                                // स्थान बटन) मुनि पर्ने/ओभरल्याप हुनबाट जोगाउन।
-                                const Padding(
-                                  padding: EdgeInsets.only(right: 52),
-                                  child: _TrustBanner(),
-                                ),
-                              ],
+
+                  // ── "Where & for how much?" — तल्लो "N providers nearby"
+                  // प्यानलको ठ्याक्कै माथि, खोजेर छिटो अर्को ठाउँमा जाने बटन
+                  // (Ride-Hailing बाहेक — त्यहाँ आफ्नै destination search
+                  // बटन/पट्टी पहिल्यै छ)।
+                  if (!_isRide && _selData == null)
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: _panelHeight +
+                          _panelExpandedHeight * _panelCtrl.value +
+                          12,
+                      child: _bottomSearchOpen
+                          ? _DestinationSearchBar(
+                              key: const ValueKey('browseSearchBar'),
+                              biasLat: _lat,
+                              biasLng: _lng,
+                              onPicked: (label, lat, lng) {
+                                _pickSearchedDestination(label, lat, lng);
+                                setState(() => _bottomSearchOpen = false);
+                              },
+                            )
+                          : _WhereAndHowMuchButton(
+                              onTap: () =>
+                                  setState(() => _bottomSearchOpen = true),
+                            ),
+                    ),
+
+                  // ── Ride-Hailing — गन्तव्य confirm भइसकेपछि pickup→destination
+                  // सारांश (दुई कार्डको सट्टा एउटै सानो पट्टी, माथिको live pin
+                  // कार्ड यहाँ hidden भइसकेको हुन्छ) — फेरि छान्ने ("Change")
+                  // लिंक सहित।
+                  if (_isRide &&
+                      _destLat != null &&
+                      !_pickingDestination &&
+                      _selData == null)
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: _panelHeight +
+                          _panelExpandedHeight * _panelCtrl.value +
+                          12,
+                      child: _RideSummaryCard(
+                        pickupAddress: _pickupAddress,
+                        destAddress: _destAddress,
+                        routeLoading: _rideRouteLoading,
+                        onEditPickup: _editPickup,
+                        onChangeDestination: _changeDestination,
+                      ),
+                    ),
+
+                  // ── छानिएको worker को details card — सूचीबाट छानेपछि देखिने ──
+                  if (_selData != null)
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: _panelHeight +
+                          _panelExpandedHeight * _panelCtrl.value +
+                          12,
+                      child: _ProviderCard(
+                        data: _selData!,
+                        workerId: _selId!,
+                        distanceKm: _selKm,
+                        serviceType: widget.serviceType,
+                        route: _route,
+                        routeLoading: _routeLoading,
+                        employerLat: _lat,
+                        employerLng: _lng,
+                        onClose: _clearSelection,
+                      ),
+                    ),
+
+                  // ── bottom request panel ──
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: ClipRRect(
+                      key: _panelKey,
+                      borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(AppRadius.lg)),
+                      child: glassBackdrop(sigma: 24, child: Container(
+                          decoration: BoxDecoration(
+                            color: AppColors.kmSurface.withValues(alpha: 0.9),
+                            borderRadius: const BorderRadius.vertical(
+                                top: Radius.circular(AppRadius.lg)),
+                            border: Border(
+                              top: BorderSide(color: AppColors.kmGlassBorder),
+                            ),
+                            boxShadow: const [
+                              BoxShadow(
+                                  color: Colors.black38,
+                                  blurRadius: 20,
+                                  offset: Offset(0, -4)),
                             ],
                           ),
-                        ),
-                        // `AnimatedSize` (implicit-duration, केवल दुई
-                        // अवस्था — पूरा/खाली — बीच toggle) कै सट्टा —
-                        // `Align(heightFactor:)`: यसको child (तल
-                        // `key: _expandedKey`) सधैँ (जुनसुकै `_panelCtrl.value`
-                        // मा पनि) पूरै/natural size मै layout हुन्छ, केवल
-                        // parent ले कति देखाउने भन्ने मात्र `heightFactor`
-                        // ले तय गर्छ — त्यसैले drag/spring जुनसुकै फ्रेममा
-                        // यो सधैँ ठ्याक्कै `_panelCtrl.value` अनुरूप नै
-                        // देखिन्छ (कुनै छुट्टै 220ms animation चलिरहनु
-                        // पर्दैन, माथिकै AnimatedBuilder ले सिधै रिबिल्ड
-                        // गर्छ)। `ClipRect` ले heightFactor < 1 हुँदा
-                        // तल्लो भाग नदेखियोस् भनेर काट्छ।
-                        ClipRect(
-                          child: Align(
-                          alignment: Alignment.topCenter,
-                          heightFactor: _panelCtrl.value.clamp(0.0, 1.0),
-                          child: Column(
-                                  key: _expandedKey,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                        // ── Ride-Hailing — गन्तव्य अझै छानिएको छैन भने,
-                        // सामान्य worker-सूची/भाडा प्यानलको सट्टा pickup/
-                        // destination confirm गर्ने दुई-चरण CTA मात्र ──
-                        if (_isRide && _destLat == null) ...[
-                          const SizedBox(height: 10),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 12),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.16),
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.md),
-                              border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.35)),
-                            ),
-                            child: Row(
+                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+                          child: SafeArea(
+                            top: false,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(
-                                    _pickingDestination
-                                        ? Icons.flag_rounded
-                                        : Icons.my_location_rounded,
-                                    color: Colors.white,
-                                    size: 18),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    // खाली भएमा मात्र hint — नत्र खोजी/drag
-                                    // बाट पहिल्यै छानिएको ठ्याक्कै ठेगाना
-                                    // यहाँ (Confirm बटनको ठ्याक्कै माथि) पनि
-                                    // देखियोस्, ताकि प्रयोगकर्ताले के
-                                    // confirm गर्दैछन् भन्ने प्रस्ट देखोस्।
-                                    _pinAddress.isEmpty
-                                        ? (_pickingDestination
-                                            ? S.whereToHint
-                                            : S.moveMapHint)
-                                        : _pinAddress,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 12.5),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          KmCtaButton(
-                            onPressed: _pickingDestination
-                                ? _confirmDestination
-                                : _confirmPickupAndStartDestination,
-                            icon: _pickingDestination
-                                ? Icons.flag_rounded
-                                : Icons.navigate_next_rounded,
-                            label: _pickingDestination
-                                ? S.confirmDestinationCta
-                                : S.confirmPickupCta,
-                          ),
-                        ] else ...[
-                        // ── तल्लो horizontal सूची — नक्सामा pin नभई यहींबाट
-                        // कुनै एक worker छानेर details card खोल्ने ──
-                        if (rows.isNotEmpty) ...[
-                          const SizedBox(height: 10),
-                          SizedBox(
-                            height: 86,
-                            child: ListView.separated(
-                              scrollDirection: Axis.horizontal,
-                              itemCount: rows.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(width: 8),
-                              itemBuilder: (context, i) {
-                                final r = rows[i];
-                                final selected = r.id == _selId;
-                                final name = (r.data['name'] ?? '—').toString();
-                                return _WorkerChip(
-                                  key: ValueKey(r.id),
-                                  uid: r.id,
-                                  name: name,
-                                  distanceKm: r.km,
-                                  serviceType: widget.serviceType,
-                                  selected: selected,
-                                  onTap: () => selected
-                                      ? _clearSelection()
-                                      : _selectWorker(
-                                          r.id, r.data, r.km, r.pos),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 10),
-                        // ── InDrive-style: अनुमानित भाडा + ग्राहकको प्रस्ताव ──
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.16),
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                            border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.35)),
-                          ),
-                          child: Column(
-                            children: [
-                              Row(
-                                children: [
-                                  const Icon(Icons.payments_rounded,
-                                      color: Colors.white70, size: 16),
-                                  const SizedBox(width: 8),
-                                  Text(S.estimatedFare,
-                                      style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 12.5)),
-                                  const Spacer(),
-                                  Text('Rs. $estFare',
-                                      style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 12.5,
-                                          fontWeight: FontWeight.w700)),
-                                ],
-                              ),
-                              const SizedBox(height: 6),
-                              Text(S.yourOfferPrice,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600)),
-                              const SizedBox(height: 4),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  _StepBtn(
-                                      icon: Icons.remove_rounded,
-                                      onTap: () => _setOffer(
-                                          (_offer ?? estFare) - _priceStep)),
-                                  const SizedBox(width: 20),
-                                  Column(
+                                // ── drag handle + header — tap वा माथि/तल स्वाइप
+                                // गरेर प्यानल पूरा खोल्ने/बन्द गर्ने। बन्द छँदा यही
+                                // एउटा row मात्र देखिन्छ (peek), माथि स्वाइप गरेपछि
+                                // मात्र भाडा/Post job/worker list पूरा देखिने।
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () => _animatePanelTo(
+                                      _panelCtrl.value > 0.5 ? 0 : 1),
+                                  // तान्दा हरेक फ्रेम औंलासँगै सिधै (कुनै setState/
+                                  // measurement-lag बिना, `AnimationController.value`
+                                  // सेट गर्दा आफैं listener हरूलाई notify गर्छ) —
+                                  // पहिले यहाँ `onVerticalDragUpdate` नै थिएन (केवल
+                                  // `onVerticalDragEnd` को velocity हेरेर खुला/बन्द
+                                  // दुई अवस्थामध्ये एक छान्ने मात्र), त्यसैले प्यानल
+                                  // औंलासँगै "तानिँदै" कहिल्यै देखिँदैनथ्यो — छोड्नेबित्तिकै
+                                  // मात्र एकैचोटि (220ms) जम्प हुन्थ्यो।
+                                  onVerticalDragStart: (_) => _panelCtrl.stop(),
+                                  onVerticalDragUpdate: (details) {
+                                    final range = _panelExpandedHeight <= 0
+                                        ? 300.0
+                                        : _panelExpandedHeight;
+                                    _panelCtrl.value = (_panelCtrl.value -
+                                            details.delta.dy / range)
+                                        .clamp(0.0, 1.0);
+                                  },
+                                  onVerticalDragEnd: (details) {
+                                    final range = _panelExpandedHeight <= 0
+                                        ? 300.0
+                                        : _panelExpandedHeight;
+                                    // px/s लाई हाम्रै 0..1 scale मा — SpringSimulation
+                                    // लाई सुरुवाती वेगको रूपमा चाहिन्छ।
+                                    final velocity =
+                                        -(details.primaryVelocity ?? 0) / range;
+                                    // छोटो/ढिलो drag भए — अहिले कति पुगिसक्यो सोही
+                                    // अनुसार नजिकैको छेउ; तर छिटो (निर्णायक) फ्लिक
+                                    // भए — त्यही बेलाको स्थिति जे भए पनि फ्लिकको
+                                    // दिशा नै जित्छ (सामान्य bottom-sheet UX)।
+                                    final target = velocity.abs() > 1.2
+                                        ? (velocity > 0 ? 1.0 : 0.0)
+                                        : (_panelCtrl.value > 0.5 ? 1.0 : 0.0);
+                                    _animatePanelTo(target, velocity: velocity);
+                                  },
+                                  child: Column(
                                     children: [
-                                      const Text('Rs.',
-                                          style: TextStyle(
-                                              color: Colors.white70,
-                                              fontSize: 11)),
-                                      Text('${_offer ?? estFare}',
-                                          style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 28,
-                                              fontWeight: FontWeight.w800)),
+                                      Container(
+                                        width: 36,
+                                        height: 4,
+                                        margin:
+                                            const EdgeInsets.only(bottom: 8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.5),
+                                          borderRadius:
+                                              BorderRadius.circular(2),
+                                        ),
+                                      ),
+                                      Row(
+                                        children: [
+                                          ServiceGlyph(
+                                              service: widget.serviceType,
+                                              size: 22,
+                                              color: Colors.white),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              '${rows.length} ${S.serviceName(widget.serviceType)} ${S.providersNearby}',
+                                              style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w700),
+                                            ),
+                                          ),
+                                          Icon(
+                                            _panelCtrl.value > 0.5
+                                                ? Icons
+                                                    .keyboard_arrow_down_rounded
+                                                : Icons
+                                                    .keyboard_arrow_up_rounded,
+                                            color: Colors.white70,
+                                          ),
+                                        ],
+                                      ),
+                                      // ── InDrive-style — भरपर्दो ड्राइभर banner,
+                                      // प्यानल खुला/बन्द जुनसुकै अवस्थामा पनि सधैँ
+                                      // देखिने (collapsible AnimatedSize भन्दा
+                                      // बाहिर) — गन्तव्य confirm नभएसम्म मात्र।
+                                      // अर्को सवारी-प्रकार (Bike/Car/Auto) मा
+                                      // switch गर्ने chip पट्टी यहाँबाट हटाइयो —
+                                      // हरेक ride mode (home screen बाटै छानिएको)
+                                      // आफ्नै छुट्टै isolated booking view हुनुपर्ने
+                                      // भएकोले, यही स्क्रिनबाट अर्को सवारीमा जान
+                                      // नमिल्ने।
+                                      if (_isRide && _destLat == null) ...[
+                                        const SizedBox(height: 10),
+                                        // दायाँतिर थप margin — screen को तल्लो-दायाँ
+                                        // कुनामा सधैँ तैरिरहने Scaffold FAB (मेरो
+                                        // स्थान बटन) मुनि पर्ने/ओभरल्याप हुनबाट जोगाउन।
+                                        const Padding(
+                                          padding: EdgeInsets.only(right: 52),
+                                          child: _TrustBanner(),
+                                        ),
+                                      ],
                                     ],
                                   ),
-                                  const SizedBox(width: 20),
-                                  _StepBtn(
-                                      icon: Icons.add_rounded,
-                                      onTap: () => _setOffer(
-                                          (_offer ?? estFare) + _priceStep)),
-                                ],
-                              ),
-                            ],
+                                ),
+                                // `AnimatedSize` (implicit-duration, केवल दुई
+                                // अवस्था — पूरा/खाली — बीच toggle) कै सट्टा —
+                                // `Align(heightFactor:)`: यसको child (तल
+                                // `key: _expandedKey`) सधैँ (जुनसुकै `_panelCtrl.value`
+                                // मा पनि) पूरै/natural size मै layout हुन्छ, केवल
+                                // parent ले कति देखाउने भन्ने मात्र `heightFactor`
+                                // ले तय गर्छ — त्यसैले drag/spring जुनसुकै फ्रेममा
+                                // यो सधैँ ठ्याक्कै `_panelCtrl.value` अनुरूप नै
+                                // देखिन्छ (कुनै छुट्टै 220ms animation चलिरहनु
+                                // पर्दैन, माथिकै AnimatedBuilder ले सिधै रिबिल्ड
+                                // गर्छ)। `ClipRect` ले heightFactor < 1 हुँदा
+                                // तल्लो भाग नदेखियोस् भनेर काट्छ।
+                                ClipRect(
+                                  child: Align(
+                                    alignment: Alignment.topCenter,
+                                    heightFactor:
+                                        _panelCtrl.value.clamp(0.0, 1.0),
+                                    child: Column(
+                                      key: _expandedKey,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        // ── Ride-Hailing — गन्तव्य अझै छानिएको छैन भने,
+                                        // सामान्य worker-सूची/भाडा प्यानलको सट्टा pickup/
+                                        // destination confirm गर्ने दुई-चरण CTA मात्र ──
+                                        if (_isRide && _destLat == null) ...[
+                                          const SizedBox(height: 10),
+                                          // Split tap: यो banner area (arrow/CTA बटन
+                                          // बाहेक जतासुकै) थिच्दा सिधै confirm नगरी, बरु
+                                          // पूरा "Enter your route" (From/To) खोज कार्ड
+                                          // खुल्छ — arrow बटनले मात्र सिधै confirm गर्छ
+                                          // (तल्लो KmCtaButton, अपरिवर्तित)।
+                                          Material(
+                                            color: Colors.transparent,
+                                            borderRadius: BorderRadius.circular(
+                                                AppRadius.md),
+                                            child: InkWell(
+                                              borderRadius:
+                                                  BorderRadius.circular(
+                                                      AppRadius.md),
+                                              onTap: () => setState(
+                                                  () => _routeCardOpen = true),
+                                              child: Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 14,
+                                                        vertical: 12),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.white
+                                                      .withValues(alpha: 0.16),
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          AppRadius.md),
+                                                  border: Border.all(
+                                                      color: Colors.white
+                                                          .withValues(
+                                                              alpha: 0.35)),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    Icon(
+                                                        _pickingDestination
+                                                            ? Icons.flag_rounded
+                                                            : Icons
+                                                                .my_location_rounded,
+                                                        color: Colors.white,
+                                                        size: 18),
+                                                    const SizedBox(width: 10),
+                                                    Expanded(
+                                                      child: Text(
+                                                        // खाली भएमा मात्र hint — नत्र खोजी/drag
+                                                        // बाट पहिल्यै छानिएको ठ्याक्कै ठेगाना
+                                                        // यहाँ (Confirm बटनको ठ्याक्कै माथि) पनि
+                                                        // देखियोस्, ताकि प्रयोगकर्ताले के
+                                                        // confirm गर्दैछन् भन्ने प्रस्ट देखोस्।
+                                                        _pinAddress.isEmpty
+                                                            ? (_pickingDestination
+                                                                ? S.whereToHint
+                                                                : S.moveMapHint)
+                                                            : _pinAddress,
+                                                        maxLines: 2,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: const TextStyle(
+                                                            color: Colors.white,
+                                                            fontWeight:
+                                                                FontWeight.w600,
+                                                            fontSize: 12.5),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 10),
+                                          KmCtaButton(
+                                            onPressed: _pickingDestination
+                                                ? _confirmDestination
+                                                : _confirmPickupAndStartDestination,
+                                            icon: _pickingDestination
+                                                ? Icons.flag_rounded
+                                                : Icons.navigate_next_rounded,
+                                            label: _pickingDestination
+                                                ? S.confirmDestinationCta
+                                                : S.confirmPickupCta,
+                                          ),
+                                        ] else ...[
+                                          // ── तल्लो horizontal सूची — नक्सामा pin नभई यहींबाट
+                                          // कुनै एक worker छानेर details card खोल्ने ──
+                                          if (rows.isNotEmpty) ...[
+                                            const SizedBox(height: 10),
+                                            SizedBox(
+                                              height: 86,
+                                              child: ListView.separated(
+                                                scrollDirection:
+                                                    Axis.horizontal,
+                                                itemCount: rows.length,
+                                                separatorBuilder: (_, __) =>
+                                                    const SizedBox(width: 8),
+                                                itemBuilder: (context, i) {
+                                                  final r = rows[i];
+                                                  final selected =
+                                                      r.id == _selId;
+                                                  final name =
+                                                      (r.data['name'] ?? '—')
+                                                          .toString();
+                                                  return _WorkerChip(
+                                                    key: ValueKey(r.id),
+                                                    uid: r.id,
+                                                    name: name,
+                                                    distanceKm: r.km,
+                                                    serviceType:
+                                                        widget.serviceType,
+                                                    selected: selected,
+                                                    onTap: () => selected
+                                                        ? _clearSelection()
+                                                        : _selectWorker(
+                                                            r.id,
+                                                            r.data,
+                                                            r.km,
+                                                            r.pos),
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                          ],
+                                          const SizedBox(height: 10),
+                                          // ── InDrive-style: अनुमानित भाडा + ग्राहकको प्रस्ताव ──
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 14, vertical: 10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.16),
+                                              borderRadius:
+                                                  BorderRadius.circular(
+                                                      AppRadius.md),
+                                              border: Border.all(
+                                                  color: Colors.white
+                                                      .withValues(alpha: 0.35)),
+                                            ),
+                                            child: Column(
+                                              children: [
+                                                Row(
+                                                  children: [
+                                                    const Icon(
+                                                        Icons.payments_rounded,
+                                                        color: Colors.white70,
+                                                        size: 16),
+                                                    const SizedBox(width: 8),
+                                                    Text(S.estimatedFare,
+                                                        style: const TextStyle(
+                                                            color:
+                                                                Colors.white70,
+                                                            fontSize: 12.5)),
+                                                    const Spacer(),
+                                                    Text('Rs. $estFare',
+                                                        style: const TextStyle(
+                                                            color:
+                                                                Colors.white70,
+                                                            fontSize: 12.5,
+                                                            fontWeight:
+                                                                FontWeight
+                                                                    .w700)),
+                                                  ],
+                                                ),
+                                                if (isNightFareHour()) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text('🌙 ${S.nightFareLabel}',
+                                                      style: const TextStyle(
+                                                          color:
+                                                              Colors.white70,
+                                                          fontSize: 11)),
+                                                ],
+                                                const SizedBox(height: 6),
+                                                Text(S.yourOfferPrice,
+                                                    style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.w600)),
+                                                const SizedBox(height: 4),
+                                                Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment.center,
+                                                  children: [
+                                                    _StepBtn(
+                                                        icon: Icons
+                                                            .remove_rounded,
+                                                        onTap: () => _setOffer(
+                                                            (_offer ??
+                                                                    estFare) -
+                                                                _priceStep)),
+                                                    const SizedBox(width: 20),
+                                                    Column(
+                                                      children: [
+                                                        const Text('Rs.',
+                                                            style: TextStyle(
+                                                                color: Colors
+                                                                    .white70,
+                                                                fontSize: 11)),
+                                                        Text(
+                                                            '${_offer ?? estFare}',
+                                                            style: const TextStyle(
+                                                                color: Colors
+                                                                    .white,
+                                                                fontSize: 28,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w800)),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(width: 20),
+                                                    _StepBtn(
+                                                        icon: Icons.add_rounded,
+                                                        onTap: () => _setOffer(
+                                                            (_offer ??
+                                                                    estFare) +
+                                                                _priceStep)),
+                                                  ],
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const SizedBox(height: 10),
+                                          KmCtaButton(
+                                            onPressed: _sending
+                                                ? null
+                                                : () =>
+                                                    _openPostJob(rows, estFare),
+                                            loading: _sending,
+                                            icon: _isRide
+                                                ? Icons.local_taxi_rounded
+                                                : Icons.post_add_rounded,
+                                            label:
+                                                '${_isRide ? S.findOffer : S.postJob}  ·  Rs. ${_offer ?? estFare}',
+                                          ),
+                                          if (rows.isEmpty)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.only(top: 8),
+                                              child: Text(S.noWorkersOnlineNote,
+                                                  textAlign: TextAlign.center,
+                                                  style: const TextStyle(
+                                                      color: Colors.white70,
+                                                      fontSize: 12)),
+                                            ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                        const SizedBox(height: 10),
-                        KmCtaButton(
-                          onPressed: _sending
-                              ? null
-                              : () => _openPostJob(rows, estFare),
-                          loading: _sending,
-                          icon: _isRide
-                              ? Icons.local_taxi_rounded
-                              : Icons.post_add_rounded,
-                          label:
-                              '${_isRide ? S.findOffer : S.postJob}  ·  Rs. ${_offer ?? estFare}',
-                        ),
-                        if (rows.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text(S.noWorkersOnlineNote,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                    color: Colors.white70, fontSize: 12)),
-                          ),
-                        ],
+                      ),
+                    ),
+                  ),
+
+                  // ── Ride-Hailing — "Enter your route" कार्ड (InDrive-style) —
+                  // तल्लो "Confirm pickup · Where to?" नथिचेसम्म पूर्ण रूपमा
+                  // लुकेको रहन्छ (`_routeCardOpen`)। भित्र एकपल्टमा एउटै फिल्ड
+                  // मात्र सक्रिय (पूरा खोज बक्स) — "From" tap गर्दा "To" सानो
+                  // सारांश-पंक्तिमा खुम्चिन्छ, र उल्टो। "To" छानेपछि सिधै
+                  // टक्राउँदैन — तल्लो "Confirm route" बटन थिचेपछि मात्र।
+                  // Stack को सबैभन्दा पछिल्लो (topmost z-order) child — तल्लो
+                  // "N providers nearby" panel (माथि नै) ले यसलाई कहिल्यै ढाक्न
+                  // नपाओस् भनेर जानाजानी अन्त्यमा राखिएको (पहिले सुरुतिर थियो,
+                  // panel त्यसमाथि नै चित्रित हुन्थ्यो — किबोर्ड खुल्दा/panel
+                  // तानिँदा "To" फिल्ड लुक्ने बग यही थियो, कार्डको उचाइले
+                  // कहिल्यै फरक पारेन)।
+                  if (_isRide && _destLat == null && _routeCardOpen)
+                    Positioned(
+                      top: MediaQuery.of(context).padding.top + 6,
+                      left: 12,
+                      right: 12,
+                      // कार्डको तल्लो सीमा किबोर्ड (`viewInsets.bottom`) को
+                      // ठ्याक्कै माथि — सामग्री लामो भए भित्रै scroll हुन्छ।
+                      bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: SingleChildScrollView(
+                          child: Container(
+                            // कार्डभित्र अब कुनै बटन नरहेकोले (तल्लो "Confirm
+                            // destination" ले नै सधैँ अन्तिम पुष्टि गर्ने), तल्लो
+                            // padding पनि माथिकै जत्तिकै सानो — बेकार खाली ठाउँ नरहोस्।
+                            padding: const EdgeInsets.fromLTRB(14, 12, 8, 10),
+                            decoration: BoxDecoration(
+                              color: AppColors.kmVoid2.withValues(alpha: 0.97),
+                              borderRadius: BorderRadius.circular(AppRadius.lg),
+                              border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.14)),
+                              boxShadow: const [
+                                BoxShadow(
+                                    color: Colors.black45,
+                                    blurRadius: 16,
+                                    offset: Offset(0, 6)),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(S.enterRouteTitle,
+                                          style: const TextStyle(
+                                              color: AppColors.kmText,
+                                              fontWeight: FontWeight.w800,
+                                              fontSize: 15)),
+                                    ),
+                                    InkWell(
+                                      borderRadius: BorderRadius.circular(999),
+                                      onTap: () => setState(
+                                          () => _routeCardOpen = false),
+                                      child: const Padding(
+                                        padding: EdgeInsets.all(4),
+                                        child: Icon(Icons.close_rounded,
+                                            color: AppColors.kmMuted, size: 20),
+                                      ),
+                                    ),
                                   ],
                                 ),
+                                const SizedBox(height: 6),
+                                // ── "From" — सक्रिय भए पूरा खोज बक्स, नत्र सानो
+                                // सारांश-पंक्ति (tap गर्दा सक्रिय बन्छ) ──
+                                if (_activeRouteField == 'from')
+                                  _DestinationSearchBar(
+                                    key: const ValueKey('ridePickupSearchBar'),
+                                    biasLat: _lat,
+                                    biasLng: _lng,
+                                    fieldLabel: S.fromLabel,
+                                    hintText: S.moveMapHint,
+                                    initialText: _pickupLat != null
+                                        ? _pickupAddress
+                                        : _pinAddress,
+                                    showLiveLocationButton: true,
+                                    onPicked: (label, lat, lng) {
+                                      _pickSearchedPickup(label, lat, lng);
+                                      setState(() => _activeRouteField =
+                                          _pendingDestLat == null
+                                              ? 'to'
+                                              : null);
+                                    },
+                                  )
+                                else
+                                  _compactRouteRow(
+                                    icon: Icons.trip_origin_rounded,
+                                    iconColor: AppColors.kmTeal,
+                                    label: S.fromLabel,
+                                    value: _pickupLat != null
+                                        ? _pickupAddress
+                                        : (_pinAddress.isEmpty
+                                            ? S.moveMapHint
+                                            : _pinAddress),
+                                    onTap: () => setState(
+                                        () => _activeRouteField = 'from'),
+                                  ),
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 6),
+                                  child: Divider(
+                                      height: 1,
+                                      color: AppColors.kmGlassBorder),
+                                ),
+                                // ── "To" — सक्रिय भए पूरा खोज बक्स, नत्र सानो
+                                // सारांश-पंक्ति ──
+                                if (_activeRouteField == 'to')
+                                  _DestinationSearchBar(
+                                    key: const ValueKey(
+                                        'rideDestinationSearchBar'),
+                                    biasLat: _pickupLat ?? _lat,
+                                    biasLng: _pickupLng ?? _lng,
+                                    fieldLabel: S.toLabel,
+                                    hintText: S.whereToHint,
+                                    initialText: _pendingDestAddress,
+                                    showLiveLocationButton: true,
+                                    onPicked: (label, lat, lng) {
+                                      setState(() {
+                                        _pendingDestLat = lat;
+                                        _pendingDestLng = lng;
+                                        _pendingDestAddress = label;
+                                        _activeRouteField = null;
+                                      });
+                                    },
+                                  )
+                                else
+                                  _compactRouteRow(
+                                    icon: Icons.flag_rounded,
+                                    iconColor: AppColors.kmOrange,
+                                    label: S.toLabel,
+                                    value: _pendingDestAddress.isEmpty
+                                        ? S.whereToHint
+                                        : _pendingDestAddress,
+                                    onTap: () => setState(
+                                        () => _activeRouteField = 'to'),
+                                  ),
+                                // पहिले यहाँ pickup + pending destination दुवै
+                                // भइसकेपछि (कुनै फिल्ड सक्रिय नहुँदा) कार्डभित्रै
+                                // छुट्टै "Confirm route" बटन देखिन्थ्यो — तल्लो
+                                // "Confirm destination" बटन (जुन यही अवस्थामा पनि
+                                // सधैँ देखिँदै थियो) सँगै दुई फरक-फरक confirm-action
+                                // एकैचोटि देखिने भएकोले अस्पष्ट थियो। अब From/To
+                                // दुवै छानिनेबित्तिकै यहाँ (`_pendingDestLat`) मै
+                                // स्वतः राखिन्छ, र single source of truth भई तल्लो
+                                // बटन (`_confirmDestination`) ले नै अन्तिम पुष्टि
+                                // गर्छ — कार्डभित्र दोहोरो बटन अब छैन।
+                              ],
+                            ),
                           ),
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                ),
-                  ),
-                ),
+                ],
               ),
-
-              // ── Ride-Hailing — "Enter your route" कार्ड (InDrive-style) —
-              // तल्लो "Confirm pickup · Where to?" नथिचेसम्म पूर्ण रूपमा
-              // लुकेको रहन्छ (`_routeCardOpen`)। भित्र एकपल्टमा एउटै फिल्ड
-              // मात्र सक्रिय (पूरा खोज बक्स) — "From" tap गर्दा "To" सानो
-              // सारांश-पंक्तिमा खुम्चिन्छ, र उल्टो। "To" छानेपछि सिधै
-              // टक्राउँदैन — तल्लो "Confirm route" बटन थिचेपछि मात्र।
-              // Stack को सबैभन्दा पछिल्लो (topmost z-order) child — तल्लो
-              // "N providers nearby" panel (माथि नै) ले यसलाई कहिल्यै ढाक्न
-              // नपाओस् भनेर जानाजानी अन्त्यमा राखिएको (पहिले सुरुतिर थियो,
-              // panel त्यसमाथि नै चित्रित हुन्थ्यो — किबोर्ड खुल्दा/panel
-              // तानिँदा "To" फिल्ड लुक्ने बग यही थियो, कार्डको उचाइले
-              // कहिल्यै फरक पारेन)।
-              if (_isRide && _destLat == null && _routeCardOpen)
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 6,
-                  left: 12,
-                  right: 12,
-                  // कार्डको तल्लो सीमा किबोर्ड (`viewInsets.bottom`) को
-                  // ठ्याक्कै माथि — सामग्री लामो भए भित्रै scroll हुन्छ।
-                  bottom: MediaQuery.of(context).viewInsets.bottom + 12,
-                  child: Align(
-                    alignment: Alignment.topCenter,
-                    child: SingleChildScrollView(
-                      child: Container(
-                      padding: const EdgeInsets.fromLTRB(14, 12, 8, 14),
-                      decoration: BoxDecoration(
-                        color: AppColors.kmVoid2.withValues(alpha: 0.97),
-                        borderRadius: BorderRadius.circular(AppRadius.lg),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-                        boxShadow: const [
-                          BoxShadow(color: Colors.black45, blurRadius: 16, offset: Offset(0, 6)),
-                        ],
-                      ),
-                      child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(S.enterRouteTitle,
-                                  style: const TextStyle(
-                                      color: AppColors.kmText,
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 15)),
-                            ),
-                            InkWell(
-                              borderRadius: BorderRadius.circular(999),
-                              onTap: () =>
-                                  setState(() => _routeCardOpen = false),
-                              child: const Padding(
-                                padding: EdgeInsets.all(4),
-                                child: Icon(Icons.close_rounded,
-                                    color: AppColors.kmMuted, size: 20),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        // ── "From" — सक्रिय भए पूरा खोज बक्स, नत्र सानो
-                        // सारांश-पंक्ति (tap गर्दा सक्रिय बन्छ) ──
-                        if (_activeRouteField == 'from')
-                          _DestinationSearchBar(
-                            key: const ValueKey('ridePickupSearchBar'),
-                            biasLat: _lat,
-                            biasLng: _lng,
-                            fieldLabel: S.fromLabel,
-                            hintText: S.moveMapHint,
-                            initialText: _pickupLat != null
-                                ? _pickupAddress
-                                : _pinAddress,
-                            showLiveLocationButton: true,
-                            onPicked: (label, lat, lng) {
-                              _pickSearchedPickup(label, lat, lng);
-                              setState(() => _activeRouteField =
-                                  _pendingDestLat == null ? 'to' : null);
-                            },
-                          )
-                        else
-                          _compactRouteRow(
-                            icon: Icons.trip_origin_rounded,
-                            iconColor: AppColors.kmTeal,
-                            label: S.fromLabel,
-                            value: _pickupLat != null
-                                ? _pickupAddress
-                                : (_pinAddress.isEmpty
-                                    ? S.moveMapHint
-                                    : _pinAddress),
-                            onTap: () =>
-                                setState(() => _activeRouteField = 'from'),
-                          ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          child: Divider(height: 1, color: AppColors.kmGlassBorder),
-                        ),
-                        // ── "To" — सक्रिय भए पूरा खोज बक्स, नत्र सानो
-                        // सारांश-पंक्ति ──
-                        if (_activeRouteField == 'to')
-                          _DestinationSearchBar(
-                            key: const ValueKey('rideDestinationSearchBar'),
-                            biasLat: _pickupLat ?? _lat,
-                            biasLng: _pickupLng ?? _lng,
-                            fieldLabel: S.toLabel,
-                            hintText: S.whereToHint,
-                            initialText: _pendingDestAddress,
-                            showLiveLocationButton: true,
-                            onPicked: (label, lat, lng) {
-                              setState(() {
-                                _pendingDestLat = lat;
-                                _pendingDestLng = lng;
-                                _pendingDestAddress = label;
-                                _activeRouteField = null;
-                              });
-                            },
-                          )
-                        else
-                          _compactRouteRow(
-                            icon: Icons.flag_rounded,
-                            iconColor: AppColors.kmOrange,
-                            label: S.toLabel,
-                            value: _pendingDestAddress.isEmpty
-                                ? S.whereToHint
-                                : _pendingDestAddress,
-                            onTap: () =>
-                                setState(() => _activeRouteField = 'to'),
-                          ),
-                        // ── "Confirm route" — दुवै (pickup + pending
-                        // destination) भइसकेपछि, कुनै फिल्ड सक्रिय नहुँदा ──
-                        if (_activeRouteField == null &&
-                            _pickupLat != null &&
-                            _pendingDestLat != null) ...[
-                          const SizedBox(height: 10),
-                          KmCtaButton(
-                            label: S.confirmRouteCta,
-                            icon: Icons.check_rounded,
-                            onPressed: _confirmPendingRoute,
-                          ),
-                        ],
-                      ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          );
-        },
-      ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -1977,7 +2245,8 @@ class _PinAddressCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppRadius.md),
           border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
           boxShadow: const [
-            BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+            BoxShadow(
+                color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
           ],
         ),
         child: Row(
@@ -1991,7 +2260,10 @@ class _PinAddressCard extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                    color: AppColors.kmText, fontWeight: FontWeight.w600, fontSize: 11.5, height: 1.25),
+                    color: AppColors.kmText,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 11.5,
+                    height: 1.25),
               ),
             ),
             if (loading) ...[
@@ -2055,13 +2327,15 @@ class _WhereAndHowMuchButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppRadius.pill),
           border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
           boxShadow: const [
-            BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+            BoxShadow(
+                color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
           ],
         ),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
         child: Row(
           children: [
-            const Icon(Icons.search_rounded, color: AppColors.kmOrange, size: 20),
+            const Icon(Icons.search_rounded,
+                color: AppColors.kmOrange, size: 20),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -2074,85 +2348,6 @@ class _WhereAndHowMuchButton extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// InDrive-style सवारी छान्ने horizontal chip पट्टी — Bike/Car मात्र (अरू
-/// (Moto One Click/Comfort/Delivery) जस्ता category हरू worker registration/
-/// Firestore schema नै बदल्नुपर्ने भएकाले हाललाई थपिएका छैनन्)। अर्को chip
-/// थिच्दा यही स्क्रिनलाई नयाँ serviceType सहित pop+push गरेर बदलिन्छ (`widget.
-/// serviceType` `final` भएकाले in-place बदल्न मिल्दैन)।
-class _VehicleChipRow extends StatelessWidget {
-  final String current;
-  final double initialLat;
-  final double initialLng;
-  const _VehicleChipRow({
-    required this.current,
-    required this.initialLat,
-    required this.initialLng,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    Widget chip(String type, IconData icon, String label) {
-      final active = type == current;
-      return Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppRadius.pill),
-          onTap: active
-              ? null
-              : () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ServiceMapScreen(
-                        serviceType: type,
-                        initialLat: initialLat,
-                        initialLng: initialLng,
-                      ),
-                    ),
-                  );
-                },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            decoration: BoxDecoration(
-              gradient: active ? AppColors.kmCtaGradient : null,
-              color: active ? null : Colors.white.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(AppRadius.pill),
-              border: Border.all(
-                  color: active
-                      ? Colors.transparent
-                      : Colors.white.withValues(alpha: 0.18)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon,
-                    size: 17,
-                    color: active ? AppColors.kmInk : Colors.white),
-                const SizedBox(width: 6),
-                Text(label,
-                    style: TextStyle(
-                        color: active ? AppColors.kmInk : Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12.5)),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          chip('Bike', Icons.two_wheeler_rounded, S.bikeWord),
-          chip('Car', Icons.local_taxi_rounded, S.carWord),
-        ],
       ),
     );
   }
@@ -2229,7 +2424,9 @@ class _RideSummaryCard extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
-                color: AppColors.kmText, fontWeight: FontWeight.w600, fontSize: 12.5),
+                color: AppColors.kmText,
+                fontWeight: FontWeight.w600,
+                fontSize: 12.5),
           ),
         ),
       ],
@@ -2245,7 +2442,8 @@ class _RideSummaryCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.md),
         border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
         boxShadow: const [
-          BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+          BoxShadow(
+              color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
         ],
       ),
       child: Column(
@@ -2257,8 +2455,8 @@ class _RideSummaryCard extends StatelessWidget {
           GestureDetector(
             onTap: onEditPickup,
             behavior: HitTestBehavior.opaque,
-            child: _row(
-                Icons.circle, AppColors.kmTealBlue, S.pickupLabel, pickupAddress),
+            child: _row(Icons.circle, AppColors.kmTealBlue, S.pickupLabel,
+                pickupAddress),
           ),
           const Padding(
             padding: EdgeInsets.only(left: 4),
@@ -2270,8 +2468,8 @@ class _RideSummaryCard extends StatelessWidget {
           GestureDetector(
             onTap: onChangeDestination,
             behavior: HitTestBehavior.opaque,
-            child: _row(
-                Icons.circle, AppColors.kmOrange, S.destinationLabel, destAddress),
+            child: _row(Icons.circle, AppColors.kmOrange, S.destinationLabel,
+                destAddress),
           ),
           const SizedBox(height: 6),
           Row(
@@ -2286,7 +2484,8 @@ class _RideSummaryCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   routeLoading ? S.findingRoute : '',
-                  style: const TextStyle(color: AppColors.kmMuted, fontSize: 11.5),
+                  style:
+                      const TextStyle(color: AppColors.kmMuted, fontSize: 11.5),
                 ),
               ),
               GestureDetector(
@@ -2337,7 +2536,8 @@ class _DestinationSearchBar extends StatefulWidget {
 }
 
 class _DestinationSearchBarState extends State<_DestinationSearchBar> {
-  late final _controller = TextEditingController(text: widget.initialText ?? '');
+  late final _controller =
+      TextEditingController(text: widget.initialText ?? '');
   final _focusNode = FocusNode();
   Timer? _debounce;
   List<({String label, double lat, double lng})> _results = const [];
@@ -2429,7 +2629,8 @@ class _DestinationSearchBarState extends State<_DestinationSearchBar> {
     setState(() => _loading = true);
     try {
       final p = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.medium),
       ).timeout(const Duration(seconds: 8));
       final addr = await reverseGeocode(p.latitude, p.longitude);
       if (!mounted) return;
@@ -2495,7 +2696,8 @@ class _DestinationSearchBarState extends State<_DestinationSearchBar> {
             borderRadius: BorderRadius.circular(AppRadius.pill),
             border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
             boxShadow: const [
-              BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+              BoxShadow(
+                  color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
             ],
           ),
           padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -2564,21 +2766,24 @@ class _DestinationSearchBarState extends State<_DestinationSearchBar> {
               borderRadius: BorderRadius.circular(AppRadius.md),
               border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
               boxShadow: const [
-                BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+                BoxShadow(
+                    color: Colors.black38,
+                    blurRadius: 10,
+                    offset: Offset(0, 3)),
               ],
             ),
             child: ListView.separated(
               shrinkWrap: true,
               padding: EdgeInsets.zero,
               itemCount: _results.length,
-              separatorBuilder: (_, __) =>
-                  Divider(height: 1, color: Colors.white.withValues(alpha: 0.1)),
+              separatorBuilder: (_, __) => Divider(
+                  height: 1, color: Colors.white.withValues(alpha: 0.1)),
               itemBuilder: (context, i) {
                 final r = _results[i];
                 return ListTile(
                   dense: true,
-                  leading:
-                      const Icon(Icons.place_rounded, color: AppColors.kmOrange),
+                  leading: const Icon(Icons.place_rounded,
+                      color: AppColors.kmOrange),
                   title: Text(r.label,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -2597,11 +2802,15 @@ class _DestinationSearchBarState extends State<_DestinationSearchBar> {
               borderRadius: BorderRadius.circular(AppRadius.md),
               border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
               boxShadow: const [
-                BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 3)),
+                BoxShadow(
+                    color: Colors.black38,
+                    blurRadius: 10,
+                    offset: Offset(0, 3)),
               ],
             ),
             child: Text(S.noSearchResults,
-                style: const TextStyle(color: AppColors.kmMuted, fontSize: 12.5)),
+                style:
+                    const TextStyle(color: AppColors.kmMuted, fontSize: 12.5)),
           ),
       ],
     );
@@ -2657,7 +2866,7 @@ class _ProviderCard extends StatelessWidget {
               Stack(
                 children: [
                   WorkerAvatar(
-                    uid: workerId,
+                    uid: (data['uid'] ?? workerId).toString(),
                     size: 48,
                     backgroundColor:
                         serviceMarkerColor(serviceType).withValues(alpha: 0.15),
@@ -2872,14 +3081,18 @@ class _PostJobSheetState extends State<_PostJobSheet> {
   final _addr = TextEditingController();
   DateTime? _date;
   String _slot = 'anytime';
-  late int _budget = widget.initialBudget;
+  // `ValueNotifier` — +/- थिच्दा यो सम्पूर्ण sheet (title/desc/date/slot
+  // field सहित) फेरि rebuild नहोस् भनेर; तल build() मा केवल मूल्य देखिने
+  // सानो Row मात्र `ValueListenableBuilder` भित्र रहन्छ।
+  late final ValueNotifier<int> _budget =
+      ValueNotifier<int>(widget.initialBudget);
   bool _loadingAddr = true;
   String? _error;
   // Ride-Hailing मात्र — on भए पहिलो आउने driver प्रस्ताव आफैं accept हुन्छ
   // (RequestTrackingScreen कै `_Searching` ले पढ्छ)।
   bool _autoOffer = false;
 
-  static const _step = 50;
+  static const _step = 5;
 
   @override
   void initState() {
@@ -2900,6 +3113,7 @@ class _PostJobSheetState extends State<_PostJobSheet> {
     _title.dispose();
     _desc.dispose();
     _addr.dispose();
+    _budget.dispose();
     super.dispose();
   }
 
@@ -2952,7 +3166,7 @@ class _PostJobSheetState extends State<_PostJobSheet> {
         address: _addr.text.trim(),
         lat: widget.lat,
         lng: widget.lng,
-        budget: _budget,
+        budget: _budget.value,
         destAddress: widget.isRide ? widget.destinationAddress : null,
         destLat: widget.isRide ? widget.destLat : null,
         destLng: widget.isRide ? widget.destLng : null,
@@ -2975,305 +3189,311 @@ class _PostJobSheetState extends State<_PostJobSheet> {
         child: ClipRRect(
           borderRadius:
               const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-            child: Container(
-          decoration: BoxDecoration(
-            color: AppColors.kmSurface.withValues(alpha: 0.94),
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-            border: Border(
-              top: BorderSide(color: AppColors.kmGlassBorder),
-              left: BorderSide(color: AppColors.kmGlassBorder),
-              right: BorderSide(color: AppColors.kmGlassBorder),
-            ),
-          ),
-          padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Container(
-                    width: 42,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 14),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.22),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
+          child: glassBackdrop(sigma: 26, child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.kmSurface.withValues(alpha: 0.94),
+                borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(AppRadius.lg)),
+                border: Border(
+                  top: BorderSide(color: AppColors.kmGlassBorder),
+                  left: BorderSide(color: AppColors.kmGlassBorder),
+                  right: BorderSide(color: AppColors.kmGlassBorder),
                 ),
-                Row(
+              ),
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Container(
-                      width: 38,
-                      height: 38,
-                      decoration: const BoxDecoration(
-                        gradient: AppColors.kmCtaGradient,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                          widget.isRide
-                              ? Icons.local_taxi_rounded
-                              : serviceIconFor(widget.serviceType),
-                          color: AppColors.kmInk, size: 19),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                              widget.isRide
-                                  ? '${S.confirmRideTitle} — ${S.serviceName(widget.serviceType)}'
-                                  : '${S.jobConfirmTitle} — ${S.serviceName(widget.serviceType)}',
-                              style: const TextStyle(
-                                  color: AppColors.kmText,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800)),
-                          Text(
-                              '${widget.nearbyCount} ${S.serviceName(widget.serviceType)} ${S.providersNearby}',
-                              style: const TextStyle(
-                                  color: AppColors.kmMuted, fontSize: 11)),
-                        ],
+                    Center(
+                      child: Container(
+                        width: 42,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
                       ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                if (widget.isRide) ...[
-                  // ── Pickup/Destination — यी दुवै पहिल्यै pin-drop बाट
-                  // confirm भइसकेका हुन्, यहाँ फेरि सम्पादन गर्न मिल्दैन
-                  // (सामान्य कामको सूची/मिति/वर्णन जस्तो केही चाहिँदैन)।
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.06),
-                      borderRadius: BorderRadius.circular(AppRadius.md),
-                      border: Border.all(color: AppColors.kmGlassBorder),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    Row(
                       children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(Icons.my_location_rounded,
-                                color: AppColors.kmMuted, size: 16),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                '${S.pickupLabel}: ${widget.initialAddress}',
-                                style: const TextStyle(
-                                    color: AppColors.kmText,
-                                    fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ],
+                        ServiceIconBadge(
+                          service: widget.serviceType,
+                          size: 38,
+                          iconColor: AppColors.kmInk,
+                          gradient: AppColors.kmCtaGradient,
                         ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 3),
-                          child: SizedBox(
-                            height: 8,
-                            child: VerticalDivider(
-                                color: Colors.white.withValues(alpha: 0.16),
-                                thickness: 1.2),
-                          ),
-                        ),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(Icons.flag_rounded,
-                                color: AppColors.kmMuted, size: 16),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                '${S.destinationLabel}: ${widget.destinationAddress}',
-                                style: const TextStyle(
-                                    color: AppColors.kmText,
-                                    fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                ] else ...[
-                  _WhiteField(
-                    controller: _title,
-                    label: S.jobTitleLabel,
-                    hint: S.jobTitleHint,
-                  ),
-                  const SizedBox(height: 12),
-                  _WhiteField(
-                    controller: _desc,
-                    label: S.jobDescription,
-                    hint: S.jobDescriptionHint,
-                    maxLines: 3,
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (!widget.isRide)
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: _pickDate,
-                        borderRadius: BorderRadius.circular(AppRadius.md),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 14),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.06),
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                            border: Border.all(color: AppColors.kmGlassBorder),
-                          ),
-                          child: Row(
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Icon(Icons.event_rounded,
-                                  color: AppColors.kmMuted, size: 18),
-                              const SizedBox(width: 8),
                               Text(
-                                _date == null
-                                    ? S.preferredDateLabel
-                                    : '${_date!.day}/${_date!.month}/${_date!.year}',
-                                style: const TextStyle(color: AppColors.kmText),
-                              ),
+                                  widget.isRide
+                                      ? '${S.confirmRideTitle} — ${S.serviceName(widget.serviceType)}'
+                                      : '${S.jobConfirmTitle} — ${S.serviceName(widget.serviceType)}',
+                                  style: const TextStyle(
+                                      color: AppColors.kmText,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w800)),
+                              Text(
+                                  '${widget.nearbyCount} ${S.serviceName(widget.serviceType)} ${S.providersNearby}',
+                                  style: const TextStyle(
+                                      color: AppColors.kmMuted, fontSize: 11)),
                             ],
                           ),
                         ),
-                      ),
+                      ],
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                    const SizedBox(height: 14),
+                    if (widget.isRide) ...[
+                      // ── Pickup/Destination — यी दुवै पहिल्यै pin-drop बाट
+                      // confirm भइसकेका हुन्, यहाँ फेरि सम्पादन गर्न मिल्दैन
+                      // (सामान्य कामको सूची/मिति/वर्णन जस्तो केही चाहिँदैन)।
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.06),
                           borderRadius: BorderRadius.circular(AppRadius.md),
                           border: Border.all(color: AppColors.kmGlassBorder),
                         ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: _slot,
-                            isExpanded: true,
-                            dropdownColor: AppColors.kmSurface,
-                            iconEnabledColor: AppColors.kmMuted,
-                            style: const TextStyle(color: AppColors.kmText),
-                            items: const [
-                              'anytime',
-                              'morning',
-                              'afternoon',
-                              'evening'
-                            ]
-                                .map((s) => DropdownMenuItem(
-                                    value: s, child: Text(_slotLabel(s))))
-                                .toList(),
-                            onChanged: (v) =>
-                                setState(() => _slot = v ?? 'anytime'),
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.my_location_rounded,
+                                    color: AppColors.kmMuted, size: 16),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '${S.pickupLabel}: ${widget.initialAddress}',
+                                    style: const TextStyle(
+                                        color: AppColors.kmText,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  vertical: 4, horizontal: 3),
+                              child: SizedBox(
+                                height: 8,
+                                child: VerticalDivider(
+                                    color: Colors.white.withValues(alpha: 0.16),
+                                    thickness: 1.2),
+                              ),
+                            ),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.flag_rounded,
+                                    color: AppColors.kmMuted, size: 16),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '${S.destinationLabel}: ${widget.destinationAddress}',
+                                    style: const TextStyle(
+                                        color: AppColors.kmText,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                if (!widget.isRide) ...[
-                  const SizedBox(height: 12),
-                  _WhiteField(
-                    controller: _addr,
-                    label: S.jobAddressLabel,
-                    hint: _loadingAddr ? S.fetchingAddress : '',
-                    maxLines: 2,
-                    prefix: const Icon(Icons.place_outlined,
-                        color: AppColors.kmMuted, size: 18),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      const Icon(Icons.gps_fixed_rounded,
-                          color: AppColors.kmMuted, size: 12),
-                      const SizedBox(width: 4),
-                      Text(
-                          '${S.pinnedLocation}: ${widget.lat.toStringAsFixed(5)}, ${widget.lng.toStringAsFixed(5)}',
+                      const SizedBox(height: 14),
+                    ] else ...[
+                      _WhiteField(
+                        controller: _title,
+                        label: S.jobTitleLabel,
+                        hint: S.jobTitleHint,
+                      ),
+                      const SizedBox(height: 12),
+                      _WhiteField(
+                        controller: _desc,
+                        label: S.jobDescription,
+                        hint: S.jobDescriptionHint,
+                        maxLines: 3,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (!widget.isRide)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: InkWell(
+                              onTap: _pickDate,
+                              borderRadius: BorderRadius.circular(AppRadius.md),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 14),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.06),
+                                  borderRadius:
+                                      BorderRadius.circular(AppRadius.md),
+                                  border: Border.all(
+                                      color: AppColors.kmGlassBorder),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.event_rounded,
+                                        color: AppColors.kmMuted, size: 18),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      _date == null
+                                          ? S.preferredDateLabel
+                                          : '${_date!.day}/${_date!.month}/${_date!.year}',
+                                      style: const TextStyle(
+                                          color: AppColors.kmText),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Container(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.06),
+                                borderRadius:
+                                    BorderRadius.circular(AppRadius.md),
+                                border:
+                                    Border.all(color: AppColors.kmGlassBorder),
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<String>(
+                                  value: _slot,
+                                  isExpanded: true,
+                                  dropdownColor: AppColors.kmSurface,
+                                  iconEnabledColor: AppColors.kmMuted,
+                                  style:
+                                      const TextStyle(color: AppColors.kmText),
+                                  items: const [
+                                    'anytime',
+                                    'morning',
+                                    'afternoon',
+                                    'evening'
+                                  ]
+                                      .map((s) => DropdownMenuItem(
+                                          value: s, child: Text(_slotLabel(s))))
+                                      .toList(),
+                                  onChanged: (v) =>
+                                      setState(() => _slot = v ?? 'anytime'),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    if (!widget.isRide) ...[
+                      const SizedBox(height: 12),
+                      _WhiteField(
+                        controller: _addr,
+                        label: S.jobAddressLabel,
+                        hint: _loadingAddr ? S.fetchingAddress : '',
+                        maxLines: 2,
+                        prefix: const Icon(Icons.place_outlined,
+                            color: AppColors.kmMuted, size: 18),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          const Icon(Icons.gps_fixed_rounded,
+                              color: AppColors.kmMuted, size: 12),
+                          const SizedBox(width: 4),
+                          Text(
+                              '${S.pinnedLocation}: ${widget.lat.toStringAsFixed(5)}, ${widget.lng.toStringAsFixed(5)}',
+                              style: const TextStyle(
+                                  color: AppColors.kmMuted, fontSize: 11)),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(S.serviceAddressNote,
                           style: const TextStyle(
                               color: AppColors.kmMuted, fontSize: 11)),
                     ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(S.serviceAddressNote,
-                      style: const TextStyle(
-                          color: AppColors.kmMuted, fontSize: 11)),
-                ],
-                const SizedBox(height: 14),
-                Text(widget.isRide ? S.fareOfferLabel : S.customerBudget,
-                    style: const TextStyle(
-                        color: AppColors.kmText,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600)),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _StepBtn(
-                        icon: Icons.remove_rounded,
-                        onTap: () => setState(() =>
-                            _budget = (_budget - _step).clamp(_step, 1000000))),
-                    const SizedBox(width: 18),
-                    Text('Rs. $_budget',
+                    const SizedBox(height: 14),
+                    Text(widget.isRide ? S.fareOfferLabel : S.customerBudget,
                         style: const TextStyle(
                             color: AppColors.kmText,
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800)),
-                    const SizedBox(width: 18),
-                    _StepBtn(
-                        icon: Icons.add_rounded,
-                        onTap: () => setState(() =>
-                            _budget = (_budget + _step).clamp(_step, 1000000))),
-                  ],
-                ),
-                if (widget.isRide) ...[
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(S.autoOffer,
-                            style: const TextStyle(
-                                color: AppColors.kmText,
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600)),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    // +/- थिच्दा यही सानो Row मात्र फेरि बन्छ — बाँकी पूरै sheet
+                    // (title/desc/date/slot field सहित) होइन।
+                    RepaintBoundary(
+                      child: ValueListenableBuilder<int>(
+                        valueListenable: _budget,
+                        builder: (context, budget, _) => Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            _StepBtn(
+                                icon: Icons.remove_rounded,
+                                onTap: () => _budget.value =
+                                    (budget - _step).clamp(_step, 1000000)),
+                            const SizedBox(width: 18),
+                            Text('Rs. $budget',
+                                style: const TextStyle(
+                                    color: AppColors.kmText,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w800)),
+                            const SizedBox(width: 18),
+                            _StepBtn(
+                                icon: Icons.add_rounded,
+                                onTap: () => _budget.value =
+                                    (budget + _step).clamp(_step, 1000000)),
+                          ],
+                        ),
                       ),
-                      Switch(
-                        value: _autoOffer,
-                        activeThumbColor: AppColors.kmOrange,
-                        activeTrackColor: AppColors.kmOrange.withValues(alpha: 0.4),
-                        onChanged: (v) => setState(() => _autoOffer = v),
+                    ),
+                    if (widget.isRide) ...[
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(S.autoOffer,
+                                style: const TextStyle(
+                                    color: AppColors.kmText,
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                          Switch(
+                            value: _autoOffer,
+                            activeThumbColor: AppColors.kmOrange,
+                            activeTrackColor:
+                                AppColors.kmOrange.withValues(alpha: 0.4),
+                            onChanged: (v) => setState(() => _autoOffer = v),
+                          ),
+                        ],
                       ),
                     ],
-                  ),
-                ],
-                if (_error != null) ...[
-                  const SizedBox(height: 10),
-                  Text(_error!,
-                      style: const TextStyle(
-                          color: AppColors.kmRose,
-                          fontSize: 12.5)),
-                ],
-                const SizedBox(height: 16),
-                KmCtaButton(
-                  onPressed: _submit,
-                  icon: widget.isRide
-                      ? Icons.local_taxi_rounded
-                      : Icons.campaign_rounded,
-                  label: widget.isRide ? S.findOffer : S.confirmBroadcast,
+                    if (_error != null) ...[
+                      const SizedBox(height: 10),
+                      Text(_error!,
+                          style: const TextStyle(
+                              color: AppColors.kmRose, fontSize: 12.5)),
+                    ],
+                    const SizedBox(height: 16),
+                    KmCtaButton(
+                      onPressed: _submit,
+                      icon: widget.isRide
+                          ? Icons.local_taxi_rounded
+                          : Icons.campaign_rounded,
+                      label: widget.isRide ? S.findOffer : S.confirmBroadcast,
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
+              ),
             ),
           ),
         ),
